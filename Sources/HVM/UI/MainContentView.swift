@@ -1,5 +1,6 @@
 // MainContentView.swift
-// 主窗口内容根. 左 Sidebar + 右 DetailPanel + 叠加 ErrorDialog + CreateVMDialog
+// 主窗口布局: 顶 toolbar + 中 HStack (sidebar | detail) + 底 status bar
+// 顶/底全宽跨左右栏, 强制两栏 top/bottom baseline 对齐
 
 import SwiftUI
 import HVMCore
@@ -15,28 +16,29 @@ public struct MainContentView: View {
 
     public var body: some View {
         ZStack {
-            HStack(spacing: 0) {
-                SidebarView(model: model, errors: errors)
-                    .frame(width: 240)
-                    .background(Color(white: 0.06))
-                Divider().background(Color(white: 0.18))
-                DetailPanel(model: model, errors: errors)
-                    .frame(maxWidth: .infinity)
+            VStack(spacing: 0) {
+                HVMToolbar(model: model, errors: errors)
+                HStack(spacing: 0) {
+                    SidebarView(model: model, errors: errors)
+                        .frame(width: 240)
+                    Rectangle()
+                        .fill(HVMColor.border)
+                        .frame(width: 1)
+                    DetailPanel(model: model, errors: errors)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                HVMStatusBar(model: model)
             }
 
-            // 创建向导 (叠加, 跟 ErrorDialog 一样顺序)
             if model.showCreateWizard {
                 CreateVMDialog(model: model, errors: errors)
                     .transition(.opacity)
             }
 
-            // 错误弹窗叠最顶
             ErrorDialogOverlay(presenter: errors)
         }
         .preferredColorScheme(.dark)
-        .background(Color(white: 0.04))
-        .onAppear {
-            model.refreshList()
-        }
+        .background(HVMColor.bgBase)
+        .onAppear { model.refreshList() }
     }
 }

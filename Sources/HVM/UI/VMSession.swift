@@ -109,9 +109,10 @@ public final class VMSession {
         case .standalone: return
         case .embedded, .hidden: break
         }
-        // 构建独立窗口, 把 view reparent 进去
+        // 构建独立窗口 (带空 container), 再把 HVMView reparent 进去.
+        // 不要把 HVMView 直接设为 window.contentView, 否则后续 attach 会形成 view-as-its-own-subview 死循环.
         let title = "\(config.displayName) — \(config.guestOS.rawValue)"
-        let window = DisplayWindowController(title: title, contentView: attachment.view)
+        let window = DisplayWindowController(title: title)
         window.onRequestEmbed = { [weak self] in
             Task { @MainActor in self?.showEmbedded() }
         }

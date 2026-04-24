@@ -5,16 +5,20 @@
 import AppKit
 
 public final class DisplayWindowController: NSWindowController, NSWindowDelegate {
-    public let hvmView: HVMView
-
     /// X 按钮点击回调: 语义是 "嵌入主窗口", 不是 "关闭 VM"
     public var onRequestEmbed: (() -> Void)?
 
     /// 真正关闭窗口前的 cleanup (主动代码流, 不是 UI 按钮)
     public var onClose: (() -> Void)?
 
-    public init(title: String, contentView: HVMView) {
-        self.hvmView = contentView
+    public init(title: String) {
+        // 关键: 用独立的空 NSView 作 container, 不把 HVMView 设为 window.contentView.
+        // 否则 "window.contentView = HVMView" 后, 外部调 attachment.attach(to: window.contentView)
+        // 等同于 HVMView.addSubview(HVMView 自己), AppKit 会死循环 / 卡主线程.
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 1024, height: 640))
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.black.cgColor
+        container.autoresizingMask = [.width, .height]
 
         let w = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1024, height: 640),
@@ -26,7 +30,7 @@ public final class DisplayWindowController: NSWindowController, NSWindowDelegate
         w.titlebarAppearsTransparent = false
         w.tabbingMode = .disallowed
         w.appearance = NSAppearance(named: .darkAqua)
-        w.contentView = contentView
+        w.contentView = container
         w.center()
         w.collectionBehavior.insert(.fullScreenPrimary)
 

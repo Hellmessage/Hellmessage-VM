@@ -1,15 +1,14 @@
 // ErrorDialog.swift
-// 统一错误弹窗. 严格按 docs/GUI.md "弹窗约束":
+// 统一错误弹窗, 严格按 docs/GUI.md "弹窗约束":
 //   - 只能通过右上角 X 按钮关闭
-//   - 禁止点击遮罩层关闭 (遮罩 allowsHitTesting(false))
-//   - 禁止 Esc 关闭 (不绑 Esc keyboard shortcut)
+//   - 禁止点击遮罩层关闭 (allowsHitTesting(false))
+//   - 禁止 Esc 关闭 (不绑 Esc)
 //   - 禁止 NSAlert / SwiftUI .alert()
 //   - 多错误排队顺序展示
 
 import SwiftUI
 import HVMCore
 
-/// 单次错误展示数据模型
 public struct ErrorDialogModel: Identifiable, Sendable, Equatable {
     public let id = UUID()
     public let title: String
@@ -22,14 +21,11 @@ public struct ErrorDialogModel: Identifiable, Sendable, Equatable {
     }
 }
 
-/// 错误呈现器. 支持排队, 同时只显示一个.
 @MainActor
 @Observable
 public final class ErrorPresenter {
     public private(set) var queue: [ErrorDialogModel] = []
-
     public init() {}
-
     public var current: ErrorDialogModel? { queue.first }
 
     public func present(_ model: ErrorDialogModel) {
@@ -58,21 +54,20 @@ public final class ErrorPresenter {
     }
 
     private func titleForCode(_ code: String) -> String {
-        if code.hasPrefix("bundle.") { return "Bundle 错误" }
-        if code.hasPrefix("storage.") { return "磁盘错误" }
-        if code.hasPrefix("backend.") { return "VM 运行错误" }
-        if code.hasPrefix("install.") { return "安装错误" }
-        if code.hasPrefix("net.") { return "网络错误" }
-        if code.hasPrefix("ipc.") { return "通信错误" }
-        if code.hasPrefix("config.") { return "配置错误" }
-        return "错误"
+        if code.hasPrefix("bundle.") { return "bundle error" }
+        if code.hasPrefix("storage.") { return "storage error" }
+        if code.hasPrefix("backend.") { return "vm error" }
+        if code.hasPrefix("install.") { return "install error" }
+        if code.hasPrefix("net.") { return "network error" }
+        if code.hasPrefix("ipc.") { return "ipc error" }
+        if code.hasPrefix("config.") { return "config error" }
+        return "error"
     }
 }
 
-// MARK: - SwiftUI View
-
 public struct ErrorDialogOverlay: View {
     @Bindable var presenter: ErrorPresenter
+    @State private var detailsExpanded = false
 
     public init(presenter: ErrorPresenter) {
         self._presenter = Bindable(presenter)
@@ -81,73 +76,97 @@ public struct ErrorDialogOverlay: View {
     public var body: some View {
         if let model = presenter.current {
             ZStack {
-                // 遮罩层 — 关键: allowsHitTesting(false) 保证点击不拦截也不关闭
-                Color.black.opacity(0.6)
+                Color.black.opacity(0.65)
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
 
                 VStack(spacing: 0) {
-                    // 顶部 title bar + X 按钮
-                    HStack {
-                        Text(model.title)
-                            .font(.headline)
-                            .foregroundStyle(Color(white: 0.95))
+                    // 顶栏
+                    HStack(spacing: HVMSpace.md) {
+                        Text("●")
+                            .font(HVMFont.caption)
+                            .foregroundStyle(HVMColor.statusError)
+                        Text(model.title.uppercased())
+                            .font(HVMFont.label)
+                            .tracking(1.6)
+                            .foregroundStyle(HVMColor.textPrimary)
                         Spacer()
-                        Button(action: { presenter.dismissCurrent() }) {
+                        Button { presenter.dismissCurrent() } label: {
                             Image(systemName: "xmark")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(Color(white: 0.8))
-                                .frame(width: 24, height: 24)
+                                .font(.system(size: 10, weight: .bold))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(IconButtonStyle())
                         .help("关闭 (Cmd+W)")
                         .keyboardShortcut("w", modifiers: [.command])
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
+                    .padding(.horizontal, HVMSpace.lg)
+                    .padding(.vertical, HVMSpace.md)
 
-                    Divider().background(Color(white: 0.2))
+                    Divider().background(HVMColor.border)
 
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: HVMSpace.md) {
                         Text(model.message)
-                            .foregroundStyle(Color(white: 0.92))
+                            .font(HVMFont.body)
+                            .foregroundStyle(HVMColor.textPrimary)
+                            .fixedSize(horizontal: false, vertical: true)
 
-                        if let d = model.details {
-                            ScrollView {
-                                Text(d)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(Color(white: 0.75))
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .textSelection(.enabled)
+                        if let d = model.details, !d.isEmpty {
+                            DisclosureGroup(isExpanded: $detailsExpanded) {
+                                ScrollView {
+                                    Text(d)
+                                        .font(HVMFont.small)
+                                        .foregroundStyle(HVMColor.textSecondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .textSelection(.enabled)
+                                        .padding(HVMSpace.sm)
+                                }
+                                .frame(maxHeight: 140)
+                                .background(
+                                    RoundedRectangle(cornerRadius: HVMRadius.sm)
+                                        .fill(HVMColor.bgBase)
+                                )
+                            } label: {
+                                Text("details")
+                                    .font(HVMFont.small)
+                                    .foregroundStyle(HVMColor.textTertiary)
                             }
-                            .frame(maxHeight: 140)
-                            .padding(8)
-                            .background(Color(white: 0.08))
-                            .cornerRadius(4)
                         }
 
                         if let hint = model.hint {
-                            HStack(alignment: .top, spacing: 8) {
-                                Image(systemName: "lightbulb")
-                                    .foregroundStyle(Color(red: 0.4, green: 0.7, blue: 1.0))
+                            HStack(alignment: .top, spacing: HVMSpace.sm) {
+                                Text("→")
+                                    .foregroundStyle(HVMColor.accent)
+                                    .font(HVMFont.body)
                                 Text(hint)
-                                    .foregroundStyle(Color(white: 0.85))
+                                    .font(HVMFont.caption)
+                                    .foregroundStyle(HVMColor.textSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
-                            .font(.system(size: 12))
+                            .padding(HVMSpace.sm)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: HVMRadius.sm)
+                                    .fill(HVMColor.accentMuted)
+                            )
                         }
 
                         HStack {
                             Spacer()
-                            Button("好") { presenter.dismissCurrent() }
+                            Button("DISMISS") { presenter.dismissCurrent() }
+                                .buttonStyle(PrimaryButtonStyle())
                                 .keyboardShortcut(.return, modifiers: [])
                         }
                     }
-                    .padding(16)
+                    .padding(HVMSpace.lg)
                 }
-                .background(Color(white: 0.08))
-                .cornerRadius(10)
                 .frame(width: 480)
-                .shadow(color: .black.opacity(0.6), radius: 20, x: 0, y: 8)
+                .background(HVMColor.bgCard)
+                .overlay(
+                    RoundedRectangle(cornerRadius: HVMRadius.lg, style: .continuous)
+                        .stroke(HVMColor.borderStrong, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: HVMRadius.lg, style: .continuous))
+                .shadow(color: .black.opacity(0.6), radius: 24, x: 0, y: 10)
             }
             .transition(.opacity)
         }

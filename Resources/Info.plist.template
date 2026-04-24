@@ -17,5 +17,40 @@
     <key>NSSupportsAutomaticTermination</key>   <false/>
     <key>NSSupportsSuddenTermination</key>      <false/>
     <key>NSPrincipalClass</key>                 <string>NSApplication</string>
+
+    <!-- 导出 .hvmz 作为一种 UTType, 且标注为 package.
+         Finder 会把 .hvmz 目录当成 bundle 显示 (不可进入, 双击打开关联 app). -->
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>      <string>com.hellmessage.vm.hvmz</string>
+            <key>UTTypeDescription</key>     <string>HVM Virtual Machine</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>com.apple.package</string>
+                <string>public.composite-content</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array><string>hvmz</string></array>
+            </dict>
+            <key>UTTypeIconFile</key>        <string>AppIcon</string>
+        </dict>
+    </array>
+
+    <!-- 声明 HVM.app 能打开 .hvmz bundle -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>      <string>HVM Virtual Machine</string>
+            <key>CFBundleTypeRole</key>      <string>Editor</string>
+            <key>LSHandlerRank</key>         <string>Owner</string>
+            <key>LSTypeIsPackage</key>       <true/>
+            <key>LSItemContentTypes</key>
+            <array><string>com.hellmessage.vm.hvmz</string></array>
+            <key>CFBundleTypeIconFile</key>  <string>AppIcon</string>
+        </dict>
+    </array>
 </dict>
 </plist>

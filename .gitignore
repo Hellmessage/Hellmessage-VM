@@ -5,6 +5,7 @@ Package.resolved
 
 # HVM 构建产物
 build/
+error/
 
 # Xcode
 DerivedData/
@@ -25,3 +26,6 @@ DerivedData/
 # provisioning profile (bridged entitlement 审批通过后才放入,
 # 但不应进 git, 因为含 Apple 颁发的设备/证书信息)
 Resources/embedded.provisionprofile
+
+
+*.log

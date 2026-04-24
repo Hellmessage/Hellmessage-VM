@@ -8,7 +8,7 @@ SWIFTPM_DIR   := .build
 SIGN_IDENTITY ?= auto
 ENTITLEMENTS  := Resources/HVM.entitlements
 
-.PHONY: all build bundle compile dev test verify clean help icon
+.PHONY: all build bundle compile dev test verify clean help icon register-types
 
 # 默认: release 模式 + 完整 .app 签名
 all: build
@@ -51,3 +51,10 @@ verify:
 clean:
 	rm -rf $(BUILD_DIR) $(SWIFTPM_DIR)
 	@echo "✔ 已清除 build/ 与 .build/"
+
+# 让 Finder 立刻识别 .hvmz 为 package. 仅当 Finder 图标未更新时手动跑一次
+register-types: build
+	@LSREG="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"; \
+	"$$LSREG" -f $(BUILD_DIR)/HVM.app; \
+	killall Finder 2>/dev/null || true; \
+	echo "✔ Launch Services 已刷新, Finder 已重启"

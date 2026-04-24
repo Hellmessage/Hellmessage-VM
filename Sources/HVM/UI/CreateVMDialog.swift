@@ -1,6 +1,5 @@
 // CreateVMDialog.swift
-// 创建向导 (M2 MVP: 单对话框一页填所有参数, Linux only)
-// 严格按 docs/GUI.md 弹窗约束: 只能通过 X 关闭, 遮罩不拦截
+// 创建向导 (M2 MVP: 单对话框). 按统一主题重写
 
 import AppKit
 import SwiftUI
@@ -22,126 +21,143 @@ struct CreateVMDialog: View {
 
     var body: some View {
         ZStack {
-            // 遮罩禁止拦截
-            Color.black.opacity(0.6)
+            Color.black.opacity(0.55)
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
 
             VStack(spacing: 0) {
-                // 顶栏
-                HStack {
-                    Text("新建 VM")
-                        .font(.headline)
-                        .foregroundStyle(Color(white: 0.95))
-                    Spacer()
-                    Button(action: { model.showCreateWizard = false }) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(Color(white: 0.8))
-                            .frame(width: 24, height: 24)
-                    }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut("w", modifiers: [.command])
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-
-                Divider().background(Color(white: 0.2))
-
-                // 表单
-                VStack(alignment: .leading, spacing: 14) {
-                    labeled("名称") {
-                        TextField("linux-vm", text: $name)
-                            .textFieldStyle(.roundedBorder)
-                    }
-
-                    labeled("Guest OS") {
-                        HStack(spacing: 10) {
-                            osChip("Linux", selected: true)
-                            osChip("macOS", selected: false, disabled: true)
-                        }
-                    }
-
-                    HStack(spacing: 16) {
-                        labeled("CPU 核心") {
-                            Stepper("\(cpu)", value: $cpu, in: 1...16)
-                                .labelsHidden()
-                                .overlay(alignment: .leading) {
-                                    Text("\(cpu) 核")
-                                        .padding(.leading, 4)
-                                        .foregroundStyle(Color(white: 0.85))
-                                }
-                        }
-                        labeled("内存") {
-                            Stepper("\(memoryGiB) GiB", value: $memoryGiB, in: 1...128)
-                                .labelsHidden()
-                                .overlay(alignment: .leading) {
-                                    Text("\(memoryGiB) GiB")
-                                        .padding(.leading, 4)
-                                        .foregroundStyle(Color(white: 0.85))
-                                }
-                        }
-                        labeled("主盘") {
-                            Stepper("\(diskGiB) GiB", value: $diskGiB, in: 8...2048, step: 8)
-                                .labelsHidden()
-                                .overlay(alignment: .leading) {
-                                    Text("\(diskGiB) GiB")
-                                        .padding(.leading, 4)
-                                        .foregroundStyle(Color(white: 0.85))
-                                }
-                        }
-                    }
-
-                    labeled("安装 ISO 路径") {
-                        HStack {
-                            TextField("/path/to/ubuntu-arm64.iso", text: $isoPath)
-                                .textFieldStyle(.roundedBorder)
-                            Button("选择...") { pickISO() }
-                        }
-                    }
-
-                    HStack {
-                        Spacer()
-                        Button("取消") { model.showCreateWizard = false }
-                        Button("创建") { createAction() }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(creating || name.isEmpty || isoPath.isEmpty)
-                    }
-                    .padding(.top, 4)
-                }
-                .padding(20)
+                header
+                Divider().background(HVMColor.border)
+                form
             }
-            .frame(width: 560)
-            .background(Color(white: 0.08))
-            .cornerRadius(10)
-            .shadow(color: .black.opacity(0.6), radius: 20, x: 0, y: 8)
+            .frame(width: 520)
+            .background(HVMColor.bgCard)
+            .overlay(
+                RoundedRectangle(cornerRadius: HVMRadius.lg)
+                    .stroke(HVMColor.border, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: HVMRadius.lg))
+            .shadow(color: .black.opacity(0.6), radius: 24, x: 0, y: 10)
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: HVMSpace.md) {
+            Text("Create Virtual Machine")
+                .font(HVMFont.heading)
+                .foregroundStyle(HVMColor.textPrimary)
+            Spacer()
+            Button { model.showCreateWizard = false } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+            }
+            .buttonStyle(IconButtonStyle())
+            .keyboardShortcut("w", modifiers: [.command])
+        }
+        .padding(.horizontal, HVMSpace.lg)
+        .padding(.vertical, HVMSpace.md)
+    }
+
+    private var form: some View {
+        VStack(alignment: .leading, spacing: HVMSpace.lg) {
+            field("Name") {
+                TextField("linux-vm", text: $name)
+                    .textFieldStyle(.roundedBorder)
+                    .font(HVMFont.body)
+            }
+
+            field("Guest OS") {
+                HStack(spacing: HVMSpace.sm) {
+                    osChip("Linux", selected: true)
+                    osChip("macOS", selected: false, disabled: true)
+                }
+            }
+
+            // CPU / Memory / Disk 三列
+            HStack(spacing: HVMSpace.md) {
+                field("CPU") {
+                    stepperRow("\(cpu) cores", binding: $cpu, range: 1...16, step: 1)
+                }
+                field("Memory") {
+                    stepperRow("\(memoryGiB) GB", binding: $memoryGiB, range: 1...128, step: 1)
+                }
+                field("Disk") {
+                    stepperRow("\(diskGiB) GB", binding: $diskGiB, range: 8...2048, step: 8)
+                }
+            }
+
+            field("Installer ISO") {
+                HStack(spacing: HVMSpace.sm) {
+                    TextField("/path/to/ubuntu-arm64.iso", text: $isoPath)
+                        .textFieldStyle(.roundedBorder)
+                        .font(HVMFont.body)
+                    Button("Browse") { pickISO() }
+                        .buttonStyle(GhostButtonStyle())
+                }
+            }
+
+            HStack(spacing: HVMSpace.md) {
+                Spacer()
+                Button("Cancel") { model.showCreateWizard = false }
+                    .buttonStyle(GhostButtonStyle())
+                Button("Create") { createAction() }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .disabled(creating || name.isEmpty || isoPath.isEmpty)
+                    .keyboardShortcut(.return, modifiers: [.command])
+            }
+            .padding(.top, HVMSpace.xs)
+        }
+        .padding(HVMSpace.lg)
+    }
+
+    @ViewBuilder
+    private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: HVMSpace.xs) {
+            LabelText(title)
+            content()
         }
     }
 
     @ViewBuilder
-    private func labeled<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 11))
-                .foregroundStyle(Color(white: 0.6))
-            content()
+    private func stepperRow(_ text: String, binding: Binding<Int>, range: ClosedRange<Int>, step: Int) -> some View {
+        HStack(spacing: 0) {
+            Text(text)
+                .font(HVMFont.body)
+                .foregroundStyle(HVMColor.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Stepper("", value: binding, in: range, step: step)
+                .labelsHidden()
         }
+        .padding(.horizontal, HVMSpace.sm)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: HVMRadius.sm)
+                .fill(HVMColor.bgBase)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: HVMRadius.sm)
+                .stroke(HVMColor.border, lineWidth: 1)
+        )
     }
 
     @ViewBuilder
     private func osChip(_ label: String, selected: Bool, disabled: Bool = false) -> some View {
         Text(label)
             .font(.system(size: 12, weight: .medium))
-            .padding(.horizontal, 14)
+            .padding(.horizontal, HVMSpace.md)
             .padding(.vertical, 6)
-            .background(
-                selected ? Color(red: 0.36, green: 0.55, blue: 1.0) : Color(white: 0.15)
-            )
             .foregroundStyle(
-                disabled ? Color(white: 0.4)
-                         : (selected ? .white : Color(white: 0.85))
+                disabled ? HVMColor.textTertiary
+                         : (selected ? HVMColor.textOnAccent : HVMColor.textSecondary)
             )
-            .cornerRadius(6)
+            .background(
+                RoundedRectangle(cornerRadius: HVMRadius.sm)
+                    .fill(selected ? HVMColor.accent : HVMColor.bgBase)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: HVMRadius.sm)
+                    .stroke(selected ? Color.clear : HVMColor.border, lineWidth: 1)
+            )
             .help(disabled ? "M3 起支持 macOS guest" : "")
     }
 

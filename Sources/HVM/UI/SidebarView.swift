@@ -1,6 +1,5 @@
 // SidebarView.swift
-// 左栏: VM 列表 + 底部 [+] 新建按钮
-// 状态圆点颜色见 docs/GUI.md "VM 列表项"
+// 左栏: 只放 "VMS" section + VM 列表. 顶部 toolbar / 底部 status bar 已搬走, 此处保持极简
 
 import SwiftUI
 import HVMBundle
@@ -12,88 +11,121 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 顶部: 标题 + 刷新
-            HStack {
-                Text("HVM")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Color(white: 0.95))
-                Spacer()
-                Text("\(model.list.count) VMs")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color(white: 0.55))
-                Button(action: { model.refreshList() }) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color(white: 0.7))
-                }
-                .buttonStyle(.plain)
-                .help("刷新列表")
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            header
+            list
+        }
+        .background(HVMColor.bgSidebar)
+    }
 
-            Divider().background(Color(white: 0.18))
+    // MARK: - section header
 
-            // 列表
+    private var header: some View {
+        HStack(spacing: 6) {
+            Text(">")
+                .font(HVMFont.bodyBold)
+                .foregroundStyle(HVMColor.accent)
+            LabelText("VMs (\(model.list.count))", color: HVMColor.textSecondary)
+            Spacer()
+        }
+        .padding(.horizontal, HVMSpace.lg)
+        .padding(.top, HVMSpace.md)
+        .padding(.bottom, HVMSpace.sm)
+    }
+
+    // MARK: - list
+
+    @ViewBuilder
+    private var list: some View {
+        if model.list.isEmpty {
+            emptyState
+        } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(model.list, id: \.id) { item in
-                        rowView(for: item)
-                            .background(
-                                model.selectedID == item.id
-                                    ? Color(white: 0.18)
-                                    : Color.clear
-                            )
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    ForEach(model.list) { item in
+                        Row(item: item,
+                            isSelected: model.selectedID == item.id,
+                            isRunning: model.sessions[item.id] != nil || item.runState == "running")
                             .contentShape(Rectangle())
                             .onTapGesture { model.selectedID = item.id }
                     }
                 }
+                .padding(.horizontal, HVMSpace.sm)
+                .padding(.bottom, HVMSpace.md)
+            }
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: HVMSpace.sm) {
+            Text("// no vms yet")
+                .font(HVMFont.caption)
+                .foregroundStyle(HVMColor.textTertiary)
+            Text("click + NEW to create")
+                .font(HVMFont.small)
+                .foregroundStyle(HVMColor.textTertiary)
+        }
+        .padding(.horizontal, HVMSpace.lg)
+        .padding(.top, HVMSpace.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - 单行
+
+private struct Row: View {
+    let item: AppModel.VMListItem
+    let isSelected: Bool
+    let isRunning: Bool
+    @State private var hover: Bool = false
+
+    var body: some View {
+        HStack(spacing: HVMSpace.sm) {
+            // 左侧 accent 竖条 (选中时)
+            Rectangle()
+                .fill(isSelected ? HVMColor.accent : Color.clear)
+                .frame(width: 2)
+
+            // 状态 sigil
+            Group {
+                if isRunning {
+                    PulseDot(color: HVMColor.statusRunning, size: 5)
+                        .frame(width: 14, height: 14)
+                } else {
+                    Text("○")
+                        .font(HVMFont.caption)
+                        .foregroundStyle(HVMColor.textTertiary)
+                        .frame(width: 14, height: 14)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.displayName)
+                    .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(HVMColor.textPrimary)
+                    .lineLimit(1)
+                Text(isRunning ? "running" : "stopped")
+                    .font(HVMFont.small)
+                    .foregroundStyle(isRunning ? HVMColor.statusRunning
+                                               : HVMColor.textTertiary)
             }
 
             Spacer(minLength: 0)
 
-            // 底部 [+] New VM
-            Button(action: { model.showCreateWizard = true }) {
-                HStack {
-                    Image(systemName: "plus.circle.fill")
-                    Text("New VM")
-                    Spacer()
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .foregroundStyle(Color(red: 0.36, green: 0.55, blue: 1.0))
-            }
-            .buttonStyle(.plain)
-            .background(Color(white: 0.08))
+            // 右侧 guest 标识 (小号, 不抢焦点)
+            Text(GuestVisual.style(for: item.guestOS).label)
+                .font(HVMFont.small)
+                .foregroundStyle(HVMColor.textTertiary)
         }
-    }
-
-    @ViewBuilder
-    private func rowView(for item: AppModel.VMListItem) -> some View {
-        let isRunning = model.sessions[item.id] != nil || item.runState == "running"
-        HStack(spacing: 10) {
-            // 状态圆点
-            Circle()
-                .fill(statusColor(isRunning: isRunning))
-                .frame(width: 8, height: 8)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.displayName)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color(white: 0.92))
-                    .lineLimit(1)
-                Text("\(item.guestOS.rawValue) · \(isRunning ? "running" : "stopped")")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color(white: 0.55))
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-    }
-
-    private func statusColor(isRunning: Bool) -> Color {
-        isRunning ? Color(red: 0.3, green: 0.83, blue: 0.39)
-                  : Color(white: 0.4)
+        .padding(.leading, HVMSpace.xs)
+        .padding(.trailing, HVMSpace.md)
+        .padding(.vertical, HVMSpace.sm)
+        .background(
+            RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
+                .fill(isSelected ? HVMColor.bgSelected
+                                 : (hover ? HVMColor.bgHover : Color.clear))
+        )
+        .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.1), value: hover)
+        .animation(.easeOut(duration: 0.15), value: isSelected)
     }
 }

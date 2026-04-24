@@ -77,6 +77,12 @@ codesign "${SIGN_ARGS[@]}" "$BUILD/hvm-dbg"
 # 6. 验证签名结构
 codesign --verify --deep --strict "$APP" > /dev/null
 
+# 7. 通知 Launch Services 重新注册, 使 .hvmz 立即被识别为 package + 关联到 HVM.app
+LSREG="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
+if [ -x "$LSREG" ]; then
+    "$LSREG" -f "$APP" 2>/dev/null || true
+fi
+
 echo "✔ 构建完成: $APP"
 echo "  $BUILD/hvm-cli"
 echo "  $BUILD/hvm-dbg"

@@ -1,7 +1,8 @@
 // HVM 主 App (M2)
-// 黑色主题, NavigationSplitView, 挂 AppModel + ErrorPresenter 做环境对象
+// 黑色主题, 持 AppModel + ErrorPresenter, 处理双击 .hvmz 打开
 
 import SwiftUI
+import HVMBundle
 import HVMCore
 
 public struct HVMApp: App {
@@ -15,12 +16,25 @@ public struct HVMApp: App {
     public var body: some Scene {
         WindowGroup("HVM") {
             MainContentView(model: model, errors: errors)
-                .frame(minWidth: 1020, minHeight: 640)
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-                    // 退出时最后一次刷新 VMs (独立窗口关闭在各 VMSession.cleanup 处理)
+                .frame(minWidth: 1020, minHeight: 720)
+                .onOpenURL { url in
+                    handleOpen(url: url)
                 }
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1080, height: 720)
+    }
+
+    /// 双击 .hvmz 或 open 命令打开: 定位/加入列表并选中
+    private func handleOpen(url: URL) {
+        guard url.pathExtension == "hvmz" else { return }
+        guard let config = try? BundleIO.load(from: url) else {
+            errors.present(HVMError.bundle(.parseFailed(
+                reason: "无法解析 bundle", path: url.path
+            )))
+            return
+        }
+        model.refreshList()
+        model.selectedID = config.id
     }
 }
