@@ -26,7 +26,7 @@ let package = Package(
         .target(name: "HVMBundle",  dependencies: ["HVMCore"]),
         .target(name: "HVMStorage", dependencies: ["HVMCore"]),
         .target(name: "HVMNet",     dependencies: ["HVMCore", "HVMBundle"]),
-        .target(name: "HVMDisplay", dependencies: ["HVMCore"]),
+        .target(name: "HVMDisplay", dependencies: ["HVMCore", "HVMBundle"]),
         .target(
             name: "HVMBackend",
             dependencies: ["HVMCore", "HVMBundle", "HVMStorage", "HVMNet", "HVMDisplay"]
