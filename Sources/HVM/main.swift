@@ -10,6 +10,6 @@ if args.count >= 3, args[1] == "--host-mode-bundle" {
     // VMHost 模式: 接管指定 bundle, 启动 VM, 监听 IPC socket
     HVMHostEntry.run(bundlePath: args[2])
 } else {
-    // GUI 模式: 走 SwiftUI App 入口
-    HVMApp.main()
+    // GUI 模式: AppKit NSApplication runloop
+    HVMAppLauncher.run()
 }

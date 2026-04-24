@@ -1,40 +1,56 @@
-// HVM 主 App (M2)
-// 黑色主题, 持 AppModel + ErrorPresenter, 处理双击 .hvmz 打开
+// HVMApp.swift (M2 AppKit shell)
+// 不再用 SwiftUI App + WindowGroup, 改为 NSApplicationDelegate + MainWindowController.
+// 原因: VZVirtualMachineView 需要稳定 NSWindow hierarchy, SwiftUI NSViewRepresentable
+// 会在 body re-render 时对承载的 NSView 做 detach/reattach, 导致 VZ Metal drawable 失效.
+// 参考 Apple Virtualization sample 也都使用 AppKit 管理 VZ view.
 
-import SwiftUI
+import AppKit
 import HVMBundle
 import HVMCore
 
-public struct HVMApp: App {
-    @State private var model = AppModel()
-    @State private var errors = ErrorPresenter()
+@MainActor
+final class HVMAppDelegate: NSObject, NSApplicationDelegate {
+    let model = AppModel()
+    let errors = ErrorPresenter()
+    private var mainController: MainWindowController?
 
-    public init() {
-        NSApp?.appearance = NSAppearance(named: .darkAqua)
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+        NSApp.setActivationPolicy(.regular)
+
+        let wc = MainWindowController(model: model, errors: errors)
+        mainController = wc
+        wc.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
-    public var body: some Scene {
-        WindowGroup("HVM") {
-            MainContentView(model: model, errors: errors)
-                .frame(minWidth: 1020, minHeight: 720)
-                .onOpenURL { url in
-                    handleOpen(url: url)
-                }
-        }
-        .windowResizability(.contentMinSize)
-        .defaultSize(width: 1080, height: 720)
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
     }
 
-    /// 双击 .hvmz 或 open 命令打开: 定位/加入列表并选中
-    private func handleOpen(url: URL) {
-        guard url.pathExtension == "hvmz" else { return }
-        guard let config = try? BundleIO.load(from: url) else {
-            errors.present(HVMError.bundle(.parseFailed(
-                reason: "无法解析 bundle", path: url.path
-            )))
-            return
+    /// 双击 .hvmz 或 `open` 命令打开 bundle
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            guard url.pathExtension == "hvmz" else { continue }
+            guard let config = try? BundleIO.load(from: url) else {
+                errors.present(HVMError.bundle(.parseFailed(
+                    reason: "无法解析 bundle", path: url.path
+                )))
+                continue
+            }
+            model.refreshList()
+            model.selectedID = config.id
         }
-        model.refreshList()
-        model.selectedID = config.id
+    }
+}
+
+/// 启动 AppKit runloop
+@MainActor
+public enum HVMAppLauncher {
+    public static func run() {
+        let app = NSApplication.shared
+        let delegate = HVMAppDelegate()
+        app.delegate = delegate
+        app.run()
     }
 }

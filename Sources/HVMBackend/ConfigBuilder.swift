@@ -95,8 +95,10 @@ public enum ConfigBuilder {
         // 网卡
         vz.networkDevices = try config.networks.map { try NICFactory.make(spec: $0) }
 
-        // 显示设备 (M1 headless 也配置一个, 供后续 M2 GUI 接管)
-        let scanout = VZVirtioGraphicsScanoutConfiguration(widthInPixels: 1920, heightInPixels: 1080)
+        // 显示设备. Initial scanout 1024x768: 对 text-mode installer (fbcon 80x25) 字体占比友好.
+        // 注意: Linux fbcon 不响应 virtio-gpu resize 事件, automaticallyReconfiguresDisplay
+        // 仅在 guest 进入 X/Wayland 后才生效.
+        let scanout = VZVirtioGraphicsScanoutConfiguration(widthInPixels: 1024, heightInPixels: 768)
         let graphics = VZVirtioGraphicsDeviceConfiguration()
         graphics.scanouts = [scanout]
         vz.graphicsDevices = [graphics]

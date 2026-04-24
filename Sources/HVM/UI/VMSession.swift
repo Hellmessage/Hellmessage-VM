@@ -18,8 +18,7 @@ import HVMDisplay
 import HVMIPC
 
 public enum DisplayMode: Sendable, Equatable {
-    case standalone   // 独立窗口
-    case embedded     // 嵌入主窗口
+    case embedded     // 嵌入主窗口 (M2 唯一模式)
     case hidden       // 运行中但用户未选中, 不显示
 }
 
@@ -35,10 +34,9 @@ public final class VMSession {
     public private(set) var hostPid: Int32 = getpid()
     public private(set) var startedAt: Date?
 
-    let attachment: ViewAttachment
+    public let attachment: ViewAttachment
     private var lock: BundleLock?
     private var ipcServer: SocketServer?
-    private var displayWindow: DisplayWindowController?
     private var thumbnailTimer: Timer?
     private var observerToken: UUID?
 
@@ -49,6 +47,12 @@ public final class VMSession {
 
         let view = HVMView(frame: .zero)
         self.attachment = ViewAttachment(view: view)
+
+        // HVMView 进入 window 时触发绑定, 这是 VZ Metal drawable 创建的必要时机之一.
+        // 与 .task 调用一起形成双保险: 任一条件满足都能绑上.
+        view.onEnteredWindow = { [weak self] in
+            Task { @MainActor in self?.bindVMToView() }
+        }
     }
 
     // MARK: - 生命周期
@@ -91,6 +95,9 @@ public final class VMSession {
             cleanup()
             throw error
         }
+        // 注意: 不在这里设 view.virtualMachine, 因为 view 此刻还不在 window hierarchy,
+        // VZ 的 Metal display 只在 view 进入 window 时创建 (Apple docs).
+        // 实际赋值在 showStandalone/showEmbedded 里 view attach 到容器后做.
     }
 
     public func requestStop() throws {
@@ -101,42 +108,26 @@ public final class VMSession {
         try await handle.forceStop()
     }
 
-    // MARK: - 显示模式
+    // MARK: - 显示模式 (M2 只支持嵌入)
 
-    /// 请求进入独立窗口态
-    public func showStandalone() {
-        switch displayMode {
-        case .standalone: return
-        case .embedded, .hidden: break
-        }
-        // 构建独立窗口 (带空 container), 再把 HVMView reparent 进去.
-        // 不要把 HVMView 直接设为 window.contentView, 否则后续 attach 会形成 view-as-its-own-subview 死循环.
-        let title = "\(config.displayName) — \(config.guestOS.rawValue)"
-        let window = DisplayWindowController(title: title)
-        window.onRequestEmbed = { [weak self] in
-            Task { @MainActor in self?.showEmbedded() }
-        }
-        if let content = window.window?.contentView {
-            attachment.attach(to: content)
-        }
-        window.showWindow(nil)
-        window.window?.makeKeyAndOrderFront(nil)
-        displayWindow = window
-        displayMode = .standalone
-    }
-
-    /// 请求进入嵌入态 (HVMView 回到主窗口右栏)
+    /// 标记为嵌入态. 实际 view attach 由 DetailPanel 的 EmbeddedVMContent 通过 NSViewRepresentable 处理.
     public func showEmbedded() {
-        displayWindow?.closeWithoutEmbedCallback()
-        displayWindow = nil
         displayMode = .embedded
     }
 
     /// 不显示, 但 VM 继续运行
     public func hide() {
-        displayWindow?.closeWithoutEmbedCallback()
-        displayWindow = nil
         displayMode = .hidden
+    }
+
+    /// DetailPanel 里 EmbeddedVMContent 进入 window 后调用, 绑定 VZ VM 到 view.
+    /// 时机非常关键: VZVirtualMachineView 的 Metal display 仅在 view 进入 window hierarchy
+    /// 且 virtualMachine 属性被 set 时创建 (Apple docs).
+    public func bindVMToView() {
+        guard let vm = handle.virtualMachine else { return }
+        if attachment.view.virtualMachine !== vm {
+            attachment.view.virtualMachine = vm
+        }
     }
 
     // MARK: - 内部
@@ -145,6 +136,9 @@ public final class VMSession {
         self.state = new
         switch new {
         case .running:
+            // 兜底: VM 正式 running 时再绑一次 view.virtualMachine.
+            // 若 .task 或 viewDidMoveToWindow 早于 vm 创建, 这里补救.
+            bindVMToView()
             startThumbnailTimer()
         case .stopped, .error:
             stopThumbnailTimer()
@@ -178,8 +172,7 @@ public final class VMSession {
         ipcServer = nil
         lock?.release()
         lock = nil
-        displayWindow?.closeWithoutEmbedCallback()
-        displayWindow = nil
+        attachment.view.virtualMachine = nil
         attachment.detach()
         displayMode = .hidden
         startedAt = nil

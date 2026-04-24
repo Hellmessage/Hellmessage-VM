@@ -1,12 +1,14 @@
 // EmbedContainer.swift
-// 主窗口右栏嵌入态容器. 使用同一个 HVMView 实例在独立窗口 / 嵌入之间 reparent,
-// 保证 VZVirtualMachine 不被重建, guest 无感知切换.
-// 详见 docs/GUI.md "嵌入态"
+// SwiftUI 把 HVMView 作为 NSViewRepresentable 的 NSView 直接暴露给 hosting,
+// 不再包 container 中间层, 避免 SwiftUI 在 layout 过程中对 container 做
+// detach/reattach 进而让 HVMView 离开 window hierarchy (Metal drawable 失效).
+//
+// VMSession.attachment 保留, 但不再做 reparent — M2 嵌入 only, 单窗口足够.
 
 import SwiftUI
 import AppKit
 
-/// 管理一个 HVMView 在多个 NSView 容器之间的 reparent
+/// 共享 HVMView 的引用容器. VMSession 里与 SwiftUI View 共同持有一份.
 public final class ViewAttachment {
     public let view: HVMView
 
@@ -14,23 +16,14 @@ public final class ViewAttachment {
         self.view = view
     }
 
-    /// 把 view 挪到新 superview. 旧 superview 若存在会自动 removeFromSuperview.
-    @MainActor
-    public func attach(to superview: NSView) {
-        view.removeFromSuperview()
-        view.frame = superview.bounds
-        view.autoresizingMask = [.width, .height]
-        superview.addSubview(view)
-    }
-
+    /// 显式从当前 superview 脱离 (cleanup 时调). 此后 SwiftUI 若 re-host 会重新 attach.
     @MainActor
     public func detach() {
         view.removeFromSuperview()
     }
 }
 
-/// SwiftUI 视图, 在嵌入态展示给定 ViewAttachment 的 HVMView.
-/// 内部用 NSViewRepresentable 承载一个空白 container, 再把 attachment reparent 进去.
+/// SwiftUI 直接暴露 HVMView, 让 SwiftUI 的 NSHostingView 管理 view 的 window lifecycle.
 public struct EmbeddedVMContent: NSViewRepresentable {
     let attachment: ViewAttachment
 
@@ -38,18 +31,11 @@ public struct EmbeddedVMContent: NSViewRepresentable {
         self.attachment = attachment
     }
 
-    public func makeNSView(context: Context) -> NSView {
-        let container = NSView()
-        container.wantsLayer = true
-        container.layer?.backgroundColor = NSColor.black.cgColor
-        attachment.attach(to: container)
-        return container
+    public func makeNSView(context: Context) -> HVMView {
+        attachment.view
     }
 
-    public func updateNSView(_ nsView: NSView, context: Context) {
-        // reparent 幂等: 若 attachment 的 view 已经是本 container 的子视图, attach 内部 removeFromSuperview 再 add 也不出错
-        if attachment.view.superview !== nsView {
-            attachment.attach(to: nsView)
-        }
+    public func updateNSView(_ nsView: HVMView, context: Context) {
+        // 不动, SwiftUI 维护 view 的父子关系
     }
 }

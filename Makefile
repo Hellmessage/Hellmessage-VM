@@ -58,3 +58,17 @@ register-types: build
 	"$$LSREG" -f $(BUILD_DIR)/HVM.app; \
 	killall Finder 2>/dev/null || true; \
 	echo "✔ Launch Services 已刷新, Finder 已重启"
+
+# 重置指定 VM 的运行时残留 + EFI nvram, 用于启动卡住时一键清理
+# 用法: make reset-vm NAME=ubuntu24-m1
+.PHONY: reset-vm
+reset-vm:
+	@test -n "$(NAME)" || { echo "用法: make reset-vm NAME=<vm-name>"; exit 1; }
+	@BUNDLE="$$HOME/Library/Application Support/HVM/VMs/$(NAME).hvmz"; \
+	test -d "$$BUNDLE" || { echo "✗ 未找到 $$BUNDLE"; exit 1; }; \
+	pkill -9 -f "HVM.app/Contents/MacOS/HVM" 2>/dev/null || true; \
+	sleep 1; \
+	rm -f "$$BUNDLE/.lock"; \
+	rm -f "$$BUNDLE/nvram/efi-vars.fd"; \
+	rm -f "$$HOME/Library/Application Support/HVM/run/"*.sock 2>/dev/null || true; \
+	echo "✔ 已重置 $(NAME) 的运行时残留 + EFI nvram"

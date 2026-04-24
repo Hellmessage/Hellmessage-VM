@@ -84,8 +84,9 @@ public final class AppModel {
             sessions.removeValue(forKey: item.id)
             throw error
         }
-        // 默认独立窗口态 (docs/GUI.md: "运行中的 VM 默认打开独立窗口")
-        session.showStandalone()
+        // M2: 只嵌入主窗口, 不再独立窗口 (VZ view reparent 会导致 Metal drawable 失效)
+        session.showEmbedded()
+        embeddedID = item.id
         refreshList()
     }
 
@@ -109,21 +110,11 @@ public final class AppModel {
         refreshList()
     }
 
-    // MARK: - 嵌入切换
+    // MARK: - 嵌入 (M2 唯一显示模式)
 
     public func embedInMain(_ id: UUID) {
         guard let s = sessions[id] else { return }
-        // 取消旧的嵌入
-        if let oldID = embeddedID, oldID != id, let old = sessions[oldID] {
-            old.showStandalone()
-        }
         s.showEmbedded()
         embeddedID = id
-    }
-
-    public func popOutStandalone(_ id: UUID) {
-        guard let s = sessions[id] else { return }
-        if embeddedID == id { embeddedID = nil }
-        s.showStandalone()
     }
 }

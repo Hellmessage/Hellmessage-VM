@@ -23,6 +23,9 @@ public final class VMHandle {
     private var delegate: Delegate?
     private var stateObservers: [UUID: (RunState) -> Void] = [:]
 
+    /// VZ VM 实例 (只在 start 成功后非 nil). GUI 拿来挂给 VZVirtualMachineView 做渲染.
+    public var virtualMachine: VZVirtualMachine? { vm }
+
     public init(config: VMConfig, bundleURL: URL) {
         self.id = config.id
         self.bundleURL = bundleURL
@@ -141,7 +144,9 @@ public final class VMHandle {
     public func addStateObserver(_ handler: @escaping (RunState) -> Void) -> UUID {
         let token = UUID()
         stateObservers[token] = handler
-        handler(state)   // 立即投递当前值
+        // 注意: 不立即投递当前 state.
+        // 若注册时 state=.stopped, onStateChanged(.stopped) 的 cleanup 会 removeStateObserver
+        // 导致后续真正的 .running/.starting 丢失. 调用方需要时主动读 self.state.
         return token
     }
 
