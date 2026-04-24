@@ -72,12 +72,14 @@ public enum HVMHostEntry {
             handle.addStateObserver { newState in
                 if case .stopped = newState {
                     DispatchQueue.main.async {
+                        HostState.shared.ipcServer?.stop()
                         lock.release()
                         exit(0)
                     }
                 }
                 if case .error = newState {
                     DispatchQueue.main.async {
+                        HostState.shared.ipcServer?.stop()
                         lock.release()
                         exit(11)
                     }
