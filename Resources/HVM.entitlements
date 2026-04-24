@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- VZ 基础能力, Apple Developer 账号自带, 不用申请 -->
+    <key>com.apple.security.virtualization</key>
+    <true/>
+
+    <!--
+        桥接网络能力, 需向 Apple 申请 com.apple.vm.networking entitlement
+        详见 docs/ENTITLEMENT.md
+        审批通过后取消下面注释并重签
+
+        <key>com.apple.vm.networking</key>
+        <true/>
+    -->
+</dict>
+</plist>

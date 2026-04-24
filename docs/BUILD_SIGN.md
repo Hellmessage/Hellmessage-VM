@@ -223,11 +223,33 @@ spctl --assess --verbose=4 --type execute "$APP" || echo "(spctl fail ok, 未公
 echo "✔ 构建完成: $APP"
 ```
 
+### 签名身份选择
+
+`scripts/bundle.sh` 按以下优先级选签名身份:
+
+1. **显式 `$SIGN_IDENTITY`** (非 `auto`) — 用户通过 `SIGN_IDENTITY="Apple Development" make build` 指定
+2. **Apple Development** — 自动探测, 仅当 `security find-identity -v -p codesigning` 列出该身份 (即证书链完整且被信任) 才选用
+3. **ad-hoc `-`** — 上述都不可用时的默认方案, 也是本项目**推荐的个人自用签名方式**
+
+三种方式对本项目都等价可用:
+
+| 方式 | VZ entitlement | 跨机分发 | 维护 |
+|---|---|---|---|
+| Apple Development | ✅ 生效 | 能被其他 Mac Gatekeeper 放行(需同 Team) | 需保持证书链 / 中间证书 / 信任 |
+| ad-hoc (`-`) | ✅ 生效 | 其他 Mac 被 Gatekeeper 拦, 本机无感 | 零 |
+
+**选型默认**: ad-hoc。CLAUDE.md 已约束 "不公证不分发, 仅自机运行", ad-hoc 正好匹配该定位且无证书环境依赖, 空白 Mac 上 `make build` 总能跑通。
+
+### hardened runtime
+
+- 真实证书(Apple Development)叠加 `--options runtime` (hardened runtime), 与 Apple 公证流程的前置条件兼容(虽然本项目不公证)
+- ad-hoc 签名**不叠加** `--options runtime`, 避免某些 macOS 版本下与 entitlement 组合时出现启动限制
+
 ### 签名约束(CLAUDE.md)
 
 - 签名相关代码 / 日志**不得输出**: team ID、证书 SHA、私钥路径
-- Makefile 里 `TEAM_ID` 出现是因为 entitlement 校验偶尔需要, 但**绝对不输出到 stdout / 日志文件**
-- `scripts/bundle.sh` 的 echo 只说"✔ 构建完成", 不说签的啥
+- `scripts/bundle.sh` 的输出限于: 签名方式提示(如"使用 ad-hoc 签名")、最终 "✔ 构建完成"、产物路径
+- Makefile 历史上出现过 `TEAM_ID` 字段, 已移除, **不再向环境变量 / stdout / 日志文件**任何输出 Team ID
 
 ## Info.plist 模板
 

@@ -1,1 +1,27 @@
+# SwiftPM
+.build/
+.swiftpm/
+Package.resolved
+
+# HVM 构建产物
+build/
+
+# Xcode
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+!Package.swift
+
+# macOS
 .DS_Store
+
+# Icon 生成的中间产物
+*.iconset/
+
+# 本地开发环境变量
+.env
+.env.local
+
+# provisioning profile (bridged entitlement 审批通过后才放入,
+# 但不应进 git, 因为含 Apple 颁发的设备/证书信息)
+Resources/embedded.provisionprofile
