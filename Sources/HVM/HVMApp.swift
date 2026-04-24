@@ -1,18 +1,21 @@
-// HVM 主 App (M0 骨架)
+// HVM 主 App (M0/M1 骨架)
 // SwiftUI 空窗口 + 黑色主题 + 中央版本号展示
 // 详见 docs/GUI.md
+//
+// M1 起 HVM 可执行文件有两个模式:
+//   1. 默认 (本文件 HVMApp): GUI 模式, 打开主窗口
+//   2. --host-mode-bundle <path>: VMHost 模式, 不开窗口, 承载 VZVirtualMachine
+//      分派逻辑在 main.swift
 
 import SwiftUI
 import HVMCore
 
-@main
-struct HVMApp: App {
-    init() {
-        // 锁定深色外观, 不跟随系统主题 (docs/GUI.md)
+public struct HVMApp: App {
+    public init() {
         NSApp?.appearance = NSAppearance(named: .darkAqua)
     }
 
-    var body: some Scene {
+    public var body: some Scene {
         WindowGroup("HVM") {
             M0SkeletonView()
                 .preferredColorScheme(.dark)

@@ -25,7 +25,7 @@ let package = Package(
         // 功能模块
         .target(name: "HVMBundle",  dependencies: ["HVMCore"]),
         .target(name: "HVMStorage", dependencies: ["HVMCore"]),
-        .target(name: "HVMNet",     dependencies: ["HVMCore"]),
+        .target(name: "HVMNet",     dependencies: ["HVMCore", "HVMBundle"]),
         .target(name: "HVMDisplay", dependencies: ["HVMCore"]),
         .target(
             name: "HVMBackend",
@@ -42,6 +42,7 @@ let package = Package(
         .executableTarget(
             name: "hvm-cli",
             dependencies: [
+                "HVMCore", "HVMBundle", "HVMStorage", "HVMNet",
                 "HVMBackend", "HVMInstall", "HVMIPC",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
