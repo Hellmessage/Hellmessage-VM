@@ -57,6 +57,7 @@ public enum IPCOp: String, Sendable {
     case dbgScreenshot = "dbg.screenshot"
     case dbgStatus     = "dbg.status"
     case dbgKey        = "dbg.key"
+    case dbgMouse      = "dbg.mouse"
 }
 
 // MARK: - Status payload (JSON-stringified for `data` values)

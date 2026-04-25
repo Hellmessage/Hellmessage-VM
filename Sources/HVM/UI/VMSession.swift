@@ -235,6 +235,9 @@ public final class VMSession {
         case IPCOp.dbgKey.rawValue:
             return handleDbgKey(req)
 
+        case IPCOp.dbgMouse.rawValue:
+            return handleDbgMouse(req)
+
         default:
             return .failure(id: req.id, code: "ipc.unknown_op", message: "未知 op: \(req.op)")
         }
@@ -283,6 +286,55 @@ public final class VMSession {
         } catch {
             return .failure(id: req.id, code: "backend.vz_internal", message: "\(error)")
         }
+    }
+
+    private func handleDbgMouse(_ req: IPCRequest) -> IPCResponse {
+        guard state == .running else {
+            return .failure(id: req.id, code: "dbg.vm_not_running",
+                            message: "VM 未运行 (state=\(stateString(state))), 无法注入鼠标")
+        }
+        // guest framebuffer 尺寸: 与 dbgStatus 同源, 当前硬编码 (Linux 1024x768, macOS 1920x1080)
+        let guestSize: CGSize
+        switch config.guestOS {
+        case .linux: guestSize = CGSize(width: 1024, height: 768)
+        case .macOS: guestSize = CGSize(width: 1920, height: 1080)
+        }
+        let button = MouseEmulator.Button(rawValue: req.args["button"] ?? "left") ?? .left
+        do {
+            switch req.args["op"] ?? "" {
+            case "move":
+                let p = try parsePoint(req.args["x"], req.args["y"])
+                try MouseEmulator.move(to: p, guestSize: guestSize, into: attachment.view)
+            case "click":
+                let p = try parsePoint(req.args["x"], req.args["y"])
+                try MouseEmulator.click(at: p, guestSize: guestSize, button: button, into: attachment.view)
+            case "double-click":
+                let p = try parsePoint(req.args["x"], req.args["y"])
+                try MouseEmulator.doubleClick(at: p, guestSize: guestSize, button: button, into: attachment.view)
+            case "drag":
+                let a = try parsePoint(req.args["x"],  req.args["y"])
+                let b = try parsePoint(req.args["x2"], req.args["y2"])
+                try MouseEmulator.drag(from: a, to: b, guestSize: guestSize, button: button, into: attachment.view)
+            default:
+                return .failure(id: req.id, code: "config.invalid_enum",
+                                message: "未知 mouse.op: \(req.args["op"] ?? "(nil)")")
+            }
+            return .success(id: req.id)
+        } catch let e as HVMError {
+            let uf = e.userFacing
+            return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)
+        } catch {
+            return .failure(id: req.id, code: "backend.vz_internal", message: "\(error)")
+        }
+    }
+
+    private func parsePoint(_ x: String?, _ y: String?) throws -> CGPoint {
+        guard let xs = x, let ys = y, let xd = Double(xs), let yd = Double(ys) else {
+            throw HVMError.config(.invalidEnum(field: "mouse.coords",
+                                                raw: "\(x ?? "nil"),\(y ?? "nil")",
+                                                allowed: ["数字 x,y"]))
+        }
+        return CGPoint(x: xd, y: yd)
     }
 
     private func handleDbgStatus(_ req: IPCRequest) -> IPCResponse {
