@@ -101,73 +101,64 @@ audio.streams = [output]
 
 ## 窗口容器
 
-### 独立窗口
+### 嵌入态 (M2 唯一显示模式)
 
-独立窗口内容是一个 `NSHostingView` 包着 `VZVirtualMachineView`:
+`HVMView` (VZVirtualMachineView 子类) 直接挂在主窗口右栏 (`DetailContainerView`) 作为 AppKit subview, 不经 SwiftUI `NSViewRepresentable` 包装。原因: SwiftUI 在 body re-render 时会对承载的 NSView 做 detach/reattach, 导致 VZ Metal drawable 失效 → 黑屏。
 
 ```swift
-final class StandaloneVMWindow: NSWindowController {
-    let vmView: VZVirtualMachineView
-
-    init(vm: VZVirtualMachine, identity: VMIdentity) {
-        self.vmView = VZVirtualMachineView()
-        self.vmView.virtualMachine = vm
-        self.vmView.capturesSystemKeys = true
-        // init window ...
-    }
-}
+// DetailContainerView.swift (running 状态构造)
+let hvmView = session.attachment.view  // session 持有的同一个 VZVirtualMachineView
+addSubview(hvmView)                     // 直挂, 不经 hosting
 ```
 
 关键设置:
 
 - `capturesSystemKeys = true`: Cmd+Tab / Cmd+Space 等被转发给 guest, 不触发 host
 - `automaticallyReconfiguresDisplay = false` 在 MVP 固定分辨率
+- `viewDidMoveToWindow` 钩子: 进入 window 时通知 `VMSession.bindVMToView`, 此时 `view.virtualMachine` 才被赋值 (Metal drawable 创建的必要时机, 见 [VZ_BACKEND.md](VZ_BACKEND.md))
 
-### 嵌入主窗口
+### 独立窗口 (M2 已弃用)
 
-嵌入时同一个 `VZVirtualMachineView` 通过 `removeFromSuperview()` + add 到主窗口右栏容器。**不销毁 view 不重建 VM**, 保证 guest 不感知切换。
+原计划支持"独立窗口 ⇄ 嵌入态"切换, 通过 `removeFromSuperview()` 把同一个 `VZVirtualMachineView` 在两个 NSWindow 间 reparent。
 
-```swift
-// 独立窗口 X 按钮触发:
-func reparentToMain() {
-    let view = standalone.vmView
-    view.removeFromSuperview()
-    mainWindow.attachEmbeddedView(view)
-    standalone.window?.close()
-}
+实测**这条路走不通**: VZ 的 `CAMetalLayer` 在 view 离开 window hierarchy 时 drawable 被销毁, 重新加进新 window 也不会自动重建, guest 屏幕变黑且不可恢复。M2 polish 阶段 (commit 3cc9656) 已移除独立窗口入口, 现在所有 VM 只有嵌入主窗口一种显示形式。
 
-// 主窗口"弹出"按钮触发:
-func reparentToStandalone() {
-    let view = mainWindow.embeddedView
-    view.removeFromSuperview()
-    let win = StandaloneVMWindow.reuseOrCreate(forID: id, vm: vm)
-    win.contentView.addSubview(view)
-    win.showWindow(nil)
-}
-```
+未来若要再上独立窗口, 必须给独立窗口起**独立的 `VZVirtualMachineView` 实例** (`view2.virtualMachine = vm`), 不复用嵌入态那个 view; 同一 VM 由两个 view 同时渲染 VZ 也支持 (内部 frame buffer 多 tap)。
 
-### 键盘捕获
+### 键盘 first responder 释放
 
 - 鼠标进入 view → view becomes first responder, 键盘事件直接给 VZ
-- **`Cmd + Control`** 组合释放捕获, view 放弃 first responder, 右上显示"已释放"提示
+- **`Cmd + Control`** 组合释放**键盘** first responder, 后续按键不再给 guest
 - 再次点画面 → 重新捕获
-- 嵌入态同样支持捕获, 无差异
+- 鼠标用 `VZUSBScreenCoordinatePointingDevice` (绝对坐标), **没有 grab 概念**, 鼠标随时可以离开 view, 不需要"释放"
 
-实现:
+实现 (`Sources/HVMDisplay/HVMView.swift`):
 
 ```swift
 override func flagsChanged(with event: NSEvent) {
-    let flags = event.modifierFlags.intersection([.command, .control])
-    if flags == [.command, .control] {
+    let combo: NSEvent.ModifierFlags = [.command, .control]
+    if event.modifierFlags.intersection(combo) == combo {
         window?.makeFirstResponder(nil)
-        showReleaseToast()
+        onReleaseCapture?()
         return
     }
     super.flagsChanged(with: event)
 }
 ```
 
-注意: `VZVirtualMachineView` 自己处理按键, 我们 override 其子类或在 window level 加 event monitor。
+### 弹窗期间输入挂起
+
+主窗口出现 modal-style overlay (创建向导 / ErrorDialog) 时, 必须把 VZ view 的输入挂起, 否则:
+
+1. **光标消失**: VZVirtualMachineView 在 `mouseEntered` / `mouseMoved` 里走全局 `NSCursor.hide()` (不是 cursor rect), AppKit 上层 cursor rect 压不过 — 即使 overlay 视觉上盖在前面, VZ view 的 `NSTrackingArea` 仍按几何位置触发 hide, 鼠标在 dialog 区域看不见
+2. **键盘冲撞**: VZ first responder 还在, 键盘输入仍然进 guest
+
+机制: `HVMView.inputSuspended: Bool` (Sources/HVMDisplay/HVMView.swift) 拨到 `true` 时:
+
+- 所有 mouse* / scrollWheel / flagsChanged / cursorUpdate 跳过 `super` → guest 不再收到 host 输入, VZ 也不会再 hide cursor
+- 设置瞬间一次性多调几次 `NSCursor.unhide()` + `NSCursor.arrow.set()`, 抵消之前累计的 hide (NSCursor 是平衡计数, 不知 VZ 调了几次)
+
+驱动: `MainWindowController.observeDialogActivity` 用 `withObservationTracking` 把 `model.showCreateWizard || errors.current != nil` 同步给所有 `model.sessions.values` 的 `attachment.view.inputSuspended`。
 
 ## 截图 / frame buffer 访问
 

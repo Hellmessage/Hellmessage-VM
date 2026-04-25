@@ -18,12 +18,26 @@ public final class HVMView: VZVirtualMachineView {
     public var inputSuspended: Bool = false {
         didSet {
             guard inputSuspended != oldValue else { return }
-            if inputSuspended {
-                // hide/unhide 是平衡计数. 不知道 VZ 调过几次, 多 unhide 几次保险.
-                for _ in 0..<8 { NSCursor.unhide() }
-                NSCursor.arrow.set()
-            }
+            if inputSuspended { unhideCursorAggressively() }
         }
+    }
+
+    /// 用户按 Cmd+Control 主动释放捕获. 行为同 inputSuspended (屏蔽 VZ 输入 + 解隐藏光标),
+    /// 区别在于"恢复时机": 用户点回 VZ view 内 (mouseDown) 即自动 false, 重新交给 VZ.
+    private var captureReleased: Bool = false {
+        didSet {
+            guard captureReleased != oldValue else { return }
+            if captureReleased { unhideCursorAggressively() }
+        }
+    }
+
+    /// inputSuspended 或 captureReleased 任一为 true 时, VZ 输入全部跳过.
+    private var inputBlocked: Bool { inputSuspended || captureReleased }
+
+    private func unhideCursorAggressively() {
+        // hide/unhide 是平衡计数. 不知道 VZ 调过几次, 多 unhide 几次保险.
+        for _ in 0..<8 { NSCursor.unhide() }
+        NSCursor.arrow.set()
     }
 
     public override init(frame frameRect: NSRect) {
@@ -55,76 +69,96 @@ public final class HVMView: VZVirtualMachineView {
         // VZVirtualMachineView 内部自己管理 CAMetalLayer, 外部设置会让 Metal drawable 失效 → 黑屏
     }
 
-    /// 拦截修饰键变化. 用户同时按下 Cmd + Control 时释放捕获
+    /// 检测 Cmd+Control combo 进入"释放"状态. 直到 mouseDown 回 VZ view 为止.
+    ///
+    /// 关键: 即使触发了 combo 也要 super.flagsChanged 转发. 否则 VZ 的 modifier 状态会卡在
+    /// "Cmd/Ctrl 按着" — 因为 Cmd 先按下时已经走过 super (那时 combo 还不成立),
+    /// 而 combo 命中那一刻拦掉 super, 后续松键又被 inputBlocked 屏蔽 → VZ 永远收不到松开,
+    /// 重捕获后所有按键都被当成 Cmd+xxx 快捷键, guest 看不到字符. 让 VZ 始终有准确的
+    /// modifier 镜像即可, 那期间 keyDown 反正被屏蔽不会有副作用.
     public override func flagsChanged(with event: NSEvent) {
-        if inputSuspended { return }
+        if inputSuspended { return }  // 弹窗期连 modifier 也不给, 行为对齐其他鼠标事件
         let combo: NSEvent.ModifierFlags = [.command, .control]
-        let masked = event.modifierFlags.intersection(combo)
-        if masked == combo {
-            // 释放 first responder, 后续 keyboard 事件不再给 VZ
-            window?.makeFirstResponder(nil)
+        if event.modifierFlags.intersection(combo) == combo {
+            captureReleased = true
             onReleaseCapture?()
-            return
         }
         super.flagsChanged(with: event)
     }
 
-    // MARK: - 输入挂起期: 屏蔽全部 VZ 鼠标 super 调用
+    // MARK: - 输入屏蔽期: inputSuspended (弹窗) 或 captureReleased (用户主动) 任一生效都跳过 VZ super 调用
+
+    public override func keyDown(with event: NSEvent) {
+        if inputBlocked { return }
+        super.keyDown(with: event)
+    }
+    public override func keyUp(with event: NSEvent) {
+        if inputBlocked { return }
+        super.keyUp(with: event)
+    }
 
     public override func mouseEntered(with event: NSEvent) {
-        if inputSuspended { return }
+        if inputBlocked { return }
         super.mouseEntered(with: event)
     }
     public override func mouseExited(with event: NSEvent) {
-        if inputSuspended { return }
+        if inputBlocked { return }
         super.mouseExited(with: event)
     }
     public override func mouseMoved(with event: NSEvent) {
-        if inputSuspended { return }
+        if inputBlocked { return }
         super.mouseMoved(with: event)
     }
     public override func mouseDown(with event: NSEvent) {
+        // 弹窗期 dialog 在前, 不重捕获 (恢复要等 dialog 关闭)
         if inputSuspended { return }
+        // 用户主动释放后点回 view 内: 取消释放, 这一击照常给 VZ.
+        // 不动 first responder, 始终是自己, 避免 VZ 内部状态错乱.
+        if captureReleased {
+            captureReleased = false
+            super.mouseDown(with: event)
+            return
+        }
         super.mouseDown(with: event)
     }
     public override func mouseUp(with event: NSEvent) {
-        if inputSuspended { return }
+        if inputBlocked { return }
         super.mouseUp(with: event)
     }
     public override func mouseDragged(with event: NSEvent) {
-        if inputSuspended { return }
+        if inputBlocked { return }
         super.mouseDragged(with: event)
     }
     public override func rightMouseDown(with event: NSEvent) {
-        if inputSuspended { return }
+        if inputBlocked { return }
         super.rightMouseDown(with: event)
     }
     public override func rightMouseUp(with event: NSEvent) {
-        if inputSuspended { return }
+        if inputBlocked { return }
         super.rightMouseUp(with: event)
     }
     public override func rightMouseDragged(with event: NSEvent) {
-        if inputSuspended { return }
+        if inputBlocked { return }
         super.rightMouseDragged(with: event)
     }
     public override func otherMouseDown(with event: NSEvent) {
-        if inputSuspended { return }
+        if inputBlocked { return }
         super.otherMouseDown(with: event)
     }
     public override func otherMouseUp(with event: NSEvent) {
-        if inputSuspended { return }
+        if inputBlocked { return }
         super.otherMouseUp(with: event)
     }
     public override func otherMouseDragged(with event: NSEvent) {
-        if inputSuspended { return }
+        if inputBlocked { return }
         super.otherMouseDragged(with: event)
     }
     public override func scrollWheel(with event: NSEvent) {
-        if inputSuspended { return }
+        if inputBlocked { return }
         super.scrollWheel(with: event)
     }
     public override func cursorUpdate(with event: NSEvent) {
-        if inputSuspended {
+        if inputBlocked {
             NSCursor.arrow.set()
             return
         }

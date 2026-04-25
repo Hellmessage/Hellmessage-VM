@@ -273,12 +273,36 @@ struct StoppedContentView: View {
             }
             .buttonStyle(PrimaryButtonStyle())
             .keyboardShortcut(.return, modifiers: [.command])
+
+            // 装机模式 (有 ISO 且 bootFromDiskOnly=false) 才显示. 切到 from disk 后按钮隐藏,
+            // 等价于 hvm-cli boot-from-disk 子命令 (Sources/hvm-cli/Commands/BootFromDiskCommand.swift)
+            if item.config.installerISO != nil && !item.config.bootFromDiskOnly {
+                Button(action: bootFromDiskAction) {
+                    Text("BOOT FROM DISK")
+                }
+                .buttonStyle(GhostButtonStyle())
+                .help("装完 OS 后切到只从硬盘启动, 下次开机不挂 ISO")
+            }
         }
     }
 
     private func startAction() {
         Task {
             do { try await model.start(item) } catch { errors.present(error) }
+        }
+    }
+
+    private func bootFromDiskAction() {
+        do {
+            if BundleLock.isBusy(bundleURL: item.bundleURL) {
+                throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
+            }
+            var config = try BundleIO.load(from: item.bundleURL)
+            config.bootFromDiskOnly = true
+            try BundleIO.save(config: config, to: item.bundleURL)
+            model.refreshList()
+        } catch {
+            errors.present(error)
         }
     }
 
