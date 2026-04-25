@@ -73,15 +73,18 @@ public final class MacInstaller {
         }
 
         // 6. 构建 VZ config (走 ConfigBuilder 的 macOS 分支, 读 auxiliary 已经落盘的三件套)
-        let vzConfig: VZVirtualMachineConfiguration
+        // 装机阶段也会创建 ConsoleBridge (带回 built.consoleBridge), 用 _ 持有保证 fd 不被 GC.
+        let built: ConfigBuilder.BuildResult
         do {
-            vzConfig = try ConfigBuilder.build(from: config, bundleURL: bundleURL)
+            built = try ConfigBuilder.build(from: config, bundleURL: bundleURL)
         } catch {
             throw HVMError.install(.installerFailed(reason: "build VZ config: \(error)"))
         }
+        let consoleBridge = built.consoleBridge  // 持有, 否则 fd 提前释放
+        defer { consoleBridge.close() }
 
         // 7. 创建 VM + VZMacOSInstaller, 进度走 KVO
-        let vm = VZVirtualMachine(configuration: vzConfig)
+        let vm = VZVirtualMachine(configuration: built.vzConfig)
         let installer = VZMacOSInstaller(virtualMachine: vm, restoringFromImageAt: ipswURL)
 
         // KVO 进度. NSKeyValueObservation 在 invalidate 前一直推送.

@@ -11,7 +11,13 @@ import HVMNet
 import HVMStorage
 
 public enum ConfigBuilder {
-    public static func build(from config: VMConfig, bundleURL: URL) throws -> VZVirtualMachineConfiguration {
+    /// build 结果. consoleBridge 必须由 caller (VMHandle) 持有, 否则 fd 被回收会令 VZ 拿到失效 attachment.
+    public struct BuildResult {
+        public let vzConfig: VZVirtualMachineConfiguration
+        public let consoleBridge: ConsoleBridge
+    }
+
+    public static func build(from config: VMConfig, bundleURL: URL) throws -> BuildResult {
         let vz = VZVirtualMachineConfiguration()
 
         // CPU / 内存范围校验
@@ -131,11 +137,13 @@ public enum ConfigBuilder {
         vz.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
 
         // Virtio console (serial): guest stdout (kernel + systemd + 早期登录前的输出)
-        // 落到 bundle/logs/console-YYYY-MM-DD.log, 便于装机/启动卡住时事后排查.
-        // 读端保持 /dev/null — 暂不接受 host 注入到 guest console.
-        // 未来 hvm-dbg console 子命令实装时, 改成 socket + 文件双写.
+        // 双向 pipe + tee 到 bundle/logs/console-YYYY-MM-DD.log, hvm-dbg console 子命令通过 bridge 读写.
+        let bridge = try makeConsoleBridge(bundleURL: bundleURL)
         let serial = VZVirtioConsoleDeviceSerialPortConfiguration()
-        serial.attachment = try makeSerialAttachment(bundleURL: bundleURL)
+        serial.attachment = VZFileHandleSerialPortAttachment(
+            fileHandleForReading: bridge.vzReadHandle,
+            fileHandleForWriting: bridge.vzWriteHandle
+        )
         vz.serialPorts = [serial]
 
         // 最终由 VZ 自校验
@@ -145,7 +153,7 @@ public enum ConfigBuilder {
             throw HVMError.backend(.configInvalid(field: "(vz.validate)", reason: "\(error)"))
         }
 
-        return vz
+        return BuildResult(vzConfig: vz, consoleBridge: bridge)
     }
 
     /// 创建 VZ 磁盘 attachment. Linux guest 必须用 `cachingMode=.cached + synchronizationMode=.fsync`,
@@ -165,29 +173,17 @@ public enum ConfigBuilder {
         }
     }
 
-    /// 把 guest 的 console 输出 (kernel/systemd/getty) append 到 bundle/logs/console-<date>.log.
-    /// 读端 /dev/null. host 写端是 log 文件 (O_WRONLY|O_CREAT|O_APPEND).
-    /// FileHandle 不会被 ARC 释放: VZFileHandleSerialPortAttachment 持有它, attachment 又被
-    /// VZ machine 持有, machine 又被 VMHandle 持有, 跟 VM 同生共死.
-    private static func makeSerialAttachment(bundleURL: URL) throws -> VZVirtioConsoleDeviceSerialPortConfiguration.Attachment {
+    /// 创建 ConsoleBridge: 双向 pipe + 日志 tee + ring buffer.
+    /// guest 输出 append 到 bundle/logs/console-<date>.log; hvm-dbg 走 bridge 读写.
+    /// bridge 必须由 VMHandle 持有, 否则 fd lifecycle 失控.
+    private static func makeConsoleBridge(bundleURL: URL) throws -> ConsoleBridge {
         let logsDir = BundleLayout.logsDir(bundleURL)
         try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
 
         let df = DateFormatter()
         df.dateFormat = "yyyy-MM-dd"
         let logURL = logsDir.appendingPathComponent("console-\(df.string(from: Date())).log")
-
-        // 文件不存在时先 touch, FileHandle(forWritingTo:) 不会自动 create
-        if !FileManager.default.fileExists(atPath: logURL.path) {
-            FileManager.default.createFile(atPath: logURL.path, contents: nil)
-        }
-        let writeHandle = try FileHandle(forWritingTo: logURL)
-        try writeHandle.seekToEnd()  // append, 不覆盖
-
-        let nullHandle = FileHandle(forUpdatingAtPath: "/dev/null") ?? FileHandle.nullDevice
-
-        return VZFileHandleSerialPortAttachment(fileHandleForReading: nullHandle,
-                                                fileHandleForWriting: writeHandle)
+        return try ConsoleBridge(logFileURL: logURL)
     }
 }
 

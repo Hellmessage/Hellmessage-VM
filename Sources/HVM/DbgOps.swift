@@ -19,12 +19,19 @@ public final class DbgOps {
     private let view: HVMView
     private let guestOS: GuestOSType
     private let stateProvider: () -> RunState
+    private let startedAtProvider: () -> Date?
+    private let consoleBridgeProvider: () -> ConsoleBridge?
     private var lastFrameSha256: String? = nil
 
-    public init(view: HVMView, guestOS: GuestOSType, stateProvider: @escaping () -> RunState) {
+    public init(view: HVMView, guestOS: GuestOSType,
+                stateProvider: @escaping () -> RunState,
+                startedAtProvider: @escaping () -> Date? = { nil },
+                consoleBridgeProvider: @escaping () -> ConsoleBridge? = { nil }) {
         self.view = view
         self.guestOS = guestOS
         self.stateProvider = stateProvider
+        self.startedAtProvider = startedAtProvider
+        self.consoleBridgeProvider = consoleBridgeProvider
     }
 
     /// 试图处理 dbg.* op. 不认的 op 返回 nil 让调用方做兜底.
@@ -36,6 +43,9 @@ public final class DbgOps {
         case IPCOp.dbgMouse.rawValue:      return handleMouse(req)
         case IPCOp.dbgOcr.rawValue:        return handleOcr(req)
         case IPCOp.dbgFindText.rawValue:   return handleFindText(req)
+        case IPCOp.dbgBootProgress.rawValue: return handleBootProgress(req)
+        case IPCOp.dbgConsoleRead.rawValue:  return handleConsoleRead(req)
+        case IPCOp.dbgConsoleWrite.rawValue: return handleConsoleWrite(req)
         default: return nil
         }
     }
@@ -77,7 +87,7 @@ public final class DbgOps {
             guestWidthPx: w,
             guestHeightPx: h,
             lastFrameSha256: lastFrameSha256,
-            consoleAgentOnline: false
+            consoleAgentOnline: consoleBridgeProvider() != nil
         )
         guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
             return .failure(id: req.id, code: "ipc.encode_failed", message: "dbg status payload 编码失败")
@@ -224,6 +234,103 @@ public final class DbgOps {
             return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)
         } catch {
             return .failure(id: req.id, code: "backend.vz_internal", message: "\(error)")
+        }
+    }
+
+    /// boot-progress: 启发式判断 guest 启动阶段, 给 AI agent 做粗分支决策用.
+    /// 实现走 state + 截图 hash + OCR 关键词命中 三层启发, 不打开新通道.
+    /// 启发式分级见 docs/DEBUG_PROBE.md boot-progress 章节.
+    private func handleBootProgress(_ req: IPCRequest) -> IPCResponse {
+        let s = stateProvider()
+        let elapsed: Int? = startedAtProvider().map { Int(Date().timeIntervalSince($0)) }
+
+        func reply(_ phase: String, _ confidence: Float) -> IPCResponse {
+            let payload = IPCDbgBootProgressPayload(phase: phase, confidence: confidence, elapsedSec: elapsed)
+            guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
+                return .failure(id: req.id, code: "ipc.encode_failed", message: "boot_progress payload 编码失败")
+            }
+            return .success(id: req.id, data: ["payload": json])
+        }
+
+        // 非 running: 直接 bios (含 starting / paused / stopped / error / stopping)
+        guard s == .running else { return reply("bios", 1.0) }
+
+        // running 但抓不到帧: 还在 BIOS / EFI 阶段 (Metal drawable 还没首帧)
+        guard let shot = ScreenCapture.capturePNG(from: view) else {
+            return reply("bios", 0.7)
+        }
+        lastFrameSha256 = shot.sha256
+
+        // 有帧, 跑 OCR 看屏幕上有没有可识别文字
+        let items: [OCREngine.TextItem]
+        do { items = try OCREngine.recognize(pngData: shot.data, region: nil) }
+        catch { return reply("boot-logo", 0.5) }
+
+        if items.isEmpty { return reply("boot-logo", 0.6) }
+
+        let lowered = items.map { $0.text.lowercased() }
+        let joined = lowered.joined(separator: " ")
+
+        // ready-tty: 出现明确的 tty 登录提示
+        let ttyKeywords = ["login:", "localhost login", "raspberrypi login"]
+        if ttyKeywords.contains(where: { joined.contains($0) }) {
+            return reply("ready-tty", 0.9)
+        }
+
+        // ready-gui: 出现典型桌面登录/桌面元素 (按 guestOS 分别命中)
+        let guiKeywords: [String] = {
+            switch guestOS {
+            case .macOS: return ["sign in", "other", "user name", "用户名", "apple", "finder"]
+            case .linux: return ["username", "password", "sign in", "log in", "用户名", "密码"]
+            }
+        }()
+        if guiKeywords.contains(where: { kw in lowered.contains(where: { $0.contains(kw) }) }) {
+            return reply("ready-gui", 0.8)
+        }
+
+        // 有文字但没命中关键词: 可能在装机向导中间步骤, 不给硬结论
+        return reply("unknown", 0.4)
+    }
+
+    /// console.read: 增量拉 guest stdout. args: sinceBytes (默认 0).
+    private func handleConsoleRead(_ req: IPCRequest) -> IPCResponse {
+        guard let bridge = consoleBridgeProvider() else {
+            return .failure(id: req.id, code: "dbg.console_unavailable",
+                            message: "console bridge 未就绪 (VM 未启动?)")
+        }
+        let since = Int(req.args["sinceBytes"] ?? "0") ?? 0
+        let r = bridge.read(sinceBytes: since)
+        let payload = IPCDbgConsoleReadPayload(
+            dataBase64: r.data.base64EncodedString(),
+            totalBytes: r.totalBytes,
+            returnedSinceBytes: r.returnedSinceBytes
+        )
+        guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
+            return .failure(id: req.id, code: "ipc.encode_failed", message: "console.read payload 编码失败")
+        }
+        return .success(id: req.id, data: ["payload": json])
+    }
+
+    /// console.write: 写一段字节到 guest stdin. args: dataBase64 (优先) 或 text (UTF-8).
+    private func handleConsoleWrite(_ req: IPCRequest) -> IPCResponse {
+        guard let bridge = consoleBridgeProvider() else {
+            return .failure(id: req.id, code: "dbg.console_unavailable",
+                            message: "console bridge 未就绪 (VM 未启动?)")
+        }
+        let bytes: Data
+        if let b64 = req.args["dataBase64"], let d = Data(base64Encoded: b64) {
+            bytes = d
+        } else if let text = req.args["text"] {
+            bytes = Data(text.utf8)
+        } else {
+            return .failure(id: req.id, code: "config.missing_field",
+                            message: "需要 args.dataBase64 或 args.text")
+        }
+        do {
+            try bridge.write(bytes)
+            return .success(id: req.id, data: ["bytesWritten": String(bytes.count)])
+        } catch {
+            return .failure(id: req.id, code: "dbg.console_write_failed", message: "\(error)")
         }
     }
 

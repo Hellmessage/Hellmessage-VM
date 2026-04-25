@@ -22,6 +22,8 @@ public final class VMHandle {
     private var vm: VZVirtualMachine?
     private var delegate: Delegate?
     private var stateObservers: [UUID: (RunState) -> Void] = [:]
+    /// guest virtio-console 桥接, hvm-dbg console / exec 通过它读写. VM 停止时 close.
+    public private(set) var consoleBridge: ConsoleBridge?
 
     /// VZ VM 实例 (只在 start 成功后非 nil). GUI 拿来挂给 VZVirtualMachineView 做渲染.
     public var virtualMachine: VZVirtualMachine? { vm }
@@ -40,16 +42,17 @@ public final class VMHandle {
         }
         updateState(.starting)
 
-        let vzConfig: VZVirtualMachineConfiguration
+        let built: ConfigBuilder.BuildResult
         do {
-            vzConfig = try ConfigBuilder.build(from: config, bundleURL: bundleURL)
+            built = try ConfigBuilder.build(from: config, bundleURL: bundleURL)
         } catch {
             updateState(.error("\(error)"))
             throw error
         }
 
-        let vm = VZVirtualMachine(configuration: vzConfig)
+        let vm = VZVirtualMachine(configuration: built.vzConfig)
         self.vm = vm
+        self.consoleBridge = built.consoleBridge
         let delegate = Delegate { [weak self] newState in
             Task { @MainActor in self?.onVZStateChanged(to: newState) }
         }
@@ -165,9 +168,15 @@ public final class VMHandle {
         let mapped = RunState.from(vzState)
         // 避免覆盖 requestStop 设置的 .stopping 中间态: 只在 VZ 给出稳定态时更新
         switch mapped {
-        case .stopped, .running, .paused:
+        case .stopped:
+            consoleBridge?.close()
+            consoleBridge = nil
+            updateState(mapped)
+        case .running, .paused:
             updateState(mapped)
         case .error(let msg):
+            consoleBridge?.close()
+            consoleBridge = nil
             updateState(.error(msg))
         case .starting, .stopping:
             break

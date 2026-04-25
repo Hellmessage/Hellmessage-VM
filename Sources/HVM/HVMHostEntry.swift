@@ -109,7 +109,9 @@ public enum HVMHostEntry {
             HostState.shared.dbgOps = DbgOps(
                 view: view,
                 guestOS: config.guestOS,
-                stateProvider: { handle.state }
+                stateProvider: { handle.state },
+                startedAtProvider: { HostState.shared.startedAt },
+                consoleBridgeProvider: { handle.consoleBridge }
             )
 
             do {

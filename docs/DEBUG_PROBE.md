@@ -63,13 +63,13 @@ hvm-dbg screenshot <vm>                 截当前 frame buffer → PNG
 hvm-dbg key <vm> --text "..."           注入字符串文本
 hvm-dbg key <vm> --press <keys>         注入按键序列 (e.g. cmd+t, Return)
 hvm-dbg mouse <vm> <op>                 鼠标: move / click / scroll
-hvm-dbg console <vm>                    读/写 virtio-console (serial)
+hvm-dbg console <vm> --read|--write     读/写 virtio-console (hvc0), 请求/响应模型
 hvm-dbg ocr <vm>                        抓屏 + OCR (Vision framework)
 hvm-dbg find-text <vm> "login"          抓屏 + OCR + 返回文本位置
 hvm-dbg status <vm>                     VM 运行信息 (不同于 hvm-cli status, 偏 guest)
 hvm-dbg boot-progress <vm>              启动阶段判断 (仅根据帧变化 / serial 输出)
 hvm-dbg wait <vm> --for text --match "$ " --timeout 60   等 guest 进入某状态
-hvm-dbg exec <vm> --via console -- <cmd>   通过 serial 跑命令 (需 guest 配 login=getty)
+hvm-dbg exec <vm> [--user U --password-from-stdin] -- <cmd>   自动登录 + 跑命令 + 抓 exit code
 ```
 
 ### 通用选项
@@ -134,18 +134,31 @@ hvm-dbg mouse foo drag --from 100,100 --to 500,500
 
 ### `console`
 
-`virtio-console` 暴露给 `hvm-dbg` 作为 serial 通道:
+`virtio-console`(hvc0) 在 host 侧由 `ConsoleBridge` 接管: 双向 pipe + tee 到
+`<bundle>/logs/console-YYYY-MM-DD.log` + 256 KiB ring buffer。`hvm-dbg console` 走**请求/响应**模型,
+不做交互 tty 透传(交互式 shell 走 ssh, 这里是给脚本/agent 用的原子 op):
 
 ```
-hvm-dbg console foo                             # tail + stdin, Ctrl+A Ctrl+X 退出
-hvm-dbg console foo --read --bytes 4096         # 只读 4KB
-hvm-dbg console foo --write "echo hello\n"      # 写入
-hvm-dbg console foo --log ~/foo-console.log     # 后台录制
+hvm-dbg console foo --read                      # 拉 ring buffer 全量 (json 含 dataBase64 + totalBytes)
+hvm-dbg console foo --read --since-bytes 4096   # 拉 [4096, totalBytes) 的增量
+hvm-dbg console foo --read --format human       # 把 base64 解码后裸字节直接 stdout (适合 tail -f)
+hvm-dbg console foo --write "echo hello\n"      # 把 text 当 UTF-8 写到 guest stdin (不自动加 \n)
+hvm-dbg console foo --write-stdin               # 从 host stdin 流式写入 guest stdin
 ```
+
+`--read` 响应字段:
+
+```json
+{ "totalBytes": 18234, "returnedSinceBytes": 4096, "returnedBytes": 14138, "dataBase64": "..." }
+```
+
+`returnedSinceBytes` 可能 > 客户端传入的 `sinceBytes` —— 当 sinceBytes 落在 ring 窗口外,
+bridge 会把起点上调到窗口左界。客户端拿响应里的 `totalBytes` 当下一轮 `--since-bytes` 即可增量轮询。
 
 Linux guest 默认 getty 监听 `/dev/hvc0`, 用户名/密码登录即可 shell。
 
-macOS guest 不能用 getty, serial console 只能看 boot log, 不能交互, 故 `console` 命令对 macOS 仅支持 `--read`。
+macOS guest 不能在 hvc0 起 getty, serial console 只看得到 boot log, 不能交互。
+对 macOS, `console --read` 能拿启动日志, `--write` 写入会进 hvc0 但不会有 shell 应答。
 
 ### `ocr`
 
@@ -243,12 +256,35 @@ Exit code 0 = 达成, 6 = 超时。
 ### `exec`(via console)
 
 ```
-hvm-dbg exec foo --via console --user root --password hunter2 -- /bin/bash -c "uname -r"
+# 已登录的 shell 直接跑命令 (省略 --user)
+hvm-dbg exec foo -- /bin/sh -c "uname -r"
+
+# 自动 login: 写 user → 等 Password: → 写 password → 等 shell prompt → 跑命令
+echo 'hunter2' | hvm-dbg exec foo --user root --password-from-stdin -- /bin/sh -c "uname -r"
+
+# 命令行带密码 (不推荐, 会进 history)
+hvm-dbg exec foo --user root --password hunter2 -- /bin/sh -c "uname -r"
 ```
 
-**注意**: 此命令要求 guest 内 `/dev/hvc0` 有 getty 监听, 且能用密码登录。`--password` 以明文形式打印到屏幕, 日志中仍按 CLAUDE.md 约束**脱敏**(替换成 `***`)。
+实现完全在客户端: 组合 `console.read` / `console.write` 跑状态机:
 
-**安全警告**: CLI 层面不推荐硬编码密码, 推荐用 `--password-from-stdin` 或 guest 预先配置好 ssh 密钥然后走网络 ssh。`exec` 是兜底手段, 尽量避免在脚本里留密码。
+1. 拿当前 `totalBytes` 当 watermark, 后续轮询都从这个起点之后
+2. 写 `\n` 触发 prompt
+3. 等到 buffer 末尾命中 `login:` / `Username:` / `Password:` / shell prompt(`$ ` / `# ` / `% `)之一,
+   按命中分支决定走登录流程还是直接跑命令
+4. 用 uuid sentinel 包裹命令: `echo __HVM_BEGIN_<uuid>__; <cmd>; echo __HVM_END_<uuid>__:$?`
+5. 等 END sentinel 出现, 截 BEGIN..END 之间字节当 stdout, 抓 exit code 当退出码
+
+**前置条件**: guest 内 `/dev/hvc0` 起了 getty (Linux 上一般是
+`systemctl enable serial-getty@hvc0.service`, Ubuntu cloud image 默认开了)。
+
+**安全约束** (按 CLAUDE.md):
+- 推荐 `--password-from-stdin` 而非 `--password` (避免命令行 history 泄露)
+- 客户端 / 服务端日志均不打印密码字段, 错误信息也不带
+- `console` 的 ring buffer 和日志文件**会**记录 guest 的 echo 输出 — 如果 guest 配 `stty -echo`
+  在 password 阶段, 就连这层也不会留痕; 默认配置下密码字符会被 shell 关 echo, 但 `Password:` prompt
+  之前的字符可能短暂可见
+- exec 是兜底手段, 长期自动化更推荐 ssh 密钥 + 网络
 
 ## 协议(VMHost ↔ hvm-dbg)
 
@@ -295,6 +331,8 @@ Response:
 
 ### 示例 agent loop
 
+#### 视觉操控 (GUI 装机 / 桌面自动化)
+
 ```
 while not done:
     screenshot = hvm-dbg screenshot foo --output /tmp/s.png
@@ -305,6 +343,46 @@ while not done:
     elif next_action.type == "type":
         hvm-dbg key foo --text next_action.text
     hvm-dbg wait foo --for frame-stable --within 1 --timeout 10
+```
+
+#### 启动阶段编排 (boot-progress 用例)
+
+按阶段路由动作, 避免还在 BIOS / boot-logo 时白跑 OCR:
+
+```bash
+while true; do
+    phase=$(hvm-dbg boot-progress foo | jq -r '.phase')
+    case "$phase" in
+        bios|boot-logo) sleep 2 ;;
+        ready-tty)      break ;;            # 进了 tty, 后续走 console / exec
+        ready-gui)      break ;;            # 进了桌面, 后续走 screenshot / mouse / key
+        unknown)        sleep 1 ;;
+    esac
+done
+```
+
+#### Console 增量轮询 (无登录)
+
+`tail -f` 风格读 console, 每次拿 totalBytes 当下次起点:
+
+```bash
+since=0
+while true; do
+    resp=$(hvm-dbg console foo --read --since-bytes "$since")
+    since=$(echo "$resp" | jq -r '.totalBytes')
+    echo "$resp" | jq -r '.dataBase64' | base64 -d
+    sleep 0.5
+done
+```
+
+#### 装机后跑健康检查 (exec 用例)
+
+```bash
+hvm-dbg wait foo --for text --match "login:" --timeout 300
+echo "$VM_PASSWORD" | hvm-dbg exec foo \
+    --user ubuntu --password-from-stdin --timeout 30 \
+    -- /bin/sh -c 'uname -r && systemctl is-system-running'
+# exit 0 = 健康, 透传 guest exit code
 ```
 
 ## 不做什么
@@ -348,4 +426,4 @@ while not done:
 
 ---
 
-**最后更新**: 2026-04-25
+**最后更新**: 2026-04-25 (M5 完整化: boot-progress / console / exec 落地, 文档同步)

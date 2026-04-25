@@ -19,6 +19,9 @@ struct HvmDbg: AsyncParsableCommand {
             OCRCommand.self,
             FindTextCommand.self,
             WaitCommand.self,
+            BootProgressCommand.self,
+            ConsoleCommand.self,
+            ExecCommand.self,
         ]
     )
 }

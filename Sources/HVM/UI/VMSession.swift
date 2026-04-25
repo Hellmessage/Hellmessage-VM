@@ -46,7 +46,9 @@ public final class VMSession {
     private lazy var dbgOps: DbgOps = DbgOps(
         view: attachment.view,
         guestOS: config.guestOS,
-        stateProvider: { [weak self] in self?.state ?? .stopped }
+        stateProvider: { [weak self] in self?.state ?? .stopped },
+        startedAtProvider: { [weak self] in self?.startedAt },
+        consoleBridgeProvider: { [weak self] in self?.handle.consoleBridge }
     )
 
     /// VM 自然结束 (.stopped / .error) 时回调. AppModel 注入 sessionDidEnd 以同步列表/侧边栏.
