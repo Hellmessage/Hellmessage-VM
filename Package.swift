@@ -54,8 +54,5 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
-
-        // 测试 (M0 只放 HVMCore 烟雾测试占位)
-        .testTarget(name: "HVMCoreTests", dependencies: ["HVMCore"]),
     ]
 )
