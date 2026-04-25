@@ -77,6 +77,10 @@ public final class AppModel {
     public func start(_ item: VMListItem) async throws {
         if sessions[item.id] != nil { return }
         let session = VMSession(bundleURL: item.bundleURL, config: item.config)
+        // 自然结束(.stopped / .error) 通知 AppModel 清理列表 + 切回 stopped 卡片
+        session.onEnded = { [weak self] id in
+            self?.sessionDidEnd(id)
+        }
         sessions[item.id] = session
         do {
             try await session.start()
@@ -98,9 +102,14 @@ public final class AppModel {
     public func kill(_ id: UUID) async throws {
         guard let s = sessions[id] else { return }
         try await s.forceStop()
-        sessions.removeValue(forKey: id)
-        if embeddedID == id { embeddedID = nil }
-        refreshList()
+        // 不在此处 sessions.removeValue + refreshList:
+        // forceStop 走完时, state observer 的 Task { @MainActor in onStateChanged(.stopped) }
+        // 还没派发. 若此处 removeValue, 唯一的 local 强引用 s 出 scope 后 VMSession 立即 dealloc,
+        // observer 的 [weak self] 失效, cleanup() / onEnded 都不会跑, BundleLock 只能靠
+        // BundleLock.deinit 兜底释放 — 而那时 refreshList 已经读过 isBusy=true (同进程 fcntl
+        // flock 互斥) 把 runState 写成 running, sidebar 卡死.
+        // 让 sessions / list 收尾走 VMSession.onStateChanged -> cleanup -> onEnded -> sessionDidEnd
+        // 这条统一路径: cleanup 同步释放 lock, sessionDidEnd 的 refreshList 读到 busy=false.
     }
 
     /// session 自然结束时通知 (guestDidStop / error) -> 从 sessions 移除

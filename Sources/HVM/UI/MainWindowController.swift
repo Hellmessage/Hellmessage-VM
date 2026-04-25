@@ -12,6 +12,9 @@
 //  │                   status bar (SwiftUI via NSHostingView)           │
 //  └────────────────────────────────────────────────────────────────────┘
 //  + dialog overlay (SwiftUI 最顶层, 透明点击穿透)
+//
+// X 按钮不真的关闭 app, 而是 hide window + 切到 menu bar accessory 模式
+// (Dock 图标隐藏, 顶部状态栏出现一个图标). 实现见 HVMAppDelegate.
 
 import AppKit
 import SwiftUI
@@ -20,6 +23,9 @@ import SwiftUI
 final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let model: AppModel
     private let errors: ErrorPresenter
+
+    /// 用户点 window 关闭按钮时被调. 由 AppDelegate 注入回调切到 menu bar 模式.
+    var onCloseRequested: (() -> Void)?
 
     init(model: AppModel, errors: ErrorPresenter) {
         self.model = model
@@ -47,7 +53,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         model.refreshList()
 
         // 测试 hook: HVM_AUTOSTART_VM=<name> 启动后自动 start 对应 VM.
-        // 方便 bash 脚本做集成测试, 不用手点 GUI.
         if let name = ProcessInfo.processInfo.environment["HVM_AUTOSTART_VM"],
            let item = model.list.first(where: { $0.displayName == name }) {
             model.selectedID = item.id
@@ -60,6 +65,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    // MARK: - NSWindowDelegate
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        // 不真正 close, 仅 orderOut (隐藏). AppDelegate 切到 accessory 模式.
+        sender.orderOut(nil)
+        onCloseRequested?()
+        return false
+    }
 
     // MARK: - 布局
 
@@ -92,10 +106,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         // AppKit detail 容器
         let detail = DetailContainerView(model: model, errors: errors)
 
-        // Dialog overlay 最顶层
-        let overlay = NSHostingView(rootView: DialogOverlay(model: model, errors: errors))
+        // Dialog overlay 最顶层. 必须用 PassthroughHostingView, 否则透明区域吞所有点击
+        let overlay = PassthroughHostingView(rootView: DialogOverlay(model: model, errors: errors))
         overlay.translatesAutoresizingMaskIntoConstraints = false
         overlay.sizingOptions = .minSize
+        observeDialogActivity(overlay: overlay)
 
         contentView.addSubview(toolbar)
         contentView.addSubview(topDivider)
@@ -153,6 +168,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             overlay.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             overlay.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
         ])
+    }
+
+    /// 观察"是否有弹窗在前", 同步给 overlay (cursor rect) + 所有运行中 VMSession 的 HVMView.
+    /// VZVirtualMachineView 用全局 NSCursor.hide() 隐藏光标 (不是 cursor rect), AppKit 层覆盖
+    /// 的 cursor rect 压不过, 所以必须在 HVMView 自己里 inputSuspended 屏蔽 VZ 的 mouse* 处理.
+    private func observeDialogActivity(overlay: PassthroughHostingView<DialogOverlay>) {
+        withObservationTracking {
+            let active = model.showCreateWizard || errors.current != nil
+            overlay.dialogActive = active
+            for session in model.sessions.values {
+                session.attachment.view.inputSuspended = active
+            }
+        } onChange: { [weak self, weak overlay] in
+            Task { @MainActor in
+                guard let self, let overlay else { return }
+                self.observeDialogActivity(overlay: overlay)
+            }
+        }
     }
 
     private func makeHDivider() -> NSView {

@@ -40,6 +40,10 @@ public final class VMSession {
     private var thumbnailTimer: Timer?
     private var observerToken: UUID?
 
+    /// VM 自然结束 (.stopped / .error) 时回调. AppModel 注入 sessionDidEnd 以同步列表/侧边栏.
+    /// 同进程模式下唯一的 stop → list 刷新通知点; 不挂会导致侧边栏 running 状态停留.
+    public var onEnded: (@MainActor (UUID) -> Void)?
+
     public init(bundleURL: URL, config: VMConfig) {
         self.bundleURL = bundleURL
         self.config = config
@@ -143,6 +147,7 @@ public final class VMSession {
         case .stopped, .error:
             stopThumbnailTimer()
             cleanup()
+            onEnded?(config.id)
         default:
             break
         }
