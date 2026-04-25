@@ -24,7 +24,7 @@ let package = Package(
 
         // 功能模块
         .target(name: "HVMBundle",  dependencies: ["HVMCore"]),
-        .target(name: "HVMStorage", dependencies: ["HVMCore"]),
+        .target(name: "HVMStorage", dependencies: ["HVMCore", "HVMBundle"]),
         .target(name: "HVMNet",     dependencies: ["HVMCore", "HVMBundle"]),
         .target(name: "HVMDisplay", dependencies: ["HVMCore", "HVMBundle"]),
         .target(

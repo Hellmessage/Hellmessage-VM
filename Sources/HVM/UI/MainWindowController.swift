@@ -116,6 +116,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         overlay.isAnyDialogActive = { [weak model, weak errors, weak confirms] in
             (model?.showCreateWizard ?? false)
                 || (model?.installState != nil)
+                || (model?.editConfigItem != nil)
                 || (errors?.current != nil)
                 || (confirms?.current != nil)
         }
@@ -186,6 +187,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         withObservationTracking {
             let active = model.showCreateWizard
                 || model.installState != nil
+                || model.editConfigItem != nil
                 || errors.current != nil
                 || confirms.current != nil
             overlay.dialogActive = active

@@ -123,6 +123,14 @@ public final class VMSession {
         try await handle.forceStop()
     }
 
+    public func pause() async throws {
+        try await handle.pause()
+    }
+
+    public func resume() async throws {
+        try await handle.resume()
+    }
+
     // MARK: - 显示模式 (M2 只支持嵌入)
 
     /// 标记为嵌入态. 实际 view attach 由 DetailPanel 的 EmbeddedVMContent 通过 NSViewRepresentable 处理.
@@ -233,6 +241,14 @@ public final class VMSession {
             Task { @MainActor in
                 try? await handle.forceStop()
             }
+            return .success(id: req.id)
+
+        case IPCOp.pause.rawValue:
+            Task { @MainActor in try? await handle.pause() }
+            return .success(id: req.id)
+
+        case IPCOp.resume.rawValue:
+            Task { @MainActor in try? await handle.resume() }
             return .success(id: req.id)
 
         default:

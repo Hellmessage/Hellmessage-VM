@@ -18,12 +18,16 @@ struct DialogOverlay: View {
             if let state = model.installState {
                 InstallDialog(state: state)
             }
+            if let editItem = model.editConfigItem {
+                EditConfigDialog(model: model, errors: errors, item: editItem)
+            }
             ErrorDialogOverlay(presenter: errors)
             ConfirmDialogOverlay(presenter: confirms)
         }
         .allowsHitTesting(
             model.showCreateWizard ||
             model.installState != nil ||
+            model.editConfigItem != nil ||
             errors.current != nil ||
             confirms.current != nil
         )

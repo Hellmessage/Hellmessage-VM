@@ -40,6 +40,8 @@ public final class AppModel {
     public var showCreateWizard: Bool = false
     /// 正在跑 macOS 装机时的进度. 非 nil → DialogOverlay 显示 InstallDialog 模态
     public var installState: InstallProgressState? = nil
+    /// 编辑 cpu/memory 弹窗的当前 VM. 非 nil → DialogOverlay 显示 EditConfigDialog 模态
+    public var editConfigItem: VMListItem? = nil
 
     public struct InstallProgressState: Sendable, Equatable {
         public let id: UUID
@@ -111,6 +113,16 @@ public final class AppModel {
     public func stop(_ id: UUID) throws {
         guard let s = sessions[id] else { return }
         try s.requestStop()
+    }
+
+    public func pause(_ id: UUID) async throws {
+        guard let s = sessions[id] else { return }
+        try await s.pause()
+    }
+
+    public func resume(_ id: UUID) async throws {
+        guard let s = sessions[id] else { return }
+        try await s.resume()
     }
 
     public func kill(_ id: UUID) async throws {

@@ -12,6 +12,7 @@ public enum BundleLayout {
     public static let nvramDirName      = "nvram"
     public static let logsDirName       = "logs"
     public static let metaDirName       = "meta"
+    public static let snapshotsDirName  = "snapshots"
 
     public static let mainDiskName      = "main.img"
     public static let nvramFileName     = "efi-vars.fd"
@@ -58,6 +59,14 @@ public enum BundleLayout {
 
     public static func metaDir(_ bundle: URL) -> URL {
         bundle.appendingPathComponent(metaDirName, isDirectory: true)
+    }
+
+    public static func snapshotsDir(_ bundle: URL) -> URL {
+        bundle.appendingPathComponent(snapshotsDirName, isDirectory: true)
+    }
+
+    public static func snapshotDir(_ bundle: URL, name: String) -> URL {
+        snapshotsDir(bundle).appendingPathComponent(name, isDirectory: true)
     }
 
     /// VZ serial console 的 Unix socket 运行时路径 (不进 config, 运行时生成)

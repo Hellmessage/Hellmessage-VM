@@ -52,6 +52,8 @@ public enum IPCOp: String, Sendable {
     case status  = "status"
     case stop    = "stop"
     case kill    = "kill"
+    case pause   = "pause"
+    case resume  = "resume"
 
     // hvm-dbg 子命令对应的 op (M5)
     case dbgScreenshot   = "dbg.screenshot"

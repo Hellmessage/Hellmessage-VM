@@ -8,6 +8,7 @@
 
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import HVMBackend
 import HVMBundle
 import HVMCore
@@ -89,12 +90,36 @@ struct DetailBottomBar: View {
     @Bindable var errors: ErrorPresenter
     let item: AppModel.VMListItem
 
+    /// 当前 session 的实时 state, 决定 PAUSE/RESUME 按钮显哪个
+    private var sessionState: RunState {
+        model.sessions[item.id]?.state ?? .stopped
+    }
+
     var body: some View {
         HStack(spacing: HVMSpace.md) {
             Text("\(item.config.cpuCount)cpu · \(item.config.memoryMiB / 1024)gb · \(networkMode(item.config))")
                 .font(HVMFont.small)
                 .foregroundStyle(HVMColor.textTertiary)
             Spacer()
+
+            // PAUSE / RESUME 按 state 切换标签 (按钮排版: 动作破坏性递增)
+            if case .paused = sessionState {
+                Button("RESUME") {
+                    Task {
+                        do { try await model.resume(item.id) } catch { errors.present(error) }
+                    }
+                }
+                .buttonStyle(GhostButtonStyle())
+            } else {
+                Button("PAUSE") {
+                    Task {
+                        do { try await model.pause(item.id) } catch { errors.present(error) }
+                    }
+                }
+                .buttonStyle(GhostButtonStyle())
+                .disabled(sessionState != .running)
+            }
+
             Button("STOP") {
                 do { try model.stop(item.id) } catch { errors.present(error) }
             }
@@ -179,8 +204,19 @@ struct StoppedContentView: View {
     private var resourcesSection: some View {
         TerminalSection("Resources") {
             HStack(spacing: HVMSpace.md) {
-                statCard(label: "cpu", value: "\(item.config.cpuCount)", unit: "cores", tint: HVMColor.statCPU)
-                statCard(label: "memory", value: "\(item.config.memoryMiB / 1024)", unit: "gb", tint: HVMColor.statMemory)
+                // cpu / memory 可点 → 弹 EditConfigDialog (等价 hvm-cli config set)
+                Button { model.editConfigItem = item } label: {
+                    statCard(label: "cpu", value: "\(item.config.cpuCount)", unit: "cores", tint: HVMColor.statCPU)
+                }
+                .buttonStyle(.plain)
+                .help("点击编辑 CPU 核数")
+
+                Button { model.editConfigItem = item } label: {
+                    statCard(label: "memory", value: "\(item.config.memoryMiB / 1024)", unit: "gb", tint: HVMColor.statMemory)
+                }
+                .buttonStyle(.plain)
+                .help("点击编辑内存")
+
                 statCard(label: "disk", value: "\(item.config.disks.first?.sizeGiB ?? 0)", unit: "gb", tint: HVMColor.statDisk)
                 statCard(label: "network", value: networkMode(item.config).lowercased(), unit: nil, tint: HVMColor.statNetwork)
             }
@@ -311,6 +347,21 @@ struct StoppedContentView: View {
                     .help("装完 OS 后切到只从硬盘启动, 下次开机不挂 ISO")
                 }
             }
+
+            // ISO 切换 (仅 Linux). 等价 hvm-cli iso select / eject
+            if item.guestOS == .linux {
+                Button(item.config.installerISO != nil ? "CHANGE ISO" : "SELECT ISO") {
+                    selectIsoAction()
+                }
+                .buttonStyle(GhostButtonStyle())
+                .help("挂载 / 替换安装 ISO (会自动取消 bootFromDiskOnly)")
+
+                if item.config.installerISO != nil {
+                    Button("EJECT ISO") { ejectIsoAction() }
+                        .buttonStyle(GhostButtonStyle())
+                        .help("弹出 ISO 并切到仅硬盘启动")
+                }
+            }
         }
     }
 
@@ -344,6 +395,45 @@ struct StoppedContentView: View {
                 throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
             }
             var config = try BundleIO.load(from: item.bundleURL)
+            config.bootFromDiskOnly = true
+            try BundleIO.save(config: config, to: item.bundleURL)
+            model.refreshList()
+        } catch {
+            errors.present(error)
+        }
+    }
+
+    private func selectIsoAction() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        if let isoType = UTType(filenameExtension: "iso") {
+            panel.allowedContentTypes = [isoType]
+        }
+        panel.prompt = "选择"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            if BundleLock.isBusy(bundleURL: item.bundleURL) {
+                throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
+            }
+            var config = try BundleIO.load(from: item.bundleURL)
+            config.installerISO = url.path
+            config.bootFromDiskOnly = false
+            try BundleIO.save(config: config, to: item.bundleURL)
+            model.refreshList()
+        } catch {
+            errors.present(error)
+        }
+    }
+
+    private func ejectIsoAction() {
+        do {
+            if BundleLock.isBusy(bundleURL: item.bundleURL) {
+                throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
+            }
+            var config = try BundleIO.load(from: item.bundleURL)
+            config.installerISO = nil
             config.bootFromDiskOnly = true
             try BundleIO.save(config: config, to: item.bundleURL)
             model.refreshList()

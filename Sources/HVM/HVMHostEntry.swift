@@ -314,6 +314,15 @@ final class HostState {
             }
             return .success(id: req.id)
 
+        case IPCOp.pause.rawValue:
+            // VZ pause/resume 是 async, 用 Task 桥接 (CompletionHandler / async 都返回, 避开 IPC 阻塞)
+            Task { @MainActor in try? await vm.pause() }
+            return .success(id: req.id)
+
+        case IPCOp.resume.rawValue:
+            Task { @MainActor in try? await vm.resume() }
+            return .success(id: req.id)
+
         default:
             // 把 dbg.* 都交给 DbgOps 处理 (与 GUI VMSession 共享同一份代码)
             if let resp = dbgOps?.tryHandle(req) {
