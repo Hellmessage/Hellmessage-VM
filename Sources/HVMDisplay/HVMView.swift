@@ -34,6 +34,14 @@ public final class HVMView: VZVirtualMachineView {
     /// inputSuspended 或 captureReleased 任一为 true 时, VZ 输入全部跳过.
     private var inputBlocked: Bool { inputSuspended || captureReleased }
 
+    /// macOS 当前 Caps Lock 状态镜像. flagsChanged 翻转时同步给 guest.
+    /// macOS 物理 Caps Lock 只发 flagsChanged 不发 keyDown, 所以 VZ 默认收不到按键事件,
+    /// guest 的 Caps Lock 一直停在 Off — 用户带 Caps 打字得到小写. 我们手动合成 HID 0x39.
+    private var hostCapsLockOn: Bool = NSEvent.modifierFlags.contains(.capsLock)
+
+    /// 第一次 keyDown 之前补一次初始同步: app 启动时若 macOS 已是 Caps On, guest 需 toggle 一次跟上.
+    private var didInitialCapsSync: Bool = false
+
     private func unhideCursorAggressively() {
         // hide/unhide 是平衡计数. 不知道 VZ 调过几次, 多 unhide 几次保险.
         for _ in 0..<8 { NSCursor.unhide() }
@@ -78,6 +86,15 @@ public final class HVMView: VZVirtualMachineView {
     /// modifier 镜像即可, 那期间 keyDown 反正被屏蔽不会有副作用.
     public override func flagsChanged(with event: NSEvent) {
         if inputSuspended { return }  // 弹窗期连 modifier 也不给, 行为对齐其他鼠标事件
+
+        // Caps Lock 同步: macOS 翻转 capsLock bit 时合成一次 HID Caps Lock 按键给 guest,
+        // 让 guest 内部 Caps 状态跟 host 镜像. 不做这一步, 用户带 Caps 打字会得到小写.
+        let nowCapsOn = event.modifierFlags.contains(.capsLock)
+        if nowCapsOn != hostCapsLockOn {
+            hostCapsLockOn = nowCapsOn
+            emitCapsLockToggle()
+        }
+
         let combo: NSEvent.ModifierFlags = [.command, .control]
         if event.modifierFlags.intersection(combo) == combo {
             captureReleased = true
@@ -86,10 +103,36 @@ public final class HVMView: VZVirtualMachineView {
         super.flagsChanged(with: event)
     }
 
+    /// 合成一次 Caps Lock keyDown+keyUp 走 super, 让 VZ 翻成 HID 0x39 按一下推给 guest.
+    /// guest 的 Caps Lock state 是按一下翻一次的逻辑, 所以一次合成 = 一次翻转.
+    private func emitCapsLockToggle() {
+        let kc: UInt16 = 0x39
+        let ts = ProcessInfo.processInfo.systemUptime
+        let win = window?.windowNumber ?? 0
+        if let down = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                        timestamp: ts, windowNumber: win, context: nil,
+                                        characters: "", charactersIgnoringModifiers: "",
+                                        isARepeat: false, keyCode: kc) {
+            super.keyDown(with: down)
+        }
+        if let up = NSEvent.keyEvent(with: .keyUp, location: .zero, modifierFlags: [],
+                                      timestamp: ts, windowNumber: win, context: nil,
+                                      characters: "", charactersIgnoringModifiers: "",
+                                      isARepeat: false, keyCode: kc) {
+            super.keyUp(with: up)
+        }
+    }
+
     // MARK: - 输入屏蔽期: inputSuspended (弹窗) 或 captureReleased (用户主动) 任一生效都跳过 VZ super 调用
 
     public override func keyDown(with event: NSEvent) {
         if inputBlocked { return }
+        // 启动时若 macOS 已是 Caps On, 需 toggle 一次让 guest 跟上 — 第一次 keyDown 前补.
+        // 放在这里而不是 viewDidMoveToWindow: 后者太早, VZ machine 还没 bind, 合成事件丢失.
+        if !didInitialCapsSync {
+            didInitialCapsSync = true
+            if hostCapsLockOn { emitCapsLockToggle() }
+        }
         super.keyDown(with: event)
     }
     public override func keyUp(with event: NSEvent) {

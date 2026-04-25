@@ -138,13 +138,28 @@ public enum KeyboardEmulator {
         view.inject(event: event)
     }
 
+    /// 合成 flagsChanged 事件喂给 view. 实测 VZ 只在 keyDown 上看 modifierFlags 不够 — 它内部
+    /// 跟踪 modifier state 是基于 flagsChanged 序列, 不发 flagsChanged 时 shift 在 guest 永远是 off,
+    /// `|`/`!`/`@`/大写字母这类 shift 字符全部落小写 → `\`/`1`/`2`/小写.
+    /// NSEvent.keyEvent 不接受 .flagsChanged 类型, 走 CGEvent 转一道.
+    /// 不需要权限: 没 CGEventPost, 只是把合成 NSEvent 喂给 view 的 super.flagsChanged dispatch.
     private static func emitFlagsChanged(flags: NSEvent.ModifierFlags, into view: HVMView) throws {
-        // NSEvent.keyEvent 不能造 flagsChanged. 用 NSEvent.init(eventRef:) 或下面的 type=.flagsChanged.
-        // 但 NSEvent.keyEvent 的 type 参数不接受 .flagsChanged. 用 CGEvent 也走不通 (会要权限).
-        // 折中: 大多数 VZ guest 不强校验 flagsChanged 单独事件, modifierFlags 在 keyDown 里
-        // 已带上, VZ 翻译时会看到. 实测如有 modifier 漏发问题再补.
-        //
-        // 留这函数做接口稳定性; 当前实现是 no-op.
-        _ = (flags, view)
+        guard let cge = CGEvent(source: nil) else {
+            throw HVMError.backend(.vzInternal(description: "CGEvent 合成失败"))
+        }
+        cge.type = .flagsChanged
+        var cgFlags: CGEventFlags = []
+        if flags.contains(.shift)    { cgFlags.insert(.maskShift) }
+        if flags.contains(.command)  { cgFlags.insert(.maskCommand) }
+        if flags.contains(.control)  { cgFlags.insert(.maskControl) }
+        if flags.contains(.option)   { cgFlags.insert(.maskAlternate) }
+        if flags.contains(.function) { cgFlags.insert(.maskSecondaryFn) }
+        cge.flags = cgFlags
+        // flagsChanged 事件按惯例带"哪个 modifier 在变化"的 keyCode. 选 shift 做代表 (0x38 = left shift),
+        // 大部分被 shift 的字符走这条; 其他 modifier 用同样路径但传不同 keyCode 也成立.
+        cge.setIntegerValueField(.keyboardEventKeycode, value: 0x38)
+        if let nse = NSEvent(cgEvent: cge) {
+            view.inject(event: nse)
+        }
     }
 }
