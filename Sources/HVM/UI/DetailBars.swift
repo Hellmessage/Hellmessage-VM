@@ -12,6 +12,7 @@ import UniformTypeIdentifiers
 import HVMBackend
 import HVMBundle
 import HVMCore
+import HVMStorage
 
 // MARK: - 状态徽章 (公共)
 
@@ -152,7 +153,12 @@ struct DetailBottomBar: View {
 struct StoppedContentView: View {
     @Bindable var model: AppModel
     @Bindable var errors: ErrorPresenter
+    @Bindable var confirms: ConfirmPresenter
     let item: AppModel.VMListItem
+
+    /// 当前 bundle 的 snapshot 列表. view init / 操作完成 / dialog 关闭后 reload.
+    /// 不放 AppModel: snapshot 仅 stopped view 关心, 且无法跨进程通知 (文件级状态).
+    @State private var snapshots: [SnapshotManager.Info] = []
 
     var body: some View {
         ScrollView {
@@ -160,12 +166,18 @@ struct StoppedContentView: View {
                 titleBlock
                 resourcesSection
                 metadataSection
+                snapshotsSection
                 actionRow
             }
             .padding(HVMSpace.xl)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(HVMColor.bgBase)
+        .onAppear { reloadSnapshots() }
+        // 创建弹窗关闭后 reload (snapshotCreateItem nil 触发)
+        .onChange(of: model.snapshotCreateItem?.id) { _, _ in
+            reloadSnapshots()
+        }
     }
 
     private var titleBlock: some View {
@@ -263,6 +275,137 @@ struct StoppedContentView: View {
             }
             .background(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).fill(HVMColor.bgCard))
             .overlay(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).stroke(HVMColor.border, lineWidth: 1))
+        }
+    }
+
+    // MARK: - Snapshots section
+
+    /// VM 整体快照 (磁盘 + config), 基于 APFS clonefile.
+    /// 入口: 顶部 + NEW 按钮; 行内 RESTORE / DELETE.
+    /// 跟 hvm-cli snapshot 子命令完全等价, 都要求 VM stopped (BundleLock.isBusy 检测).
+    private var snapshotsSection: some View {
+        TerminalSection("Snapshots") {
+            VStack(spacing: 0) {
+                snapshotHeader
+                if snapshots.isEmpty {
+                    emptySnapshotRow
+                } else {
+                    snapshotRows
+                }
+            }
+            .background(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).fill(HVMColor.bgCard))
+            .overlay(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).stroke(HVMColor.border, lineWidth: 1))
+        }
+    }
+
+    private var snapshotHeader: some View {
+        HStack(spacing: HVMSpace.md) {
+            Text("\(snapshots.count) saved")
+                .font(HVMFont.caption)
+                .foregroundStyle(HVMColor.textTertiary)
+            Spacer()
+            Button {
+                model.snapshotCreateItem = item
+            } label: {
+                Text("+ NEW")
+            }
+            .buttonStyle(GhostButtonStyle())
+            .help("创建新快照 (clonefile, 几乎零空间)")
+        }
+        .padding(.horizontal, HVMSpace.md)
+        .padding(.vertical, HVMSpace.sm)
+    }
+
+    private var emptySnapshotRow: some View {
+        VStack(spacing: 0) {
+            Rectangle().fill(HVMColor.border).frame(height: 1)
+            HStack {
+                Text("(无快照)")
+                    .font(HVMFont.caption)
+                    .foregroundStyle(HVMColor.textTertiary)
+                Spacer()
+            }
+            .padding(.horizontal, HVMSpace.md)
+            .padding(.vertical, 12)
+        }
+    }
+
+    private var snapshotRows: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(snapshots.enumerated()), id: \.element.name) { _, info in
+                Rectangle().fill(HVMColor.border).frame(height: 1)
+                HStack(spacing: HVMSpace.md) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(info.name)
+                            .font(HVMFont.body)
+                            .foregroundStyle(HVMColor.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Text(Self.snapDateFmt.string(from: info.createdAt))
+                            .font(HVMFont.small)
+                            .foregroundStyle(HVMColor.textTertiary)
+                    }
+                    Spacer()
+                    Button("RESTORE") { restoreSnapshot(info.name) }
+                        .buttonStyle(GhostButtonStyle())
+                        .help("将磁盘和 config 还原到此快照 (覆盖当前)")
+                    Button("DELETE") { deleteSnapshot(info.name) }
+                        .buttonStyle(GhostButtonStyle(destructive: true))
+                        .help("删除此快照")
+                }
+                .padding(.horizontal, HVMSpace.md)
+                .padding(.vertical, 9)
+            }
+        }
+    }
+
+    private static let snapDateFmt: DateFormatter = {
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return df
+    }()
+
+    private func reloadSnapshots() {
+        snapshots = SnapshotManager.list(bundleURL: item.bundleURL)
+    }
+
+    private func restoreSnapshot(_ name: String) {
+        confirms.present(ConfirmDialogModel(
+            title: "还原快照",
+            message: "将 \(item.displayName) 的磁盘和 config 还原到快照 \"\(name)\"。当前 disks/* 与 config 会被覆盖,且不可撤销。",
+            confirmTitle: "还原",
+            cancelTitle: "取消",
+            destructive: true
+        )) { confirmed in
+            guard confirmed else { return }
+            do {
+                if BundleLock.isBusy(bundleURL: item.bundleURL) {
+                    throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
+                }
+                try SnapshotManager.restore(bundleURL: item.bundleURL, name: name)
+                model.refreshList()
+                reloadSnapshots()
+            } catch {
+                errors.present(error)
+            }
+        }
+    }
+
+    private func deleteSnapshot(_ name: String) {
+        confirms.present(ConfirmDialogModel(
+            title: "删除快照",
+            message: "确定删除快照 \"\(name)\"? 此操作不可撤销。",
+            confirmTitle: "删除",
+            cancelTitle: "取消",
+            destructive: true
+        )) { confirmed in
+            guard confirmed else { return }
+            do {
+                try SnapshotManager.delete(bundleURL: item.bundleURL, name: name)
+                reloadSnapshots()
+            } catch {
+                errors.present(error)
+            }
         }
     }
 

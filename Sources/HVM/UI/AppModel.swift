@@ -42,6 +42,8 @@ public final class AppModel {
     public var installState: InstallProgressState? = nil
     /// 编辑 cpu/memory 弹窗的当前 VM. 非 nil → DialogOverlay 显示 EditConfigDialog 模态
     public var editConfigItem: VMListItem? = nil
+    /// 新建 snapshot 弹窗的当前 VM. 非 nil → DialogOverlay 显示 SnapshotCreateDialog 模态
+    public var snapshotCreateItem: VMListItem? = nil
 
     public struct InstallProgressState: Sendable, Equatable {
         public let id: UUID

@@ -106,7 +106,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let vDivider = makeVDivider()
 
         // AppKit detail 容器
-        let detail = DetailContainerView(model: model, errors: errors)
+        let detail = DetailContainerView(model: model, errors: errors, confirms: confirms)
 
         // Dialog overlay 最顶层. 必须用 PassthroughHostingView, 否则透明区域吞所有点击
         let overlay = PassthroughHostingView(rootView: DialogOverlay(model: model, errors: errors, confirms: confirms))
@@ -117,6 +117,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             (model?.showCreateWizard ?? false)
                 || (model?.installState != nil)
                 || (model?.editConfigItem != nil)
+                || (model?.snapshotCreateItem != nil)
                 || (errors?.current != nil)
                 || (confirms?.current != nil)
         }
@@ -188,6 +189,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             let active = model.showCreateWizard
                 || model.installState != nil
                 || model.editConfigItem != nil
+                || model.snapshotCreateItem != nil
                 || errors.current != nil
                 || confirms.current != nil
             overlay.dialogActive = active

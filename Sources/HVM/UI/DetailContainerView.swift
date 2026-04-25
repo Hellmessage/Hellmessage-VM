@@ -20,6 +20,7 @@ import HVMDisplay
 final class DetailContainerView: NSView {
     private let model: AppModel
     private let errors: ErrorPresenter
+    private let confirms: ConfirmPresenter
 
     // 当前展示的 hosting view, 根据状态重建
     private var currentEmptyHost: NSHostingView<DetailEmptyState>?
@@ -43,9 +44,10 @@ final class DetailContainerView: NSView {
         case running(UUID)
     }
 
-    init(model: AppModel, errors: ErrorPresenter) {
+    init(model: AppModel, errors: ErrorPresenter, confirms: ConfirmPresenter) {
         self.model = model
         self.errors = errors
+        self.confirms = confirms
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
@@ -163,7 +165,7 @@ final class DetailContainerView: NSView {
 
     private func buildStopped(id: UUID) {
         guard let item = model.list.first(where: { $0.id == id }) else { buildEmpty(); return }
-        let host = NSHostingView(rootView: StoppedContentView(model: model, errors: errors, item: item))
+        let host = NSHostingView(rootView: StoppedContentView(model: model, errors: errors, confirms: confirms, item: item))
         host.translatesAutoresizingMaskIntoConstraints = false
         host.sizingOptions = .minSize
         addSubview(host)

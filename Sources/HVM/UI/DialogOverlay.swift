@@ -21,6 +21,9 @@ struct DialogOverlay: View {
             if let editItem = model.editConfigItem {
                 EditConfigDialog(model: model, errors: errors, item: editItem)
             }
+            if let snapItem = model.snapshotCreateItem {
+                SnapshotCreateDialog(model: model, errors: errors, item: snapItem)
+            }
             ErrorDialogOverlay(presenter: errors)
             ConfirmDialogOverlay(presenter: confirms)
         }
@@ -28,6 +31,7 @@ struct DialogOverlay: View {
             model.showCreateWizard ||
             model.installState != nil ||
             model.editConfigItem != nil ||
+            model.snapshotCreateItem != nil ||
             errors.current != nil ||
             confirms.current != nil
         )
