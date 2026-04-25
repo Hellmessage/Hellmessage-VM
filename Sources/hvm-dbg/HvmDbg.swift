@@ -18,6 +18,7 @@ struct HvmDbg: AsyncParsableCommand {
             MouseCommand.self,
             OCRCommand.self,
             FindTextCommand.self,
+            WaitCommand.self,
         ]
     )
 }
