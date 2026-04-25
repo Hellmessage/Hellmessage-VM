@@ -1,5 +1,5 @@
 // CreateCommand.swift
-// hvm-cli create — 非交互式创建 Linux bundle (M1 只 Linux)
+// hvm-cli create — 非交互式创建 VM bundle (Linux ISO 引导 / macOS IPSW 装机)
 
 import ArgumentParser
 import Foundation
@@ -17,7 +17,7 @@ struct CreateCommand: AsyncParsableCommand {
     @Option(name: .long, help: "VM 名称 (必填)")
     var name: String
 
-    @Option(name: .long, help: "Guest OS: linux (M1 只支持 linux)")
+    @Option(name: .long, help: "Guest OS: linux | macOS")
     var os: String = "linux"
 
     @Option(name: .long, help: "CPU 核心数")
@@ -29,8 +29,11 @@ struct CreateCommand: AsyncParsableCommand {
     @Option(name: .long, help: "主盘大小 GiB")
     var disk: UInt64 = 64
 
-    @Option(name: .long, help: "安装 ISO 绝对路径 (Linux 必填)")
+    @Option(name: .long, help: "Linux 装机 ISO 绝对路径 (--os linux 必填)")
     var iso: String?
+
+    @Option(name: .long, help: "macOS 装机 IPSW 绝对路径 (--os macOS 必填)")
+    var ipsw: String?
 
     @Option(name: .long, help: "网络模式: nat | bridged:<iface>")
     var network: String = "nat"
@@ -47,14 +50,30 @@ struct CreateCommand: AsyncParsableCommand {
     func run() async throws {
         do {
             let os = try parseGuestOS(self.os)
-            guard os == .linux else {
-                throw HVMError.backend(.unsupportedGuestOS(raw: self.os + " (M1 只支持 linux)"))
-            }
 
-            guard let isoPath = iso else {
-                throw HVMError.config(.missingField(name: "iso"))
+            // OS 分支专属字段校验
+            var isoPath: String? = nil
+            var ipswPath: String? = nil
+            switch os {
+            case .linux:
+                guard let p = iso else { throw HVMError.config(.missingField(name: "iso")) }
+                try ISOValidator.validate(at: p)
+                isoPath = p
+                if ipsw != nil {
+                    throw HVMError.config(.invalidEnum(field: "ipsw", raw: "(set)",
+                                                       allowed: ["仅 --os macOS 时使用"]))
+                }
+            case .macOS:
+                guard let p = ipsw else { throw HVMError.config(.missingField(name: "ipsw")) }
+                guard FileManager.default.fileExists(atPath: p) else {
+                    throw HVMError.install(.ipswNotFound(path: p))
+                }
+                ipswPath = p
+                if iso != nil {
+                    throw HVMError.config(.invalidEnum(field: "iso", raw: "(set)",
+                                                       allowed: ["仅 --os linux 时使用"]))
+                }
             }
-            try ISOValidator.validate(at: isoPath)
 
             let network = try parseNetwork(self.network)
             let macAddr = try resolveMAC(explicit: self.mac)
@@ -66,7 +85,7 @@ struct CreateCommand: AsyncParsableCommand {
             try HVMPaths.ensure(parentDir)
             let bundleURL = parentDir.appendingPathComponent("\(name).hvmz", isDirectory: true)
 
-            // 卷空间预检
+            // 卷空间预检 (主盘. macOS 装机时 IPSW 缓冲单独在 install 阶段预检)
             try VolumeInfo.assertSpaceAvailable(
                 at: parentDir.path,
                 requiredBytes: UInt64(disk) * (1 << 30)
@@ -81,7 +100,8 @@ struct CreateCommand: AsyncParsableCommand {
                 networks: [NetworkSpec(mode: network, macAddress: macAddr)],
                 installerISO: isoPath,
                 bootFromDiskOnly: false,
-                linux: LinuxSpec()
+                macOS: os == .macOS ? MacOSSpec(ipsw: ipswPath, autoInstalled: false) : nil,
+                linux: os == .linux ? LinuxSpec() : nil
             )
 
             try BundleIO.create(at: bundleURL, config: config)
@@ -97,13 +117,20 @@ struct CreateCommand: AsyncParsableCommand {
                 print("  guestOS:   \(config.guestOS.rawValue)")
                 print("  cpu/mem:   \(config.cpuCount) 核 / \(config.memoryMiB / 1024) GiB")
                 print("  disk:      \(disk) GiB (raw sparse)")
-                print("  iso:       \(isoPath)")
+                if let p = isoPath  { print("  iso:       \(p)") }
+                if let p = ipswPath { print("  ipsw:      \(p)") }
                 print("  mac:       \(macAddr)")
-                print("下一步: hvm-cli start \(name)")
+                switch os {
+                case .linux:
+                    print("下一步: hvm-cli start \(name)  (在 guest 内完成安装, 然后 hvm-cli boot-from-disk \(name))")
+                case .macOS:
+                    print("下一步: hvm-cli install \(name)  (跑 VZMacOSInstaller, 完成后直接 start)")
+                }
             case .json:
                 printJSON([
                     "bundlePath": bundleURL.path,
                     "id": config.id.uuidString,
+                    "guestOS": config.guestOS.rawValue,
                 ])
             }
         } catch {
