@@ -39,6 +39,8 @@ public final class VMSession {
     private var ipcServer: SocketServer?
     private var thumbnailTimer: Timer?
     private var observerToken: UUID?
+    /// 最近一次 dbg.screenshot 拿到的 frame sha256, 给 dbg.status 上报让 AI agent 判断画面有无变化
+    private var lastFrameSha256: String?
 
     /// VM 自然结束 (.stopped / .error) 时回调. AppModel 注入 sessionDidEnd 以同步列表/侧边栏.
     /// 同进程模式下唯一的 stop → list 刷新通知点; 不挂会导致侧边栏 running 状态停留.
@@ -224,9 +226,58 @@ public final class VMSession {
             }
             return .success(id: req.id)
 
+        case IPCOp.dbgScreenshot.rawValue:
+            return handleDbgScreenshot(req)
+
+        case IPCOp.dbgStatus.rawValue:
+            return handleDbgStatus(req)
+
         default:
             return .failure(id: req.id, code: "ipc.unknown_op", message: "未知 op: \(req.op)")
         }
+    }
+
+    private func handleDbgScreenshot(_ req: IPCRequest) -> IPCResponse {
+        guard state == .running || state == .paused else {
+            return .failure(id: req.id, code: "dbg.vm_not_running",
+                            message: "VM 未运行 (state=\(stateString(state))), 无法截图")
+        }
+        guard let shot = ScreenCapture.capturePNG(from: attachment.view) else {
+            return .failure(id: req.id, code: "dbg.frame_unavailable",
+                            message: "view 还未渲染或 frame buffer 为空")
+        }
+        lastFrameSha256 = shot.sha256
+        let payload = IPCDbgScreenshotPayload(
+            pngBase64: shot.data.base64EncodedString(),
+            widthPx: shot.widthPx,
+            heightPx: shot.heightPx,
+            sha256: shot.sha256
+        )
+        guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
+            return .failure(id: req.id, code: "ipc.encode_failed", message: "screenshot payload 编码失败")
+        }
+        return .success(id: req.id, data: ["payload": json])
+    }
+
+    private func handleDbgStatus(_ req: IPCRequest) -> IPCResponse {
+        // guest framebuffer 分辨率: 当前 ConfigBuilder 硬编码值 (Linux 1024x768, macOS 1920x1080).
+        // 后续若 VMConfig 引入 displaySpec, 这里改成读 config.
+        let (w, h): (Int, Int)
+        switch config.guestOS {
+        case .linux: (w, h) = (1024, 768)
+        case .macOS: (w, h) = (1920, 1080)
+        }
+        let payload = IPCDbgStatusPayload(
+            state: stateString(state),
+            guestWidthPx: w,
+            guestHeightPx: h,
+            lastFrameSha256: lastFrameSha256,
+            consoleAgentOnline: false  // M5 phase 5 接入 console 通道后改 true
+        )
+        guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
+            return .failure(id: req.id, code: "ipc.encode_failed", message: "dbg status payload 编码失败")
+        }
+        return .success(id: req.id, data: ["payload": json])
     }
 
     private func stateString(_ s: RunState) -> String {

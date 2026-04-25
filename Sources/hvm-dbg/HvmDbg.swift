@@ -1,21 +1,19 @@
-// hvm-dbg 主入口 (M0 骨架)
-// M5 起实装 screenshot / key / mouse / ocr / find-text / wait 等子命令
+// hvm-dbg 主入口
+// M5 落地: screenshot / status (本提交). 后续 key / mouse / ocr / find-text / wait 分批接入.
 // 详见 docs/DEBUG_PROBE.md
 
 import ArgumentParser
 import HVMCore
 
 @main
-struct HvmDbg: ParsableCommand {
+struct HvmDbg: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "hvm-dbg",
         abstract: "HVM 调试探针 (替代 osascript UI scripting)",
-        version: HVMVersion.displayString
+        version: HVMVersion.displayString,
+        subcommands: [
+            ScreenshotCommand.self,
+            StatusCommand.self,
+        ]
     )
-
-    func run() throws {
-        // M0 默认行为: 打印版本信息
-        print(HVMVersion.displayString)
-        print("(M5 起接入 screenshot / key / mouse / ocr 等子命令)")
-    }
 }
