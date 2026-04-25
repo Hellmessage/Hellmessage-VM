@@ -150,14 +150,17 @@ clean:
 
 ### 职责
 
-1. 从 SwiftPM 产物目录复制 `HVM` / `hvm-cli` / `hvm-dbg` 到 `build/`
+1. 从 SwiftPM 产物目录复制 `HVM` / `hvm-cli` / `hvm-dbg`
+   - 同时进 `build/HVM.app/Contents/MacOS/` (供 GUI 用 `Bundle.main.url(forAuxiliaryExecutable:)` 找到, 后续做"一键安装 CLI" 直接拷出来)
+   - 同时留独立副本 `build/hvm-cli` / `build/hvm-dbg` (开发期可直接调用, 不必走 .app)
 2. 组装 `build/HVM.app`:
    - `Contents/MacOS/HVM` (主 executable)
+   - `Contents/MacOS/hvm-cli` / `Contents/MacOS/hvm-dbg` (随包附带的 CLI 工具)
    - `Contents/Info.plist` (填入版本号、bundle ID)
    - `Contents/Resources/AppIcon.icns`
    - `Contents/Resources/HVM.entitlements` 留着参考, 不实际运行时读
    - `Contents/embedded.provisionprofile` (若存在)
-3. `codesign` 签名 .app 及内部 binary
+3. `codesign` 签名 .app 及内部 binary (含 hvm-cli / hvm-dbg, 都走同一份 entitlement)
 
 ### 伪代码
 
@@ -175,8 +178,10 @@ APP="$BUILD/HVM.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-# 1. 拷 binary
+# 1. 拷 binary (主 + CLI 都进 .app/Contents/MacOS/, CLI 同时留 build/ 副本)
 cp "$SWIFT_BIN/HVM"     "$APP/Contents/MacOS/HVM"
+cp "$SWIFT_BIN/hvm-cli" "$APP/Contents/MacOS/hvm-cli"
+cp "$SWIFT_BIN/hvm-dbg" "$APP/Contents/MacOS/hvm-dbg"
 cp "$SWIFT_BIN/hvm-cli" "$BUILD/hvm-cli"
 cp "$SWIFT_BIN/hvm-dbg" "$BUILD/hvm-dbg"
 
@@ -197,24 +202,14 @@ if [ -f "$ROOT/Resources/embedded.provisionprofile" ]; then
     cp "$ROOT/Resources/embedded.provisionprofile" "$APP/Contents/embedded.provisionprofile"
 fi
 
-# 5. 签名: 先内部 binary, 再 .app
-codesign --force --options runtime \
-         --sign "$SIGN" \
-         --entitlements "$ROOT/Resources/HVM.entitlements" \
-         "$APP/Contents/MacOS/HVM"
-
-codesign --force --options runtime \
-         --sign "$SIGN" \
-         --entitlements "$ROOT/Resources/HVM.entitlements" \
-         "$APP"
-
-# CLI / dbg 也要签, 否则 hardened runtime 下无法运行
-codesign --force --options runtime --sign "$SIGN" \
-         --entitlements "$ROOT/Resources/HVM.entitlements" \
-         "$BUILD/hvm-cli"
-codesign --force --options runtime --sign "$SIGN" \
-         --entitlements "$ROOT/Resources/HVM.entitlements" \
-         "$BUILD/hvm-dbg"
+# 5. 签名: 先内部 binary (含 .app 内的 CLI), 再 .app, 最后 build/ 下的独立副本
+ARGS=(--force --options runtime --sign "$SIGN" --entitlements "$ROOT/Resources/HVM.entitlements")
+codesign "${ARGS[@]}" "$APP/Contents/MacOS/HVM"
+codesign "${ARGS[@]}" "$APP/Contents/MacOS/hvm-cli"
+codesign "${ARGS[@]}" "$APP/Contents/MacOS/hvm-dbg"
+codesign "${ARGS[@]}" "$APP"
+codesign "${ARGS[@]}" "$BUILD/hvm-cli"
+codesign "${ARGS[@]}" "$BUILD/hvm-dbg"
 
 # 6. 验证
 codesign --verify --deep --strict --verbose=2 "$APP"

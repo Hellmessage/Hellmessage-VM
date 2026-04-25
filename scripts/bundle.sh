@@ -39,7 +39,13 @@ rm -rf "$APP"
 mkdir -p "$MACOS" "$RESOURCES" "$BUILD"
 
 # 1. 拷二进制
+#    HVM 主二进制 + hvm-cli / hvm-dbg 一并塞进 Contents/MacOS/, 让 GUI 可用
+#    Bundle.main.url(forAuxiliaryExecutable:) 找到它们, 后续做"一键安装 CLI"
+#    (从 .app 里拷到 /usr/local/bin 或 symlink) 不需要用户自己找路径.
+#    同时在 build/ 留独立副本, 开发期可以直接 ./build/hvm-cli ... 不必走 .app.
 cp "$SWIFT_BIN/HVM"     "$MACOS/HVM"
+cp "$SWIFT_BIN/hvm-cli" "$MACOS/hvm-cli"
+cp "$SWIFT_BIN/hvm-dbg" "$MACOS/hvm-dbg"
 cp "$SWIFT_BIN/hvm-cli" "$BUILD/hvm-cli"
 cp "$SWIFT_BIN/hvm-dbg" "$BUILD/hvm-dbg"
 
@@ -70,6 +76,8 @@ if [ "$SIGN" != "-" ]; then
 fi
 
 codesign "${SIGN_ARGS[@]}" "$MACOS/HVM"
+codesign "${SIGN_ARGS[@]}" "$MACOS/hvm-cli"
+codesign "${SIGN_ARGS[@]}" "$MACOS/hvm-dbg"
 codesign "${SIGN_ARGS[@]}" "$APP"
 codesign "${SIGN_ARGS[@]}" "$BUILD/hvm-cli"
 codesign "${SIGN_ARGS[@]}" "$BUILD/hvm-dbg"
