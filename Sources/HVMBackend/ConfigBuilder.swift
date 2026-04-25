@@ -98,7 +98,7 @@ public enum ConfigBuilder {
                 throw HVMError.backend(.diskNotFound(path: diskURL.path))
             }
             do {
-                let attachment = try VZDiskImageStorageDeviceAttachment(url: diskURL, readOnly: disk.readOnly)
+                let attachment = try makeDiskAttachment(url: diskURL, readOnly: disk.readOnly, guestOS: config.guestOS)
                 storageDevices.append(VZVirtioBlockDeviceConfiguration(attachment: attachment))
             } catch {
                 throw HVMError.backend(.vzInternal(description: "disk attach \(diskURL.lastPathComponent): \(error)"))
@@ -116,7 +116,7 @@ public enum ConfigBuilder {
             }
             do {
                 let isoURL = URL(fileURLWithPath: isoPath)
-                let isoAttach = try VZDiskImageStorageDeviceAttachment(url: isoURL, readOnly: true)
+                let isoAttach = try makeDiskAttachment(url: isoURL, readOnly: true, guestOS: config.guestOS)
                 storageDevices.append(VZUSBMassStorageDeviceConfiguration(attachment: isoAttach))
             } catch {
                 throw HVMError.backend(.vzInternal(description: "ISO attach: \(error)"))
@@ -130,15 +130,12 @@ public enum ConfigBuilder {
         // 熵源 (公共)
         vz.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
 
-        // Virtio console (serial) -> bundle/run/console.sock, 供 hvm-dbg console 使用
-        let runDir = bundleURL.appendingPathComponent("run", isDirectory: true)
-        try? FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
-        let serialSocket = BundleLayout.serialSocketURL(bundleURL)
-        // 移除旧的 socket 残留 (上次进程崩溃留下)
-        try? FileManager.default.removeItem(at: serialSocket)
-        let consoleAttachment = try makeSerialAttachment(at: serialSocket)
+        // Virtio console (serial): guest stdout (kernel + systemd + 早期登录前的输出)
+        // 落到 bundle/logs/console-YYYY-MM-DD.log, 便于装机/启动卡住时事后排查.
+        // 读端保持 /dev/null — 暂不接受 host 注入到 guest console.
+        // 未来 hvm-dbg console 子命令实装时, 改成 socket + 文件双写.
         let serial = VZVirtioConsoleDeviceSerialPortConfiguration()
-        serial.attachment = consoleAttachment
+        serial.attachment = try makeSerialAttachment(bundleURL: bundleURL)
         vz.serialPorts = [serial]
 
         // 最终由 VZ 自校验
@@ -151,15 +148,46 @@ public enum ConfigBuilder {
         return vz
     }
 
-    /// 在 bundle/run/ 下创建 Unix domain socket, VZ serial 端挂上该 socket.
-    /// 外部进程 (hvm-dbg, M5 再用) 可连接读写 guest serial.
-    private static func makeSerialAttachment(at url: URL) throws -> VZVirtioConsoleDeviceSerialPortConfiguration.Attachment {
-        // M1 简化: 用 /dev/null 作 stdio attach, 不实装 socket (避免阻塞 startup).
-        // hvm-dbg console 在 M5 起实装时再切 socket.
-        let nullHandle = FileHandle(forUpdatingAtPath: "/dev/null")
-            ?? FileHandle.nullDevice
+    /// 创建 VZ 磁盘 attachment. Linux guest 必须用 `cachingMode=.cached + synchronizationMode=.fsync`,
+    /// 否则 VZ 默认 (.automatic) 在 Linux 上会触发 I/O error / 数据损坏 — UTM 长期踩坑后报告
+    /// (https://github.com/utmapp/UTM/issues/4840), VirtualBuddy 也按这个模式. 装机阶段
+    /// curtin extract / in-target 卡死的根因就是这个.
+    /// macOS guest 不需要, 走 VZ 默认.
+    private static func makeDiskAttachment(url: URL, readOnly: Bool, guestOS: GuestOSType) throws -> VZDiskImageStorageDeviceAttachment {
+        switch guestOS {
+        case .linux:
+            return try VZDiskImageStorageDeviceAttachment(
+                url: url, readOnly: readOnly,
+                cachingMode: .cached, synchronizationMode: .fsync
+            )
+        case .macOS:
+            return try VZDiskImageStorageDeviceAttachment(url: url, readOnly: readOnly)
+        }
+    }
+
+    /// 把 guest 的 console 输出 (kernel/systemd/getty) append 到 bundle/logs/console-<date>.log.
+    /// 读端 /dev/null. host 写端是 log 文件 (O_WRONLY|O_CREAT|O_APPEND).
+    /// FileHandle 不会被 ARC 释放: VZFileHandleSerialPortAttachment 持有它, attachment 又被
+    /// VZ machine 持有, machine 又被 VMHandle 持有, 跟 VM 同生共死.
+    private static func makeSerialAttachment(bundleURL: URL) throws -> VZVirtioConsoleDeviceSerialPortConfiguration.Attachment {
+        let logsDir = BundleLayout.logsDir(bundleURL)
+        try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        let logURL = logsDir.appendingPathComponent("console-\(df.string(from: Date())).log")
+
+        // 文件不存在时先 touch, FileHandle(forWritingTo:) 不会自动 create
+        if !FileManager.default.fileExists(atPath: logURL.path) {
+            FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        }
+        let writeHandle = try FileHandle(forWritingTo: logURL)
+        try writeHandle.seekToEnd()  // append, 不覆盖
+
+        let nullHandle = FileHandle(forUpdatingAtPath: "/dev/null") ?? FileHandle.nullDevice
+
         return VZFileHandleSerialPortAttachment(fileHandleForReading: nullHandle,
-                                                fileHandleForWriting: nullHandle)
+                                                fileHandleForWriting: writeHandle)
     }
 }
 
