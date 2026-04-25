@@ -238,6 +238,12 @@ public final class VMSession {
         case IPCOp.dbgMouse.rawValue:
             return handleDbgMouse(req)
 
+        case IPCOp.dbgOcr.rawValue:
+            return handleDbgOcr(req)
+
+        case IPCOp.dbgFindText.rawValue:
+            return handleDbgFindText(req)
+
         default:
             return .failure(id: req.id, code: "ipc.unknown_op", message: "未知 op: \(req.op)")
         }
@@ -320,6 +326,88 @@ public final class VMSession {
                                 message: "未知 mouse.op: \(req.args["op"] ?? "(nil)")")
             }
             return .success(id: req.id)
+        } catch let e as HVMError {
+            let uf = e.userFacing
+            return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)
+        } catch {
+            return .failure(id: req.id, code: "backend.vz_internal", message: "\(error)")
+        }
+    }
+
+    private func handleDbgOcr(_ req: IPCRequest) -> IPCResponse {
+        guard state == .running || state == .paused else {
+            return .failure(id: req.id, code: "dbg.vm_not_running",
+                            message: "VM 未运行 (state=\(stateString(state)))")
+        }
+        guard let shot = ScreenCapture.capturePNG(from: attachment.view) else {
+            return .failure(id: req.id, code: "dbg.frame_unavailable",
+                            message: "view 还未渲染或 frame buffer 为空")
+        }
+        lastFrameSha256 = shot.sha256
+        // region 可选: args["x"]/y/w/h 都给齐才裁
+        var region: CGRect? = nil
+        if let xs = req.args["x"], let ys = req.args["y"],
+           let ws = req.args["w"], let hs = req.args["h"],
+           let x = Double(xs), let y = Double(ys),
+           let w = Double(ws), let h = Double(hs) {
+            region = CGRect(x: x, y: y, width: w, height: h)
+        }
+        do {
+            let items = try OCREngine.recognize(pngData: shot.data, region: region)
+            let payload = IPCDbgOcrPayload(
+                widthPx: shot.widthPx,
+                heightPx: shot.heightPx,
+                texts: items.map { IPCDbgOcrPayload.Item(
+                    x: $0.x, y: $0.y, width: $0.width, height: $0.height,
+                    text: $0.text, confidence: $0.confidence
+                ) }
+            )
+            guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
+                return .failure(id: req.id, code: "ipc.encode_failed", message: "ocr payload 编码失败")
+            }
+            return .success(id: req.id, data: ["payload": json])
+        } catch let e as HVMError {
+            let uf = e.userFacing
+            return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)
+        } catch {
+            return .failure(id: req.id, code: "backend.vz_internal", message: "\(error)")
+        }
+    }
+
+    private func handleDbgFindText(_ req: IPCRequest) -> IPCResponse {
+        guard state == .running || state == .paused else {
+            return .failure(id: req.id, code: "dbg.vm_not_running",
+                            message: "VM 未运行 (state=\(stateString(state)))")
+        }
+        guard let query = req.args["query"], !query.isEmpty else {
+            return .failure(id: req.id, code: "config.missing_field", message: "需要 args.query")
+        }
+        guard let shot = ScreenCapture.capturePNG(from: attachment.view) else {
+            return .failure(id: req.id, code: "dbg.frame_unavailable",
+                            message: "view 还未渲染或 frame buffer 为空")
+        }
+        lastFrameSha256 = shot.sha256
+        do {
+            let items = try OCREngine.recognize(pngData: shot.data, region: nil)
+            // 子串匹配 (大小写不敏感), 取第一个命中的; 多命中里挑置信度最高?
+            // M5 简化: 顺序里第一个子串包含的, OCR 一般按阅读顺序
+            let needle = query.lowercased()
+            let hit = items.first { $0.text.lowercased().contains(needle) }
+            let payload: IPCDbgFindTextPayload
+            if let it = hit {
+                payload = IPCDbgFindTextPayload(
+                    match: true,
+                    x: it.x, y: it.y, width: it.width, height: it.height,
+                    centerX: it.x + it.width / 2, centerY: it.y + it.height / 2,
+                    text: it.text, confidence: it.confidence
+                )
+            } else {
+                payload = IPCDbgFindTextPayload(match: false)
+            }
+            guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
+                return .failure(id: req.id, code: "ipc.encode_failed", message: "find_text payload 编码失败")
+            }
+            return .success(id: req.id, data: ["payload": json])
         } catch let e as HVMError {
             let uf = e.userFacing
             return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)

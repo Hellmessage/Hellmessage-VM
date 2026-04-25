@@ -58,6 +58,8 @@ public enum IPCOp: String, Sendable {
     case dbgStatus     = "dbg.status"
     case dbgKey        = "dbg.key"
     case dbgMouse      = "dbg.mouse"
+    case dbgOcr        = "dbg.ocr"
+    case dbgFindText   = "dbg.find_text"
 }
 
 // MARK: - Status payload (JSON-stringified for `data` values)
@@ -77,6 +79,53 @@ public struct IPCDbgScreenshotPayload: Codable, Sendable {
         self.widthPx = widthPx
         self.heightPx = heightPx
         self.sha256 = sha256
+    }
+}
+
+/// dbg.ocr 响应. texts 数组里每项 bbox 是 guest 像素左上原点.
+public struct IPCDbgOcrPayload: Codable, Sendable {
+    public struct Item: Codable, Sendable {
+        public var x: Int
+        public var y: Int
+        public var width: Int
+        public var height: Int
+        public var text: String
+        public var confidence: Float
+
+        public init(x: Int, y: Int, width: Int, height: Int, text: String, confidence: Float) {
+            self.x = x; self.y = y; self.width = width; self.height = height
+            self.text = text; self.confidence = confidence
+        }
+    }
+    public var widthPx: Int
+    public var heightPx: Int
+    public var texts: [Item]
+
+    public init(widthPx: Int, heightPx: Int, texts: [Item]) {
+        self.widthPx = widthPx
+        self.heightPx = heightPx
+        self.texts = texts
+    }
+}
+
+/// dbg.find_text 响应. 找到 (match=true) 返回 bbox + center; 找不到 (match=false) 其余字段 nil.
+public struct IPCDbgFindTextPayload: Codable, Sendable {
+    public var match: Bool
+    public var x: Int?
+    public var y: Int?
+    public var width: Int?
+    public var height: Int?
+    public var centerX: Int?
+    public var centerY: Int?
+    public var text: String?
+    public var confidence: Float?
+
+    public init(match: Bool, x: Int? = nil, y: Int? = nil, width: Int? = nil, height: Int? = nil,
+                centerX: Int? = nil, centerY: Int? = nil, text: String? = nil, confidence: Float? = nil) {
+        self.match = match
+        self.x = x; self.y = y; self.width = width; self.height = height
+        self.centerX = centerX; self.centerY = centerY
+        self.text = text; self.confidence = confidence
     }
 }
 
