@@ -94,13 +94,13 @@ struct CreateVMDialog: View {
             // CPU / Memory / Disk 三列
             HStack(spacing: HVMSpace.md) {
                 field("CPU") {
-                    stepperRow("\(cpu) cores", binding: $cpu, range: 1...16, step: 1)
+                    stepperRow(unit: "cores", binding: $cpu, range: 1...16, step: 1)
                 }
                 field("Memory") {
-                    stepperRow("\(memoryGiB) GB", binding: $memoryGiB, range: 1...128, step: 1)
+                    stepperRow(unit: "GB", binding: $memoryGiB, range: 1...128, step: 1)
                 }
                 field("Disk") {
-                    stepperRow("\(diskGiB) GB", binding: $diskGiB, range: 8...2048, step: 8)
+                    stepperRow(unit: "GB", binding: $diskGiB, range: 8...2048, step: 8)
                 }
             }
 
@@ -151,13 +151,17 @@ struct CreateVMDialog: View {
     }
 
     @ViewBuilder
-    private func stepperRow(_ text: String, binding: Binding<Int>, range: ClosedRange<Int>, step: Int) -> some View {
-        HStack(spacing: 0) {
-            Text(text)
+    private func stepperRow(unit: String, binding: Binding<Int>, range: ClosedRange<Int>, step: Int) -> some View {
+        HStack(spacing: 4) {
+            TextField("", value: clampedBinding(binding, range: range), formatter: Self.integerFormatter)
+                .textFieldStyle(.plain)
                 .font(HVMFont.body)
                 .foregroundStyle(HVMColor.textPrimary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Stepper("", value: binding, in: range, step: step)
+            Text(unit)
+                .font(HVMFont.body)
+                .foregroundStyle(HVMColor.textSecondary)
+            Stepper("", value: clampedBinding(binding, range: range), in: range, step: step)
                 .labelsHidden()
         }
         .padding(.horizontal, HVMSpace.sm)
@@ -171,6 +175,23 @@ struct CreateVMDialog: View {
                 .stroke(HVMColor.border, lineWidth: 1)
         )
     }
+
+    /// 用户手动输入超范围时 set 时 clamp 回 range. NumberFormatter 自带 min/max 会让 SwiftUI
+    /// 在 commit 时拒绝设置, 输入框停在脏值; 走 clamped binding 体验更顺.
+    private func clampedBinding(_ source: Binding<Int>, range: ClosedRange<Int>) -> Binding<Int> {
+        Binding(
+            get: { source.wrappedValue },
+            set: { source.wrappedValue = max(range.lowerBound, min(range.upperBound, $0)) }
+        )
+    }
+
+    private static let integerFormatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.allowsFloats = false
+        f.minimumFractionDigits = 0
+        f.maximumFractionDigits = 0
+        return f
+    }()
 
     @ViewBuilder
     private func osChip(_ label: String, selected: Bool) -> some View {

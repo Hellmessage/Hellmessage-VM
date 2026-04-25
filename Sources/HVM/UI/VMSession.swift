@@ -39,8 +39,15 @@ public final class VMSession {
     private var ipcServer: SocketServer?
     private var thumbnailTimer: Timer?
     private var observerToken: UUID?
-    /// 最近一次 dbg.screenshot 拿到的 frame sha256, 给 dbg.status 上报让 AI agent 判断画面有无变化
-    private var lastFrameSha256: String?
+    /// hvm-dbg 共享 op 处理器, 与 HostState (headless 模式) 共用同一份代码.
+    /// 用 @ObservationIgnored 因为 VMSession 是 @Observable, lazy var 跟 macro 冲突;
+    /// dbgOps 内部状态本来也不需要被 SwiftUI 观察.
+    @ObservationIgnored
+    private lazy var dbgOps: DbgOps = DbgOps(
+        view: attachment.view,
+        guestOS: config.guestOS,
+        stateProvider: { [weak self] in self?.state ?? .stopped }
+    )
 
     /// VM 自然结束 (.stopped / .error) 时回调. AppModel 注入 sessionDidEnd 以同步列表/侧边栏.
     /// 同进程模式下唯一的 stop → list 刷新通知点; 不挂会导致侧边栏 running 状态停留.
@@ -226,224 +233,13 @@ public final class VMSession {
             }
             return .success(id: req.id)
 
-        case IPCOp.dbgScreenshot.rawValue:
-            return handleDbgScreenshot(req)
-
-        case IPCOp.dbgStatus.rawValue:
-            return handleDbgStatus(req)
-
-        case IPCOp.dbgKey.rawValue:
-            return handleDbgKey(req)
-
-        case IPCOp.dbgMouse.rawValue:
-            return handleDbgMouse(req)
-
-        case IPCOp.dbgOcr.rawValue:
-            return handleDbgOcr(req)
-
-        case IPCOp.dbgFindText.rawValue:
-            return handleDbgFindText(req)
-
         default:
+            // 把 dbg.* 都交给 DbgOps 处理 (与 HostState 共享)
+            if let resp = dbgOps.tryHandle(req) {
+                return resp
+            }
             return .failure(id: req.id, code: "ipc.unknown_op", message: "未知 op: \(req.op)")
         }
-    }
-
-    private func handleDbgScreenshot(_ req: IPCRequest) -> IPCResponse {
-        guard state == .running || state == .paused else {
-            return .failure(id: req.id, code: "dbg.vm_not_running",
-                            message: "VM 未运行 (state=\(stateString(state))), 无法截图")
-        }
-        guard let shot = ScreenCapture.capturePNG(from: attachment.view) else {
-            return .failure(id: req.id, code: "dbg.frame_unavailable",
-                            message: "view 还未渲染或 frame buffer 为空")
-        }
-        lastFrameSha256 = shot.sha256
-        let payload = IPCDbgScreenshotPayload(
-            pngBase64: shot.data.base64EncodedString(),
-            widthPx: shot.widthPx,
-            heightPx: shot.heightPx,
-            sha256: shot.sha256
-        )
-        guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
-            return .failure(id: req.id, code: "ipc.encode_failed", message: "screenshot payload 编码失败")
-        }
-        return .success(id: req.id, data: ["payload": json])
-    }
-
-    private func handleDbgKey(_ req: IPCRequest) -> IPCResponse {
-        guard state == .running else {
-            return .failure(id: req.id, code: "dbg.vm_not_running",
-                            message: "VM 未运行 (state=\(stateString(state))), 无法注入按键")
-        }
-        do {
-            if let text = req.args["text"] {
-                try KeyboardEmulator.typeText(text, into: attachment.view)
-            } else if let press = req.args["press"] {
-                try KeyboardEmulator.pressKeys(press, into: attachment.view)
-            } else {
-                return .failure(id: req.id, code: "config.missing_field",
-                                message: "需要 args.text 或 args.press")
-            }
-            return .success(id: req.id)
-        } catch let e as HVMError {
-            let uf = e.userFacing
-            return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)
-        } catch {
-            return .failure(id: req.id, code: "backend.vz_internal", message: "\(error)")
-        }
-    }
-
-    private func handleDbgMouse(_ req: IPCRequest) -> IPCResponse {
-        guard state == .running else {
-            return .failure(id: req.id, code: "dbg.vm_not_running",
-                            message: "VM 未运行 (state=\(stateString(state))), 无法注入鼠标")
-        }
-        // guest framebuffer 尺寸: 与 dbgStatus 同源, 当前硬编码 (Linux 1024x768, macOS 1920x1080)
-        let guestSize: CGSize
-        switch config.guestOS {
-        case .linux: guestSize = CGSize(width: 1024, height: 768)
-        case .macOS: guestSize = CGSize(width: 1920, height: 1080)
-        }
-        let button = MouseEmulator.Button(rawValue: req.args["button"] ?? "left") ?? .left
-        do {
-            switch req.args["op"] ?? "" {
-            case "move":
-                let p = try parsePoint(req.args["x"], req.args["y"])
-                try MouseEmulator.move(to: p, guestSize: guestSize, into: attachment.view)
-            case "click":
-                let p = try parsePoint(req.args["x"], req.args["y"])
-                try MouseEmulator.click(at: p, guestSize: guestSize, button: button, into: attachment.view)
-            case "double-click":
-                let p = try parsePoint(req.args["x"], req.args["y"])
-                try MouseEmulator.doubleClick(at: p, guestSize: guestSize, button: button, into: attachment.view)
-            case "drag":
-                let a = try parsePoint(req.args["x"],  req.args["y"])
-                let b = try parsePoint(req.args["x2"], req.args["y2"])
-                try MouseEmulator.drag(from: a, to: b, guestSize: guestSize, button: button, into: attachment.view)
-            default:
-                return .failure(id: req.id, code: "config.invalid_enum",
-                                message: "未知 mouse.op: \(req.args["op"] ?? "(nil)")")
-            }
-            return .success(id: req.id)
-        } catch let e as HVMError {
-            let uf = e.userFacing
-            return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)
-        } catch {
-            return .failure(id: req.id, code: "backend.vz_internal", message: "\(error)")
-        }
-    }
-
-    private func handleDbgOcr(_ req: IPCRequest) -> IPCResponse {
-        guard state == .running || state == .paused else {
-            return .failure(id: req.id, code: "dbg.vm_not_running",
-                            message: "VM 未运行 (state=\(stateString(state)))")
-        }
-        guard let shot = ScreenCapture.capturePNG(from: attachment.view) else {
-            return .failure(id: req.id, code: "dbg.frame_unavailable",
-                            message: "view 还未渲染或 frame buffer 为空")
-        }
-        lastFrameSha256 = shot.sha256
-        // region 可选: args["x"]/y/w/h 都给齐才裁
-        var region: CGRect? = nil
-        if let xs = req.args["x"], let ys = req.args["y"],
-           let ws = req.args["w"], let hs = req.args["h"],
-           let x = Double(xs), let y = Double(ys),
-           let w = Double(ws), let h = Double(hs) {
-            region = CGRect(x: x, y: y, width: w, height: h)
-        }
-        do {
-            let items = try OCREngine.recognize(pngData: shot.data, region: region)
-            let payload = IPCDbgOcrPayload(
-                widthPx: shot.widthPx,
-                heightPx: shot.heightPx,
-                texts: items.map { IPCDbgOcrPayload.Item(
-                    x: $0.x, y: $0.y, width: $0.width, height: $0.height,
-                    text: $0.text, confidence: $0.confidence
-                ) }
-            )
-            guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
-                return .failure(id: req.id, code: "ipc.encode_failed", message: "ocr payload 编码失败")
-            }
-            return .success(id: req.id, data: ["payload": json])
-        } catch let e as HVMError {
-            let uf = e.userFacing
-            return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)
-        } catch {
-            return .failure(id: req.id, code: "backend.vz_internal", message: "\(error)")
-        }
-    }
-
-    private func handleDbgFindText(_ req: IPCRequest) -> IPCResponse {
-        guard state == .running || state == .paused else {
-            return .failure(id: req.id, code: "dbg.vm_not_running",
-                            message: "VM 未运行 (state=\(stateString(state)))")
-        }
-        guard let query = req.args["query"], !query.isEmpty else {
-            return .failure(id: req.id, code: "config.missing_field", message: "需要 args.query")
-        }
-        guard let shot = ScreenCapture.capturePNG(from: attachment.view) else {
-            return .failure(id: req.id, code: "dbg.frame_unavailable",
-                            message: "view 还未渲染或 frame buffer 为空")
-        }
-        lastFrameSha256 = shot.sha256
-        do {
-            let items = try OCREngine.recognize(pngData: shot.data, region: nil)
-            // 子串匹配 (大小写不敏感), 取第一个命中的; 多命中里挑置信度最高?
-            // M5 简化: 顺序里第一个子串包含的, OCR 一般按阅读顺序
-            let needle = query.lowercased()
-            let hit = items.first { $0.text.lowercased().contains(needle) }
-            let payload: IPCDbgFindTextPayload
-            if let it = hit {
-                payload = IPCDbgFindTextPayload(
-                    match: true,
-                    x: it.x, y: it.y, width: it.width, height: it.height,
-                    centerX: it.x + it.width / 2, centerY: it.y + it.height / 2,
-                    text: it.text, confidence: it.confidence
-                )
-            } else {
-                payload = IPCDbgFindTextPayload(match: false)
-            }
-            guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
-                return .failure(id: req.id, code: "ipc.encode_failed", message: "find_text payload 编码失败")
-            }
-            return .success(id: req.id, data: ["payload": json])
-        } catch let e as HVMError {
-            let uf = e.userFacing
-            return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)
-        } catch {
-            return .failure(id: req.id, code: "backend.vz_internal", message: "\(error)")
-        }
-    }
-
-    private func parsePoint(_ x: String?, _ y: String?) throws -> CGPoint {
-        guard let xs = x, let ys = y, let xd = Double(xs), let yd = Double(ys) else {
-            throw HVMError.config(.invalidEnum(field: "mouse.coords",
-                                                raw: "\(x ?? "nil"),\(y ?? "nil")",
-                                                allowed: ["数字 x,y"]))
-        }
-        return CGPoint(x: xd, y: yd)
-    }
-
-    private func handleDbgStatus(_ req: IPCRequest) -> IPCResponse {
-        // guest framebuffer 分辨率: 当前 ConfigBuilder 硬编码值 (Linux 1024x768, macOS 1920x1080).
-        // 后续若 VMConfig 引入 displaySpec, 这里改成读 config.
-        let (w, h): (Int, Int)
-        switch config.guestOS {
-        case .linux: (w, h) = (1024, 768)
-        case .macOS: (w, h) = (1920, 1080)
-        }
-        let payload = IPCDbgStatusPayload(
-            state: stateString(state),
-            guestWidthPx: w,
-            guestHeightPx: h,
-            lastFrameSha256: lastFrameSha256,
-            consoleAgentOnline: false  // M5 phase 5 接入 console 通道后改 true
-        )
-        guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
-            return .failure(id: req.id, code: "ipc.encode_failed", message: "dbg status payload 编码失败")
-        }
-        return .success(id: req.id, data: ["payload": json])
     }
 
     private func stateString(_ s: RunState) -> String {

@@ -372,21 +372,136 @@ struct StoppedContentView: View {
 }
 
 // MARK: - 空状态 (未选中 VM)
+// 终端启动屏: ASCII banner + boot log (host 能力探测) + 大号 CTA
+// 同时覆盖两种语义: ① VM 列表为空 → 引导新建 ② 列表非空但没选 → 引导左侧选择
 
 struct DetailEmptyState: View {
+    @Bindable var model: AppModel
+
     var body: some View {
-        VStack(spacing: HVMSpace.sm) {
-            Text("/*")
-                .font(HVMFont.body)
+        VStack(spacing: 0) {
+            Spacer(minLength: HVMSpace.xl)
+
+            asciiBanner
+
+            Text("// virtualization terminal")
+                .font(HVMFont.caption)
+                .tracking(2.4)
                 .foregroundStyle(HVMColor.textTertiary)
-            Text("select a vm on the left")
-                .font(HVMFont.body)
-                .foregroundStyle(HVMColor.textSecondary)
-            Text("*/")
-                .font(HVMFont.body)
-                .foregroundStyle(HVMColor.textTertiary)
+                .padding(.top, HVMSpace.md)
+
+            bootLog
+                .padding(.top, HVMSpace.xl)
+
+            cta
+                .padding(.top, HVMSpace.xl)
+
+            Spacer(minLength: HVMSpace.xl)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(HVMColor.bgBase)
     }
+
+    // MARK: banner
+
+    private var asciiBanner: some View {
+        Text(Self.banner)
+            .font(.system(size: 13, weight: .bold, design: .monospaced))
+            .foregroundStyle(HVMColor.accent)
+            .shadow(color: HVMColor.accent.opacity(0.45), radius: 10)
+            .lineSpacing(0)
+            .fixedSize()
+    }
+
+    // MARK: boot log
+
+    private var bootLog: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            bootLine(label: "vz",     value: "ready",                ok: true)
+            bootLine(label: "host",   value: HostProbe.cpuBrand,     ok: true)
+            bootLine(label: "cores",  value: "\(HostProbe.cpuCount)", ok: true)
+            bootLine(label: "memory", value: HostProbe.memoryString, ok: true)
+            bootLine(label: "guests", value: "macos · linux",        ok: true)
+        }
+        .padding(HVMSpace.lg)
+        .background(
+            RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
+                .stroke(HVMColor.border, lineWidth: 1)
+        )
+    }
+
+    private func bootLine(label: String, value: String, ok: Bool) -> some View {
+        HStack(spacing: HVMSpace.sm) {
+            Text(ok ? "[ ok ]" : "[ -- ]")
+                .font(HVMFont.caption)
+                .foregroundStyle(ok ? HVMColor.statusRunning : HVMColor.textTertiary)
+            Text(label.padding(toLength: 7, withPad: " ", startingAt: 0))
+                .font(HVMFont.caption)
+                .foregroundStyle(HVMColor.textSecondary)
+            Text(value)
+                .font(HVMFont.caption)
+                .foregroundStyle(HVMColor.textPrimary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .frame(width: 360, alignment: .leading)
+    }
+
+    // MARK: CTA
+
+    @ViewBuilder
+    private var cta: some View {
+        if model.list.isEmpty {
+            VStack(spacing: HVMSpace.sm) {
+                Button(action: { model.showCreateWizard = true }) {
+                    Text("[ + NEW VM ]")
+                }
+                .buttonStyle(HeroCTAStyle())
+
+                Text("press ⌘N or click + NEW above")
+                    .font(HVMFont.small)
+                    .foregroundStyle(HVMColor.textTertiary)
+            }
+        } else {
+            VStack(spacing: HVMSpace.xs) {
+                Text("// \(model.list.count) vm\(model.list.count == 1 ? "" : "s") in registry")
+                    .font(HVMFont.caption)
+                    .foregroundStyle(HVMColor.textSecondary)
+                Text("← select one on the left")
+                    .font(HVMFont.caption)
+                    .foregroundStyle(HVMColor.textTertiary)
+            }
+        }
+    }
+
+    // 28 列宽 ANSI block banner
+    private static let banner = """
+    ██╗  ██╗██╗   ██╗███╗   ███╗
+    ██║  ██║██║   ██║████╗ ████║
+    ███████║██║   ██║██╔████╔██║
+    ██╔══██║╚██╗ ██╔╝██║╚██╔╝██║
+    ██║  ██║ ╚████╔╝ ██║ ╚═╝ ██║
+    ╚═╝  ╚═╝  ╚═══╝  ╚═╝     ╚═╝
+    """
+}
+
+// MARK: - host 能力探测 (只读, 无 entitlement)
+
+private enum HostProbe {
+    static let cpuBrand: String = {
+        var size = 0
+        sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
+        guard size > 0 else { return "unknown" }
+        var bytes = [UInt8](repeating: 0, count: size)
+        sysctlbyname("machdep.cpu.brand_string", &bytes, &size, nil, 0)
+        let payload = bytes.firstIndex(of: 0).map { bytes.prefix($0) } ?? bytes.prefix(bytes.count)
+        return String(decoding: payload, as: UTF8.self)
+    }()
+
+    static let cpuCount: Int = ProcessInfo.processInfo.processorCount
+
+    static let memoryString: String = {
+        let gb = Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824.0
+        return String(format: "%.0f gb", gb)
+    }()
 }

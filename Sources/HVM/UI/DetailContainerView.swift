@@ -47,7 +47,10 @@ final class DetailContainerView: NSView {
         layer?.backgroundColor = NSColor.black.cgColor
         translatesAutoresizingMaskIntoConstraints = false
         subscribeModel()
-        refresh()
+        // 强制构建初始 UI: refresh() 的相等性短路会跳过 shownState 默认值 == 初始 computeState 的情况
+        let initial = computeState()
+        transition(to: initial)
+        shownState = initial
     }
 
     @available(*, unavailable)
@@ -120,7 +123,7 @@ final class DetailContainerView: NSView {
     // MARK: - 各态构造
 
     private func buildEmpty() {
-        let host = NSHostingView(rootView: DetailEmptyState())
+        let host = NSHostingView(rootView: DetailEmptyState(model: model))
         host.translatesAutoresizingMaskIntoConstraints = false
         host.sizingOptions = .minSize
         addSubview(host)

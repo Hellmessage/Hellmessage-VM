@@ -56,17 +56,36 @@ struct SidebarView: View {
     }
 
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: HVMSpace.sm) {
+        VStack(alignment: .leading, spacing: HVMSpace.xs) {
             Text("// no vms yet")
                 .font(HVMFont.caption)
                 .foregroundStyle(HVMColor.textTertiary)
-            Text("click + NEW to create")
-                .font(HVMFont.small)
-                .foregroundStyle(HVMColor.textTertiary)
+            Button(action: { model.showCreateWizard = true }) {
+                EmptyCreateLink()
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, HVMSpace.lg)
         .padding(.top, HVMSpace.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// 左栏 empty state 里那行可点击的 "└─ + create first vm"
+private struct EmptyCreateLink: View {
+    @State private var hover: Bool = false
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("└─")
+                .foregroundStyle(HVMColor.border)
+            Text("+ create first vm")
+                .foregroundStyle(hover ? HVMColor.accentHover : HVMColor.accent)
+                .underline(hover, color: HVMColor.accent)
+        }
+        .font(HVMFont.caption)
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.1), value: hover)
     }
 }
 
