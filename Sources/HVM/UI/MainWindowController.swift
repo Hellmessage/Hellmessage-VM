@@ -175,7 +175,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// 的 cursor rect 压不过, 所以必须在 HVMView 自己里 inputSuspended 屏蔽 VZ 的 mouse* 处理.
     private func observeDialogActivity(overlay: PassthroughHostingView<DialogOverlay>) {
         withObservationTracking {
-            let active = model.showCreateWizard || errors.current != nil
+            let active = model.showCreateWizard
+                || model.installState != nil
+                || errors.current != nil
             overlay.dialogActive = active
             for session in model.sessions.values {
                 session.attachment.view.inputSuspended = active

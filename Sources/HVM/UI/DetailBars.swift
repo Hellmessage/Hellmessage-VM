@@ -216,12 +216,26 @@ struct StoppedContentView: View {
             VStack(spacing: 0) {
                 kvRow("id",     item.config.id.uuidString.lowercased(), truncating: true, first: true)
                 kvRow("mac",    item.config.networks.first?.macAddress ?? "—")
-                kvRow("iso",    item.config.installerISO ?? "—", truncating: true)
-                kvRow("boot",   item.config.bootFromDiskOnly ? "from disk" : "from iso (installer mode)")
+                if item.guestOS == .macOS {
+                    kvRow("ipsw",      item.config.macOS?.ipsw ?? "—", truncating: true)
+                    kvRow("installed", item.config.macOS?.autoInstalled == true ? "yes (auto)" : "no — run install")
+                } else {
+                    kvRow("iso", item.config.installerISO ?? "—", truncating: true)
+                }
+                kvRow("boot",   bootModeLabel)
                 kvRow("bundle", item.bundleURL.path, truncating: true, last: true)
             }
             .background(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).fill(HVMColor.bgCard))
             .overlay(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).stroke(HVMColor.border, lineWidth: 1))
+        }
+    }
+
+    /// boot 字段文案: macOS guest 装机阶段不挂 ISO 而是 IPSW + VZMacOSInstaller, 文案与 Linux 区分
+    private var bootModeLabel: String {
+        if item.config.bootFromDiskOnly { return "from disk" }
+        switch item.guestOS {
+        case .linux: return "from iso (installer mode)"
+        case .macOS: return "from ipsw (installer mode)"
         }
     }
 
@@ -265,31 +279,63 @@ struct StoppedContentView: View {
 
     private var actionRow: some View {
         HStack(spacing: HVMSpace.md) {
-            Button(action: startAction) {
-                HStack(spacing: 6) {
-                    Text("▶").font(.system(size: 10))
-                    Text("START")
+            if needsInstall {
+                // macOS guest 未装机: 主按钮换成 INSTALL, 跑 VZMacOSInstaller
+                Button(action: installAction) {
+                    HStack(spacing: 6) {
+                        Text("⏬").font(.system(size: 10))
+                        Text("INSTALL")
+                    }
                 }
-            }
-            .buttonStyle(PrimaryButtonStyle())
-            .keyboardShortcut(.return, modifiers: [.command])
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(item.config.macOS?.ipsw == nil)
+                .keyboardShortcut(.return, modifiers: [.command])
+                .help("跑 VZMacOSInstaller 装 macOS 到主盘. 装完 autoInstalled=true 后此按钮变为 START")
+            } else {
+                Button(action: startAction) {
+                    HStack(spacing: 6) {
+                        Text("▶").font(.system(size: 10))
+                        Text("START")
+                    }
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .keyboardShortcut(.return, modifiers: [.command])
 
-            // 装机模式 (有 ISO 且 bootFromDiskOnly=false) 才显示. 切到 from disk 后按钮隐藏,
-            // 等价于 hvm-cli boot-from-disk 子命令 (Sources/hvm-cli/Commands/BootFromDiskCommand.swift)
-            if item.config.installerISO != nil && !item.config.bootFromDiskOnly {
-                Button(action: bootFromDiskAction) {
-                    Text("BOOT FROM DISK")
+                // 装机模式 (Linux 有 ISO 且 bootFromDiskOnly=false) 才显示. 切完按钮隐藏.
+                // 等价 hvm-cli boot-from-disk 子命令 (Sources/hvm-cli/Commands/BootFromDiskCommand.swift)
+                if item.config.installerISO != nil && !item.config.bootFromDiskOnly {
+                    Button(action: bootFromDiskAction) {
+                        Text("BOOT FROM DISK")
+                    }
+                    .buttonStyle(GhostButtonStyle())
+                    .help("装完 OS 后切到只从硬盘启动, 下次开机不挂 ISO")
                 }
-                .buttonStyle(GhostButtonStyle())
-                .help("装完 OS 后切到只从硬盘启动, 下次开机不挂 ISO")
             }
         }
+    }
+
+    /// macOS guest 未装机才需要 INSTALL 按钮. Linux 走 start + boot-from-disk 链.
+    private var needsInstall: Bool {
+        item.guestOS == .macOS && item.config.macOS?.autoInstalled != true
     }
 
     private func startAction() {
         Task {
             do { try await model.start(item) } catch { errors.present(error) }
         }
+    }
+
+    private func installAction() {
+        guard let ipsw = item.config.macOS?.ipsw else {
+            errors.present(HVMError.config(.missingField(name: "macOS.ipsw")))
+            return
+        }
+        model.startInstall(
+            bundleURL: item.bundleURL,
+            config: item.config,
+            ipswURL: URL(fileURLWithPath: ipsw),
+            errors: errors
+        )
     }
 
     private func bootFromDiskAction() {

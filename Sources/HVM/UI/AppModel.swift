@@ -7,6 +7,7 @@ import SwiftUI
 import HVMBackend
 import HVMBundle
 import HVMCore
+import HVMInstall
 
 @MainActor
 @Observable
@@ -37,6 +38,19 @@ public final class AppModel {
     public var embeddedID: UUID?
     /// 创建向导显隐
     public var showCreateWizard: Bool = false
+    /// 正在跑 macOS 装机时的进度. 非 nil → DialogOverlay 显示 InstallDialog 模态
+    public var installState: InstallProgressState? = nil
+
+    public struct InstallProgressState: Sendable, Equatable {
+        public let id: UUID
+        public let displayName: String
+        public var phase: Phase
+        public var fraction: Double
+
+        public enum Phase: String, Sendable, Equatable {
+            case preparing, installing, finalizing
+        }
+    }
 
     public init() {}
 
@@ -110,6 +124,51 @@ public final class AppModel {
         // flock 互斥) 把 runState 写成 running, sidebar 卡死.
         // 让 sessions / list 收尾走 VMSession.onStateChanged -> cleanup -> onEnded -> sessionDidEnd
         // 这条统一路径: cleanup 同步释放 lock, sessionDidEnd 的 refreshList 读到 busy=false.
+    }
+
+    // MARK: - macOS guest 装机
+
+    /// 跑 VZMacOSInstaller 流程. 进度更新 self.installState, DialogOverlay 监听显示.
+    /// 完成后自动 refreshList; 失败走 errors.present 标准错误弹窗.
+    public func startInstall(
+        bundleURL: URL,
+        config: VMConfig,
+        ipswURL: URL,
+        errors: ErrorPresenter
+    ) {
+        installState = InstallProgressState(
+            id: config.id,
+            displayName: config.displayName,
+            phase: .preparing,
+            fraction: 0
+        )
+        Task { @MainActor [weak self] in
+            let installer = MacInstaller()
+            do {
+                try await installer.install(
+                    bundleURL: bundleURL,
+                    config: config,
+                    ipswURL: ipswURL
+                ) { progress in
+                    guard let self else { return }
+                    switch progress {
+                    case .preparing:
+                        self.installState?.phase = .preparing
+                    case .installing(let f):
+                        self.installState?.phase = .installing
+                        self.installState?.fraction = f
+                    case .finalizing:
+                        self.installState?.phase = .finalizing
+                    }
+                }
+                self?.installState = nil
+                self?.refreshList()
+            } catch {
+                self?.installState = nil
+                errors.present(error)
+                self?.refreshList()
+            }
+        }
     }
 
     /// session 自然结束时通知 (guestDidStop / error) -> 从 sessions 移除

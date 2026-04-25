@@ -3,6 +3,7 @@
 
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import HVMBundle
 import HVMCore
 import HVMNet
@@ -13,11 +14,21 @@ struct CreateVMDialog: View {
     @Bindable var errors: ErrorPresenter
 
     @State private var name: String = ""
+    @State private var guestOS: GuestOSType = .linux
     @State private var cpu: Int = 4
     @State private var memoryGiB: Int = 4
     @State private var diskGiB: Int = 64
     @State private var isoPath: String = ""
+    @State private var ipswPath: String = ""
     @State private var creating: Bool = false
+
+    /// 装机字段是否合法 (按 OS 分支)
+    private var installerPathValid: Bool {
+        switch guestOS {
+        case .linux: return !isoPath.isEmpty
+        case .macOS: return !ipswPath.isEmpty
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -68,8 +79,15 @@ struct CreateVMDialog: View {
 
             field("Guest OS") {
                 HStack(spacing: HVMSpace.sm) {
-                    osChip("Linux", selected: true)
-                    osChip("macOS", selected: false, disabled: true)
+                    Button { guestOS = .linux } label: {
+                        osChip("Linux", selected: guestOS == .linux)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button { guestOS = .macOS } label: {
+                        osChip("macOS", selected: guestOS == .macOS)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
 
@@ -86,13 +104,27 @@ struct CreateVMDialog: View {
                 }
             }
 
-            field("Installer ISO") {
-                HStack(spacing: HVMSpace.sm) {
-                    TextField("/path/to/ubuntu-arm64.iso", text: $isoPath)
-                        .textFieldStyle(.roundedBorder)
-                        .font(HVMFont.body)
-                    Button("Browse") { pickISO() }
-                        .buttonStyle(GhostButtonStyle())
+            // 装机源: Linux 走 ISO, macOS 走 IPSW
+            switch guestOS {
+            case .linux:
+                field("Installer ISO") {
+                    HStack(spacing: HVMSpace.sm) {
+                        TextField("/path/to/ubuntu-arm64.iso", text: $isoPath)
+                            .textFieldStyle(.roundedBorder)
+                            .font(HVMFont.body)
+                        Button("Browse") { pickISO() }
+                            .buttonStyle(GhostButtonStyle())
+                    }
+                }
+            case .macOS:
+                field("Installer IPSW") {
+                    HStack(spacing: HVMSpace.sm) {
+                        TextField("/path/to/UniversalMac_*.ipsw", text: $ipswPath)
+                            .textFieldStyle(.roundedBorder)
+                            .font(HVMFont.body)
+                        Button("Browse") { pickIPSW() }
+                            .buttonStyle(GhostButtonStyle())
+                    }
                 }
             }
 
@@ -100,9 +132,9 @@ struct CreateVMDialog: View {
                 Spacer()
                 Button("Cancel") { model.showCreateWizard = false }
                     .buttonStyle(GhostButtonStyle())
-                Button("Create") { createAction() }
+                Button(guestOS == .macOS ? "Create & Install" : "Create") { createAction() }
                     .buttonStyle(PrimaryButtonStyle())
-                    .disabled(creating || name.isEmpty || isoPath.isEmpty)
+                    .disabled(creating || name.isEmpty || !installerPathValid)
                     .keyboardShortcut(.return, modifiers: [.command])
             }
             .padding(.top, HVMSpace.xs)
@@ -141,15 +173,12 @@ struct CreateVMDialog: View {
     }
 
     @ViewBuilder
-    private func osChip(_ label: String, selected: Bool, disabled: Bool = false) -> some View {
+    private func osChip(_ label: String, selected: Bool) -> some View {
         Text(label)
             .font(.system(size: 12, weight: .medium))
             .padding(.horizontal, HVMSpace.md)
             .padding(.vertical, 6)
-            .foregroundStyle(
-                disabled ? HVMColor.textTertiary
-                         : (selected ? HVMColor.textOnAccent : HVMColor.textSecondary)
-            )
+            .foregroundStyle(selected ? HVMColor.textOnAccent : HVMColor.textSecondary)
             .background(
                 RoundedRectangle(cornerRadius: HVMRadius.sm)
                     .fill(selected ? HVMColor.accent : HVMColor.bgBase)
@@ -158,7 +187,6 @@ struct CreateVMDialog: View {
                 RoundedRectangle(cornerRadius: HVMRadius.sm)
                     .stroke(selected ? Color.clear : HVMColor.border, lineWidth: 1)
             )
-            .help(disabled ? "M3 起支持 macOS guest" : "")
     }
 
     private func pickISO() {
@@ -172,21 +200,44 @@ struct CreateVMDialog: View {
         }
     }
 
+    private func pickIPSW() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        // Apple 给 .ipsw 注册了 com.apple.itunes.ipsw, 但不一定都能识别. 兜底 .data 让用户能选到.
+        let ipswType = UTType("com.apple.itunes.ipsw") ?? .data
+        panel.allowedContentTypes = [ipswType, .data]
+        if panel.runModal() == .OK, let url = panel.url {
+            ipswPath = url.path
+        }
+    }
+
     private func createAction() {
         creating = true
         do {
-            try ISOValidator.validate(at: isoPath)
+            // 装机源校验
+            switch guestOS {
+            case .linux: try ISOValidator.validate(at: isoPath)
+            case .macOS:
+                guard FileManager.default.fileExists(atPath: ipswPath) else {
+                    throw HVMError.install(.ipswNotFound(path: ipswPath))
+                }
+            }
+
             let config = VMConfig(
                 displayName: name,
-                guestOS: .linux,
+                guestOS: guestOS,
                 cpuCount: cpu,
                 memoryMiB: UInt64(memoryGiB) * 1024,
                 disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: UInt64(diskGiB))],
                 networks: [NetworkSpec(mode: .nat, macAddress: MACAddressGenerator.random())],
-                installerISO: isoPath,
+                installerISO: guestOS == .linux ? isoPath : nil,
                 bootFromDiskOnly: false,
-                linux: LinuxSpec()
+                macOS: guestOS == .macOS ? MacOSSpec(ipsw: ipswPath, autoInstalled: false) : nil,
+                linux: guestOS == .linux ? LinuxSpec() : nil
             )
+
             try HVMPaths.ensure(HVMPaths.vmsRoot)
             let bundleURL = HVMPaths.vmsRoot.appendingPathComponent("\(name).hvmz", isDirectory: true)
             try VolumeInfo.assertSpaceAvailable(
@@ -201,6 +252,16 @@ struct CreateVMDialog: View {
             model.showCreateWizard = false
             model.refreshList()
             model.selectedID = config.id
+
+            // macOS: 创建 bundle 完成后立刻进入装机模态. installState 更新触发 InstallDialog 显示.
+            if guestOS == .macOS {
+                model.startInstall(
+                    bundleURL: bundleURL,
+                    config: config,
+                    ipswURL: URL(fileURLWithPath: ipswPath),
+                    errors: errors
+                )
+            }
         } catch {
             errors.present(error)
         }

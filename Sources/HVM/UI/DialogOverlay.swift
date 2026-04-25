@@ -14,8 +14,15 @@ struct DialogOverlay: View {
             if model.showCreateWizard {
                 CreateVMDialog(model: model, errors: errors)
             }
+            if let state = model.installState {
+                InstallDialog(state: state)
+            }
             ErrorDialogOverlay(presenter: errors)
         }
-        .allowsHitTesting(model.showCreateWizard || errors.current != nil)
+        .allowsHitTesting(
+            model.showCreateWizard ||
+            model.installState != nil ||
+            errors.current != nil
+        )
     }
 }
