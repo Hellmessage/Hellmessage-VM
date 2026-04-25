@@ -13,6 +13,7 @@
 import AppKit
 import SwiftUI
 import Observation
+import HVMBundle
 import HVMDisplay
 
 @MainActor
@@ -32,6 +33,9 @@ final class DetailContainerView: NSView {
     // 追踪当前 AppModel 状态对应的 VM id, 用于决定是否需要重建/切换
     private var shownID: UUID?
     private var shownState: ShowState = .empty
+    /// stopped 视图当前渲染的 config 快照. config 变化 (cpu/memory/iso/disk/...) 时强制 rebuild,
+    /// 否则 stopped view 持有的是 init 时 captured 的 immutable item, SwiftUI 不会自动响应外部改动.
+    private var shownStoppedConfig: VMConfig?
 
     private enum ShowState: Equatable {
         case empty
@@ -51,6 +55,10 @@ final class DetailContainerView: NSView {
         let initial = computeState()
         transition(to: initial)
         shownState = initial
+        if case .stopped(let id) = initial,
+           let item = model.list.first(where: { $0.id == id }) {
+            shownStoppedConfig = item.config
+        }
     }
 
     @available(*, unavailable)
@@ -87,9 +95,26 @@ final class DetailContainerView: NSView {
 
     private func refresh() {
         let newState = computeState()
-        if newState != shownState {
+        var needsRebuild = newState != shownState
+
+        // stopped 状态额外检测 config 是否变化 (iso 切换 / cpu/mem 编辑 / boot-from-disk 等
+        // 都改 config 不改 ShowState). stopped view 持有的是 init 时的 immutable snapshot,
+        // SwiftUI 不会自动响应外部改动 → 必须 host rebuild.
+        if !needsRebuild, case .stopped(let id) = newState,
+           let curConfig = model.list.first(where: { $0.id == id })?.config,
+           curConfig != shownStoppedConfig {
+            needsRebuild = true
+        }
+
+        if needsRebuild {
             transition(to: newState)
             shownState = newState
+            if case .stopped(let id) = newState,
+               let item = model.list.first(where: { $0.id == id }) {
+                shownStoppedConfig = item.config
+            } else {
+                shownStoppedConfig = nil
+            }
         }
     }
 
