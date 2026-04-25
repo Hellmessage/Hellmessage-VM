@@ -126,6 +126,13 @@ public final class HVMView: VZVirtualMachineView {
     // MARK: - 输入屏蔽期: inputSuspended (弹窗) 或 captureReleased (用户主动) 任一生效都跳过 VZ super 调用
 
     public override func keyDown(with event: NSEvent) {
+        // 输入屏蔽期 (用户按 Cmd+Ctrl 释放捕获 / 主窗口弹窗) 才把 Cmd 修饰键交给 host main menu —
+        // 默认捕获中所有 Cmd+xxx 都送 guest, 让 VM 完整占有快捷键 (要按 Cmd+Q hide 先按 Cmd+Ctrl 逃出).
+        if inputBlocked,
+           event.modifierFlags.contains(.command),
+           NSApp.mainMenu?.performKeyEquivalent(with: event) == true {
+            return
+        }
         if inputBlocked { return }
         // 启动时若 macOS 已是 Caps On, 需 toggle 一次让 guest 跟上 — 第一次 keyDown 前补.
         // 放在这里而不是 viewDidMoveToWindow: 后者太早, VZ machine 还没 bind, 合成事件丢失.
