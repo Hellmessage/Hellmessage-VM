@@ -13,8 +13,7 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
     /// 弹窗激活时, 在整块 overlay bounds 上加一个 .arrow cursor rect,
     /// 压过下层 VZVirtualMachineView 的隐藏光标 rect, 否则鼠标落在 dialog 上方
     /// 仍会因为 VZ view 的 cursor rect 生效而看不到光标.
-    /// SwiftUI 内更深层的子 view (TextField 的 I-beam 等) 的 cursor rect 优先级
-    /// 高于父 view, 不会被这一块覆盖.
+    /// 这个标志 timing 不敏感 (cursor rect 重算在每次进入 view 时), 用 didSet 异步更新足够.
     var dialogActive: Bool = false {
         didSet {
             guard dialogActive != oldValue else { return }
@@ -22,14 +21,19 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
         }
     }
 
+    /// hitTest 用的实时检测 closure. 由 caller 注入, 内部直接读 model/errors/confirms.current,
+    /// 避开 withObservationTracking 的异步 onChange 延迟 — 否则 .terminateLater 这种
+    /// "AppKit 等 reply 时同步触发 dialog" 的场景, dialogActive 来不及更新, 整块 overlay
+    /// 被当透明区, dialog 里的按钮点不动.
+    var isAnyDialogActive: @MainActor () -> Bool = { false }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         let v = super.hitTest(point)
-        // 弹窗激活时, 整个 overlay 都不 passthrough:
+        // 弹窗激活时整个 overlay 都不 passthrough:
         // NSHostingView 对 SwiftUI button/TextField 等可交互区往往直接返回 self (不暴露
         // 深层 NSView), 旧的 v === self → nil 会把这些命中误判成"透明区"穿透下去, dialog
-        // 按钮全失效. dialog 内的 dimmer 已用 .allowsHitTesting(false), SwiftUI 自身处理
-        // 无需穿透层兜底.
-        if dialogActive { return v }
+        // 按钮全失效. dialog 内的 dimmer 已用 .allowsHitTesting(false), SwiftUI 自身处理.
+        if MainActor.assumeIsolated({ isAnyDialogActive() }) { return v }
         // 没弹窗: 命中 self 表示鼠标落在 SwiftUI 透明区域, 返回 nil 让事件穿透到下层 NSView
         return v === self ? nil : v
     }

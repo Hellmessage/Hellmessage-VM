@@ -8,6 +8,7 @@ import SwiftUI
 struct DialogOverlay: View {
     @Bindable var model: AppModel
     @Bindable var errors: ErrorPresenter
+    @Bindable var confirms: ConfirmPresenter
 
     var body: some View {
         ZStack {
@@ -18,11 +19,13 @@ struct DialogOverlay: View {
                 InstallDialog(state: state)
             }
             ErrorDialogOverlay(presenter: errors)
+            ConfirmDialogOverlay(presenter: confirms)
         }
         .allowsHitTesting(
             model.showCreateWizard ||
             model.installState != nil ||
-            errors.current != nil
+            errors.current != nil ||
+            confirms.current != nil
         )
     }
 }

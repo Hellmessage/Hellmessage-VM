@@ -23,13 +23,15 @@ import SwiftUI
 final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let model: AppModel
     private let errors: ErrorPresenter
+    private let confirms: ConfirmPresenter
 
     /// 用户点 window 关闭按钮时被调. 由 AppDelegate 注入回调切到 menu bar 模式.
     var onCloseRequested: (() -> Void)?
 
-    init(model: AppModel, errors: ErrorPresenter) {
+    init(model: AppModel, errors: ErrorPresenter, confirms: ConfirmPresenter) {
         self.model = model
         self.errors = errors
+        self.confirms = confirms
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1080, height: 720),
@@ -107,9 +109,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let detail = DetailContainerView(model: model, errors: errors)
 
         // Dialog overlay 最顶层. 必须用 PassthroughHostingView, 否则透明区域吞所有点击
-        let overlay = PassthroughHostingView(rootView: DialogOverlay(model: model, errors: errors))
+        let overlay = PassthroughHostingView(rootView: DialogOverlay(model: model, errors: errors, confirms: confirms))
         overlay.translatesAutoresizingMaskIntoConstraints = false
         overlay.sizingOptions = .minSize
+        // 实时检测, 避开 withObservationTracking 异步 onChange 的 timing race
+        overlay.isAnyDialogActive = { [weak model, weak errors, weak confirms] in
+            (model?.showCreateWizard ?? false)
+                || (model?.installState != nil)
+                || (errors?.current != nil)
+                || (confirms?.current != nil)
+        }
         observeDialogActivity(overlay: overlay)
 
         contentView.addSubview(toolbar)
@@ -178,6 +187,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             let active = model.showCreateWizard
                 || model.installState != nil
                 || errors.current != nil
+                || confirms.current != nil
             overlay.dialogActive = active
             for session in model.sessions.values {
                 session.attachment.view.inputSuspended = active
