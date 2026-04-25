@@ -14,6 +14,7 @@ struct HvmDbg: AsyncParsableCommand {
         subcommands: [
             ScreenshotCommand.self,
             StatusCommand.self,
+            KeyCommand.self,
         ]
     )
 }

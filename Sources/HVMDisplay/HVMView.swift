@@ -164,4 +164,30 @@ public final class HVMView: VZVirtualMachineView {
         }
         super.cursorUpdate(with: event)
     }
+
+    // MARK: - hvm-dbg 注入路径 (M5)
+    //
+    // 直接 view.keyDown(event) / view.mouseDown(event) 会被本 class 的 inputBlocked 检查拦掉 —
+    // 弹窗激活/用户按 Cmd+Ctrl 释放后, hvm-dbg key 就发不进 guest. 给 hvm-dbg 走专用入口
+    // 显式调 super.* 跳过本地 gating, 直接复用 VZVirtualMachineView 的 NSEvent → USB HID 翻译.
+
+    public func inject(event: NSEvent) {
+        switch event.type {
+        case .keyDown:        super.keyDown(with: event)
+        case .keyUp:          super.keyUp(with: event)
+        case .flagsChanged:   super.flagsChanged(with: event)
+        case .leftMouseDown:  super.mouseDown(with: event)
+        case .leftMouseUp:    super.mouseUp(with: event)
+        case .leftMouseDragged: super.mouseDragged(with: event)
+        case .rightMouseDown: super.rightMouseDown(with: event)
+        case .rightMouseUp:   super.rightMouseUp(with: event)
+        case .rightMouseDragged: super.rightMouseDragged(with: event)
+        case .otherMouseDown: super.otherMouseDown(with: event)
+        case .otherMouseUp:   super.otherMouseUp(with: event)
+        case .otherMouseDragged: super.otherMouseDragged(with: event)
+        case .scrollWheel:    super.scrollWheel(with: event)
+        case .mouseMoved:     super.mouseMoved(with: event)
+        default: break
+        }
+    }
 }

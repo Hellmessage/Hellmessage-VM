@@ -232,6 +232,9 @@ public final class VMSession {
         case IPCOp.dbgStatus.rawValue:
             return handleDbgStatus(req)
 
+        case IPCOp.dbgKey.rawValue:
+            return handleDbgKey(req)
+
         default:
             return .failure(id: req.id, code: "ipc.unknown_op", message: "未知 op: \(req.op)")
         }
@@ -257,6 +260,29 @@ public final class VMSession {
             return .failure(id: req.id, code: "ipc.encode_failed", message: "screenshot payload 编码失败")
         }
         return .success(id: req.id, data: ["payload": json])
+    }
+
+    private func handleDbgKey(_ req: IPCRequest) -> IPCResponse {
+        guard state == .running else {
+            return .failure(id: req.id, code: "dbg.vm_not_running",
+                            message: "VM 未运行 (state=\(stateString(state))), 无法注入按键")
+        }
+        do {
+            if let text = req.args["text"] {
+                try KeyboardEmulator.typeText(text, into: attachment.view)
+            } else if let press = req.args["press"] {
+                try KeyboardEmulator.pressKeys(press, into: attachment.view)
+            } else {
+                return .failure(id: req.id, code: "config.missing_field",
+                                message: "需要 args.text 或 args.press")
+            }
+            return .success(id: req.id)
+        } catch let e as HVMError {
+            let uf = e.userFacing
+            return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)
+        } catch {
+            return .failure(id: req.id, code: "backend.vz_internal", message: "\(error)")
+        }
     }
 
     private func handleDbgStatus(_ req: IPCRequest) -> IPCResponse {

@@ -56,6 +56,7 @@ public enum IPCOp: String, Sendable {
     // hvm-dbg 子命令对应的 op (M5)
     case dbgScreenshot = "dbg.screenshot"
     case dbgStatus     = "dbg.status"
+    case dbgKey        = "dbg.key"
 }
 
 // MARK: - Status payload (JSON-stringified for `data` values)
