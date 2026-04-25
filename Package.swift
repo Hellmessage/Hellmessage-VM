@@ -31,7 +31,7 @@ let package = Package(
             name: "HVMBackend",
             dependencies: ["HVMCore", "HVMBundle", "HVMStorage", "HVMNet", "HVMDisplay"]
         ),
-        .target(name: "HVMInstall", dependencies: ["HVMBackend"]),
+        .target(name: "HVMInstall", dependencies: ["HVMCore", "HVMBundle", "HVMStorage", "HVMBackend"]),
         .target(name: "HVMIPC",     dependencies: ["HVMCore"]),
 
         // 可执行 target

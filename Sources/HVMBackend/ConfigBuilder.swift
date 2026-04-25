@@ -1,6 +1,7 @@
 // HVMBackend/ConfigBuilder.swift
-// 把 VMConfig 翻译为 VZVirtualMachineConfiguration. M1 仅 Linux 路径;
-// macOS 路径随 M3 HVMInstall 一起落地. 详见 docs/VZ_BACKEND.md
+// 把 VMConfig 翻译为 VZVirtualMachineConfiguration.
+// macOS 分支读 auxiliary/ 装配 VZMacPlatformConfiguration; Linux 分支走 EFI + ISO.
+// 详见 docs/VZ_BACKEND.md
 
 import Foundation
 @preconcurrency import Virtualization
@@ -30,10 +31,30 @@ public enum ConfigBuilder {
         }
         vz.memorySize = config.memoryMiB * 1024 * 1024
 
-        // Platform + BootLoader (仅 Linux)
+        // Platform + BootLoader + 输入/图形设备: 随 guestOS 分支
         switch config.guestOS {
         case .macOS:
-            throw HVMError.backend(.unsupportedGuestOS(raw: "macOS (M3 起支持)"))
+            // Platform 从 bundle/auxiliary/ 读三件套 (装机阶段已落盘)
+            vz.platform = try MacPlatform.load(from: bundleURL)
+            vz.bootLoader = VZMacOSBootLoader()
+
+            // 图形: VZMacGraphicsDevice + 1080p @ 220ppi (与 MacBook Pro Retina 一致)
+            // 多显示器留给后续, M3 单屏
+            let display = VZMacGraphicsDisplayConfiguration(
+                widthInPixels: 1920, heightInPixels: 1080, pixelsPerInch: 220
+            )
+            let graphics = VZMacGraphicsDeviceConfiguration()
+            graphics.displays = [display]
+            vz.graphicsDevices = [graphics]
+
+            // 键盘: macOS 14+ 原生 keyboard, 比 USB 键盘转换损失小, 支持 Fn/media/Spotlight
+            vz.keyboards = [VZMacKeyboardConfiguration()]
+
+            // 指点: Mac Trackpad 支持手势 + USB 兜底绝对坐标
+            vz.pointingDevices = [
+                VZMacTrackpadConfiguration(),
+                VZUSBScreenCoordinatePointingDeviceConfiguration(),
+            ]
 
         case .linux:
             vz.platform = VZGenericPlatformConfiguration()
@@ -56,6 +77,17 @@ public enum ConfigBuilder {
             let bootLoader = VZEFIBootLoader()
             bootLoader.variableStore = variableStore
             vz.bootLoader = bootLoader
+
+            // 图形: virtio scanout. 1024x768 对 fbcon 80x25 字体占比友好.
+            // automaticallyReconfiguresDisplay 在 fbcon 阶段无效, guest 进 X/Wayland 后才生效.
+            let scanout = VZVirtioGraphicsScanoutConfiguration(widthInPixels: 1024, heightInPixels: 768)
+            let graphics = VZVirtioGraphicsDeviceConfiguration()
+            graphics.scanouts = [scanout]
+            vz.graphicsDevices = [graphics]
+
+            // Linux: USB 键盘 + USB 绝对坐标鼠标 (no Mac trackpad)
+            vz.keyboards = [VZUSBKeyboardConfiguration()]
+            vz.pointingDevices = [VZUSBScreenCoordinatePointingDeviceConfiguration()]
         }
 
         // 磁盘
@@ -73,8 +105,8 @@ public enum ConfigBuilder {
             }
         }
 
-        // ISO (仅 bootFromDiskOnly=false)
-        if !config.bootFromDiskOnly, let isoPath = config.installerISO {
+        // ISO 装机 (仅 Linux + bootFromDiskOnly=false). macOS 走 IPSW + VZMacOSInstaller, 不挂 ISO.
+        if config.guestOS == .linux, !config.bootFromDiskOnly, let isoPath = config.installerISO {
             do {
                 try ISOValidator.validate(at: isoPath)
             } catch let e as HVMError {
@@ -92,22 +124,10 @@ public enum ConfigBuilder {
         }
         vz.storageDevices = storageDevices
 
-        // 网卡
+        // 网卡 (公共)
         vz.networkDevices = try config.networks.map { try NICFactory.make(spec: $0) }
 
-        // 显示设备. Initial scanout 1024x768: 对 text-mode installer (fbcon 80x25) 字体占比友好.
-        // 注意: Linux fbcon 不响应 virtio-gpu resize 事件, automaticallyReconfiguresDisplay
-        // 仅在 guest 进入 X/Wayland 后才生效.
-        let scanout = VZVirtioGraphicsScanoutConfiguration(widthInPixels: 1024, heightInPixels: 768)
-        let graphics = VZVirtioGraphicsDeviceConfiguration()
-        graphics.scanouts = [scanout]
-        vz.graphicsDevices = [graphics]
-
-        // 输入设备
-        vz.keyboards = [VZUSBKeyboardConfiguration()]
-        vz.pointingDevices = [VZUSBScreenCoordinatePointingDeviceConfiguration()]
-
-        // 熵源
+        // 熵源 (公共)
         vz.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
 
         // Virtio console (serial) -> bundle/run/console.sock, 供 hvm-dbg console 使用
