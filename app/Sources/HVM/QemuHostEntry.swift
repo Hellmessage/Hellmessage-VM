@@ -90,6 +90,12 @@ public enum QemuHostEntry {
             }
         }
 
+        // 3.6 console socket 路径 (与 QMP / vmnet socket 同 runDir).
+        // QemuConsoleBridge 在 QEMU 启动后 connect (见 6c).
+        let consoleSocketURL = HVMPaths.runDir
+            .appendingPathComponent("\(config.id.uuidString.lowercased()).console.sock")
+        try? FileManager.default.removeItem(at: consoleSocketURL)
+
         // 4. 构造 argv
         let args: [String]
         do {
@@ -98,7 +104,8 @@ public enum QemuHostEntry {
                 qemuRoot: qemuRoot, qmpSocketPath: qmpSocketURL.path,
                 virtioWinISOPath: virtioWinPath,
                 swtpmSocketPath: swtpmSockPath,
-                socketVmnetPath: socketVmnetPath
+                socketVmnetPath: socketVmnetPath,
+                consoleSocketPath: consoleSocketURL.path
             )
             args = try QemuArgsBuilder.build(inputs)
         } catch {
@@ -112,6 +119,7 @@ public enum QemuHostEntry {
         QemuHostState.shared.swtpmSocketPath = swtpmSockPath
         QemuHostState.shared.socketVmnetRunner = socketVmnetRunner
         QemuHostState.shared.socketVmnetSocketPath = socketVmnetPath
+        QemuHostState.shared.consoleSocketURL = consoleSocketURL
 
         // 3. stderr 落 bundle/logs/qemu-stderr.log (truncate, 不累积老错误)
         let stderrLog = BundleLayout.logsDir(bundleURL)
@@ -157,6 +165,34 @@ public enum QemuHostEntry {
             }
             QemuHostState.shared.qmpClient = client
             fputs("HVMHost(qemu): QMP 已连接\n", stderr)
+
+            // 6.5 console bridge: poll-wait socket 文件 + connect; 失败仅警告, 不阻塞 VM 启动
+            let bridge = QemuConsoleBridge(
+                socketPath: consoleSocketURL.path,
+                logsDir: BundleLayout.logsDir(bundleURL)
+            )
+            // QEMU 监听 console socket 几乎跟 QMP 同时就绪; 仍 poll 5s 防 race
+            let consDeadline = Date().addingTimeInterval(5)
+            var connected = false
+            while Date() < consDeadline {
+                if FileManager.default.fileExists(atPath: consoleSocketURL.path) {
+                    do {
+                        try bridge.connect()
+                        connected = true
+                        break
+                    } catch {
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                    }
+                } else {
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                }
+            }
+            if connected {
+                QemuHostState.shared.consoleBridge = bridge
+                fputs("HVMHost(qemu): console bridge 已连接\n", stderr)
+            } else {
+                fputs("HVMHost(qemu): ⚠ console bridge 5s 未连上, dbg.console.* 不可用\n", stderr)
+            }
 
             // 6a. 监听 QMP 异步事件: SHUTDOWN / POWERDOWN → 等进程 exit
             Task { @MainActor in
@@ -459,6 +495,9 @@ final class QemuHostState {
     var socketVmnetSocketPath: String?
     /// dbg.status 用: 最近一次截图的 sha256 (用于客户端做"画面变没变"轮询)
     var lastFrameSha256: String?
+    /// guest serial console 桥接 (-chardev socket); console.read/write 走它
+    var consoleBridge: QemuConsoleBridge?
+    var consoleSocketURL: URL?
 
     var statusItem: NSStatusItem?
     var statusMenu: QemuStatusMenuController?
@@ -559,15 +598,16 @@ final class QemuHostState {
         case IPCOp.dbgStatus.rawValue:     return handleDbgStatus(req: req)
         case IPCOp.dbgOcr.rawValue:        return await handleDbgOcr(req: req)
         case IPCOp.dbgFindText.rawValue:   return await handleDbgFindText(req: req)
-        case IPCOp.dbgKey.rawValue:        return await handleDbgKey(req: req)
-        case IPCOp.dbgMouse.rawValue:      return await handleDbgMouse(req: req)
+        case IPCOp.dbgKey.rawValue:           return await handleDbgKey(req: req)
+        case IPCOp.dbgMouse.rawValue:         return await handleDbgMouse(req: req)
+        case IPCOp.dbgBootProgress.rawValue:  return await handleDbgBootProgress(req: req)
+        case IPCOp.dbgConsoleRead.rawValue:   return handleDbgConsoleRead(req: req)
+        case IPCOp.dbgConsoleWrite.rawValue:  return handleDbgConsoleWrite(req: req)
 
         default:
-            // 剩余 dbg.* (boot_progress/console.*) 需先接 -chardev pty/socket 给 serial,
-            // 然后跟 ConsoleBridge 等价路径接入. 留给后续 commit.
             if req.op.hasPrefix("dbg.") {
                 return .failure(id: req.id, code: "backend.qemu_dbg_unsupported",
-                                message: "QEMU 后端尚未实现 \(req.op); screenshot/status/ocr/find_text/key/mouse 已支持")
+                                message: "QEMU 后端尚未实现 \(req.op)")
             }
             return .failure(id: req.id, code: "ipc.unknown_op", message: "未知 op: \(req.op)")
         }
@@ -747,6 +787,97 @@ final class QemuHostState {
         return (x, y)
     }
 
+    // MARK: - dbg.boot_progress / console.* (F 系列)
+
+    /// boot_progress: state + 截屏 + OCR 启发式. 与 VZ DbgOps.handleBootProgress 同算法.
+    private func handleDbgBootProgress(req: IPCRequest) async -> IPCResponse {
+        let elapsed: Int? = startedAt.map { Int(Date().timeIntervalSince($0)) }
+        func reply(_ phase: String, _ confidence: Float) -> IPCResponse {
+            let payload = IPCDbgBootProgressPayload(phase: phase, confidence: confidence, elapsedSec: elapsed)
+            guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
+                return .failure(id: req.id, code: "ipc.encode_failed", message: "boot_progress 编码失败")
+            }
+            return .success(id: req.id, data: ["payload": json])
+        }
+
+        // 进程未 running → bios
+        if case .running = runner?.state {} else { return reply("bios", 1.0) }
+
+        // 截屏不到 → BIOS / EFI 阶段
+        guard let client = qmpClient else { return reply("bios", 0.7) }
+        let shot: QemuScreenshot.Result
+        do {
+            shot = try await QemuScreenshot.capture(via: client, tempDir: HVMPaths.runDir, maxEdge: nil)
+        } catch {
+            return reply("bios", 0.7)
+        }
+        lastFrameSha256 = shot.sha256
+
+        let items: [OCREngine.TextItem]
+        do { items = try OCREngine.recognize(pngData: shot.pngData, region: nil) }
+        catch { return reply("boot-logo", 0.5) }
+        if items.isEmpty { return reply("boot-logo", 0.6) }
+
+        let lowered = items.map { $0.text.lowercased() }
+        let joined = lowered.joined(separator: " ")
+        let ttyKeywords = ["login:", "localhost login", "raspberrypi login"]
+        if ttyKeywords.contains(where: { joined.contains($0) }) {
+            return reply("ready-tty", 0.9)
+        }
+        let guiKeywords: [String] = {
+            switch config?.guestOS {
+            case .macOS:   return ["sign in", "other", "user name", "用户名", "apple", "finder"]
+            case .linux:   return ["username", "password", "sign in", "log in", "用户名", "密码"]
+            case .windows: return ["sign in", "username", "password", "user", "administrator", "windows", "登录", "用户名", "密码"]
+            case .none:    return []
+            }
+        }()
+        if guiKeywords.contains(where: { kw in lowered.contains(where: { $0.contains(kw) }) }) {
+            return reply("ready-gui", 0.8)
+        }
+        return reply("unknown", 0.4)
+    }
+
+    private func handleDbgConsoleRead(req: IPCRequest) -> IPCResponse {
+        guard let bridge = consoleBridge else {
+            return .failure(id: req.id, code: "dbg.console_unavailable",
+                            message: "console bridge 未就绪 (QEMU console socket 连接失败?)")
+        }
+        let since = Int(req.args["sinceBytes"] ?? "0") ?? 0
+        let r = bridge.read(sinceBytes: since)
+        let payload = IPCDbgConsoleReadPayload(
+            dataBase64: r.data.base64EncodedString(),
+            totalBytes: r.totalBytes,
+            returnedSinceBytes: r.returnedSinceBytes
+        )
+        guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
+            return .failure(id: req.id, code: "ipc.encode_failed", message: "console.read payload 编码失败")
+        }
+        return .success(id: req.id, data: ["payload": json])
+    }
+
+    private func handleDbgConsoleWrite(req: IPCRequest) -> IPCResponse {
+        guard let bridge = consoleBridge else {
+            return .failure(id: req.id, code: "dbg.console_unavailable",
+                            message: "console bridge 未就绪")
+        }
+        let bytes: Data
+        if let b64 = req.args["dataBase64"], let d = Data(base64Encoded: b64) {
+            bytes = d
+        } else if let text = req.args["text"] {
+            bytes = Data(text.utf8)
+        } else {
+            return .failure(id: req.id, code: "config.missing_field",
+                            message: "需要 args.dataBase64 或 args.text")
+        }
+        do {
+            try bridge.write(bytes)
+            return .success(id: req.id)
+        } catch {
+            return .failure(id: req.id, code: "dbg.console_write_failed", message: "\(error)")
+        }
+    }
+
     private func handleDbgFindText(req: IPCRequest) async -> IPCResponse {
         guard let query = req.args["query"], !query.isEmpty else {
             return .failure(id: req.id, code: "config.missing_field", message: "需要 args.query")
@@ -856,6 +987,10 @@ final class QemuHostState {
         }
         if let p = socketVmnetSocketPath {
             try? FileManager.default.removeItem(atPath: p)
+        }
+        consoleBridge?.close()
+        if let u = consoleSocketURL {
+            try? FileManager.default.removeItem(at: u)
         }
         lock?.release()
         exit(exitCode)

@@ -34,6 +34,9 @@ public enum QemuArgsBuilder {
         /// socket_vmnet 监听 socket 绝对路径 (仅 networks 含 bridged 时用).
         /// nil 时 bridged NetworkSpec 抛 configInvalid (一期不再 throw 通用 "未实现").
         public let socketVmnetPath: String?
+        /// guest serial console 的 unix socket 绝对路径 (QEMU 当 server, HVMHost 当 client).
+        /// nil 时不挂 chardev/serial — 仅在 hvm-dbg console.* 不需要时跳过 (一期总是传).
+        public let consoleSocketPath: String?
 
         public init(
             config: VMConfig,
@@ -42,7 +45,8 @@ public enum QemuArgsBuilder {
             qmpSocketPath: String,
             virtioWinISOPath: String? = nil,
             swtpmSocketPath: String? = nil,
-            socketVmnetPath: String? = nil
+            socketVmnetPath: String? = nil,
+            consoleSocketPath: String? = nil
         ) {
             self.config = config
             self.bundleURL = bundleURL
@@ -51,6 +55,7 @@ public enum QemuArgsBuilder {
             self.virtioWinISOPath = virtioWinISOPath
             self.swtpmSocketPath = swtpmSocketPath
             self.socketVmnetPath = socketVmnetPath
+            self.consoleSocketPath = consoleSocketPath
         }
     }
 
@@ -84,6 +89,15 @@ public enum QemuArgsBuilder {
         args += ["-no-reboot"]
         // 关人类 monitor (仅 QMP 控制, 防 stdio 干扰)
         args += ["-monitor", "none"]
+
+        // ---- guest serial console (chardev unix socket, 给 QemuConsoleBridge 接) ----
+        // QEMU 以 server 身份 listen, HVMHost 启动后立即 connect 当 client.
+        // wait=off: QEMU 不等客户端连上才启动 (避免 boot 卡死).
+        // 路径由调用方注入 (typical: HVMPaths.runDir/<vm-id>.console.sock); nil 跳过.
+        if let consSock = inputs.consoleSocketPath {
+            args += ["-chardev", "socket,id=cons0,path=\(consSock),server=on,wait=off"]
+            args += ["-serial", "chardev:cons0"]
+        }
 
         // ---- UEFI firmware ----
         // Linux: 单 -bios; Windows: 双 pflash (RW NVRAM 才能保 SecureBoot 状态)
