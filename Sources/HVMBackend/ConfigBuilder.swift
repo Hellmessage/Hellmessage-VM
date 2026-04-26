@@ -174,16 +174,10 @@ public enum ConfigBuilder {
     }
 
     /// 创建 ConsoleBridge: 双向 pipe + 日志 tee + ring buffer.
-    /// guest 输出 append 到 bundle/logs/console-<date>.log; hvm-dbg 走 bridge 读写.
-    /// bridge 必须由 VMHandle 持有, 否则 fd lifecycle 失控.
+    /// guest 输出 append 到 bundle/logs/console-<date>.log (Bridge 内部按天 rotate),
+    /// hvm-dbg 走 bridge 读写. bridge 必须由 VMHandle 持有, 否则 fd lifecycle 失控.
     private static func makeConsoleBridge(bundleURL: URL) throws -> ConsoleBridge {
-        let logsDir = BundleLayout.logsDir(bundleURL)
-        try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
-
-        let df = DateFormatter()
-        df.dateFormat = "yyyy-MM-dd"
-        let logURL = logsDir.appendingPathComponent("console-\(df.string(from: Date())).log")
-        return try ConsoleBridge(logFileURL: logURL)
+        return try ConsoleBridge(logsDir: BundleLayout.logsDir(bundleURL))
     }
 }
 

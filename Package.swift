@@ -54,5 +54,31 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
+
+        // 单元测试 (XCTest), 只覆盖纯逻辑模块, VZ 相关不测 (需要 macOS host + 资源)
+        .testTarget(
+            name: "HVMCoreTests",
+            dependencies: ["HVMCore"]
+        ),
+        .testTarget(
+            name: "HVMBundleTests",
+            dependencies: ["HVMBundle", "HVMCore"]
+        ),
+        .testTarget(
+            name: "HVMNetTests",
+            dependencies: ["HVMNet", "HVMCore"]
+        ),
+        .testTarget(
+            name: "HVMStorageTests",
+            dependencies: ["HVMStorage", "HVMBundle", "HVMCore"]
+        ),
+        .testTarget(
+            name: "HVMInstallTests",
+            dependencies: ["HVMInstall", "HVMCore"]
+        ),
+        .testTarget(
+            name: "HVMIPCTests",
+            dependencies: ["HVMIPC", "HVMCore"]
+        ),
     ]
 )

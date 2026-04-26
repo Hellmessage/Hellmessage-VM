@@ -10,7 +10,7 @@
 // 设计取舍:
 //   - ringBuffer 上限 256 KiB. 超过后旧数据丢弃, 但保留 totalBytes 计数, 客户端用 sinceBytes
 //     轮询时若窗口外, bridge 返回 ringBuffer 全量 + 真实 totalBytes 让客户端自洽.
-//   - 不做日期切换 (启动时确定 log file). VM 跨天不切, M6 日志轮转里再处理.
+//   - 跨天切日志: 每次写入前比对当天日期, 不同则关旧 fd 开新 fd. VM 跑 24h+ 不会无限堆同一文件.
 //   - reader thread: 用 DispatchSourceRead 监听 host_read_fd, 高频小包足够.
 //   - 关闭时序: VM 停 → close() 关 fds → reader source cancel → log handle close.
 
@@ -21,13 +21,17 @@ public final class ConsoleBridge: @unchecked Sendable {
     private let hostWriteHandle: FileHandle
     /// host 侧读取 (从 guest stdout 来). VZ 拿对端 write fd 当 fileHandleForWriting
     private let hostReadHandle: FileHandle
-    /// 日志文件, append 模式
-    private let logHandle: FileHandle
+    /// 日志文件目录 (bundle/logs/), 跨天切到 console-<新日期>.log
+    private let logsDir: URL
+    /// 当前 append 中的日志文件 fd
+    private var logHandle: FileHandle?
+    /// 当前文件对应的 0 点 Date, 用来判断是否该切
+    private var currentDay: Date = .distantPast
     /// ringBuffer 容量上限
     private static let ringCapacity = 256 * 1024
     /// 读取源
     private var readSource: DispatchSourceRead?
-    /// 互斥锁保护 ringBuffer + totalBytes
+    /// 互斥锁保护 ringBuffer + totalBytes + logHandle
     private let lock = NSLock()
     /// guest 输出累计字节数 (从 VM 启动至今, 跨 ringBuffer 截断仍累加)
     private var totalBytesValue: Int = 0
@@ -36,12 +40,21 @@ public final class ConsoleBridge: @unchecked Sendable {
     /// 是否已关闭
     private var closed = false
 
+    private static let dayFmt: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone.current
+        return f
+    }()
+
     /// VZ 用的 attachment 配对 (read/write FileHandle 各一个).
     /// 两端是 pipe, fd lifecycle 由 ConsoleBridge 管理.
     public let vzReadHandle: FileHandle
     public let vzWriteHandle: FileHandle
 
-    public init(logFileURL: URL) throws {
+    /// - Parameter logsDir: bundle/logs/, 内部按当天日期写 console-<yyyy-MM-dd>.log
+    public init(logsDir: URL) throws {
         // pipe1: host → guest (host 写, VZ 读 → 转给 guest stdin)
         var hostToGuest: [Int32] = [-1, -1]
         guard pipe(&hostToGuest) == 0 else {
@@ -60,19 +73,16 @@ public final class ConsoleBridge: @unchecked Sendable {
         self.vzWriteHandle   = FileHandle(fileDescriptor: guestToHost[1], closeOnDealloc: true)
         self.hostReadHandle  = FileHandle(fileDescriptor: guestToHost[0], closeOnDealloc: true)
 
-        // 日志文件 append 模式
-        if !FileManager.default.fileExists(atPath: logFileURL.path) {
-            FileManager.default.createFile(atPath: logFileURL.path, contents: nil)
-        }
-        self.logHandle = try FileHandle(forWritingTo: logFileURL)
-        try self.logHandle.seekToEnd()
+        self.logsDir = logsDir
+        try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+        // logHandle 在第一次 appendToRing 时按当天日期 lazy 打开 (避免 init 时机太早)
 
         startReader()
     }
 
     deinit {
         readSource?.cancel()
-        if !closed { try? logHandle.close() }
+        if !closed { try? logHandle?.close() }
     }
 
     /// 由 VM 停止时调用, 关闭桥接.
@@ -82,7 +92,8 @@ public final class ConsoleBridge: @unchecked Sendable {
         closed = true
         readSource?.cancel()
         try? hostWriteHandle.close()
-        try? logHandle.close()
+        try? logHandle?.close()
+        logHandle = nil
         // hostReadHandle / vz* 的 fd 由 FileHandle(closeOnDealloc:true) 回收
     }
 
@@ -129,8 +140,7 @@ public final class ConsoleBridge: @unchecked Sendable {
             let n = buf.withUnsafeMutableBufferPointer { Darwin.read(fd, $0.baseAddress, $0.count) }
             if n <= 0 { return }
             let chunk = Data(bytes: buf, count: n)
-            self.appendToRing(chunk)
-            try? self.logHandle.write(contentsOf: chunk)
+            self.appendChunk(chunk)
         }
         source.setCancelHandler { [weak self] in
             try? self?.hostReadHandle.close()
@@ -139,8 +149,30 @@ public final class ConsoleBridge: @unchecked Sendable {
         self.readSource = source
     }
 
-    private func appendToRing(_ chunk: Data) {
+    /// 收到 guest 输出 chunk: 写日志 (跨天 rotate) + append 到 ringBuffer.
+    private func appendChunk(_ chunk: Data) {
         lock.lock(); defer { lock.unlock() }
+
+        // 跨天切日志: 比对当天 0 点 Date, 不同则关旧 fd 开新文件
+        let today = Calendar.current.startOfDay(for: Date())
+        if today != currentDay || logHandle == nil {
+            try? logHandle?.synchronize()
+            try? logHandle?.close()
+            logHandle = nil
+            let dayStr = Self.dayFmt.string(from: today)
+            let url = logsDir.appendingPathComponent("console-\(dayStr).log")
+            if !FileManager.default.fileExists(atPath: url.path) {
+                FileManager.default.createFile(atPath: url.path, contents: nil)
+            }
+            if let fh = try? FileHandle(forWritingTo: url) {
+                try? fh.seekToEnd()
+                logHandle = fh
+            }
+            currentDay = today
+        }
+
+        try? logHandle?.write(contentsOf: chunk)
+
         totalBytesValue += chunk.count
         ringBuffer.append(chunk)
         if ringBuffer.count > Self.ringCapacity {
