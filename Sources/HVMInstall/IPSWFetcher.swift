@@ -98,10 +98,12 @@ public struct IPSWCacheItem: Sendable, Equatable, Codable {
 // MARK: - 主实现
 
 public enum IPSWFetcher {
+    private static let log = HVMLog.logger("install.ipsw")
 
     /// 查询 Apple 当前推荐的最新 macOS guest IPSW. 不下载, 仅返回元信息.
     /// 失败抛 .install(.ipswDownloadFailed)
     public static func resolveLatest() async throws -> IPSWCatalogEntry {
+        Self.log.info("resolveLatest: VZMacOSRestoreImage.fetchLatestSupported")
         // VZMacOSRestoreImage 不是 Sendable, 跨 continuation 包一层 box.
         struct ImageBox: @unchecked Sendable { let value: VZMacOSRestoreImage }
 
@@ -127,13 +129,15 @@ public enum IPSWFetcher {
         }
         let v = image.operatingSystemVersion
         let osVer = "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
-        return IPSWCatalogEntry(
+        let entry = IPSWCatalogEntry(
             buildVersion: image.buildVersion,
             osVersion: osVer,
             url: image.url,
             minCPU: req.minimumSupportedCPUCount,
             minMemoryMiB: req.minimumSupportedMemorySize / (1024 * 1024)
         )
+        Self.log.info("resolveLatest: build=\(entry.buildVersion, privacy: .public) os=\(entry.osVersion, privacy: .public)")
+        return entry
     }
 
     /// 给定 entry 计算其在 cache 内应有的本地路径 (不保证存在).
@@ -228,12 +232,21 @@ public enum IPSWFetcher {
         if !force, isCached(buildVersion: entry.buildVersion) {
             let dest = cachedPath(for: entry)
             let size = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? Int64) ?? 0
+            Self.log.info("ipsw cache hit: build=\(entry.buildVersion, privacy: .public) size=\(size)")
             onProgress(IPSWFetchProgress(phase: .alreadyCached, receivedBytes: size, totalBytes: size))
             return dest
         }
 
         if force {
+            Self.log.info("ipsw fetch --force: 清除 build=\(entry.buildVersion, privacy: .public)")
             try removeCache(buildVersion: entry.buildVersion)
+        }
+
+        let preResume = partialSize(buildVersion: entry.buildVersion)
+        if preResume > 0 {
+            Self.log.info("ipsw fetch resume: build=\(entry.buildVersion, privacy: .public) resumeFrom=\(preResume)")
+        } else {
+            Self.log.info("ipsw fetch fresh: build=\(entry.buildVersion, privacy: .public)")
         }
 
         // 第一次尝试; 内部失败若为 .rangeMismatch (416 + 大小不符) 做一次重试
@@ -241,6 +254,7 @@ public enum IPSWFetcher {
             return try await attemptDownload(entry: entry, onProgress: onProgress)
         } catch _PartialResetSignal.rangeMismatch {
             // 已 truncate, 递归重新下载一次 (resumeFrom 必为 0)
+            Self.log.warning("ipsw fetch 416 大小不符, truncate 后重试: build=\(entry.buildVersion, privacy: .public)")
             return try await attemptDownload(entry: entry, onProgress: onProgress)
         }
     }

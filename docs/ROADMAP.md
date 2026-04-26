@@ -7,7 +7,7 @@
 | **M0** | 项目骨架 | SwiftPM + Makefile + CLAUDE.md + docs | `make build` 能出空壳 .app |
 | **M1** | CLI 起 Linux guest | `hvm-cli` 能创建并启动 Ubuntu arm64 | `hvm-cli create/start/stop` 可用 |
 | **M2** | GUI 基础 | `HVM.app` 列表 + 向导 + 独立/嵌入运行窗口 | 用户完全不用 CLI 也能装机跑 VM |
-| **M3** | macOS guest | IPSW 装机 + `VZMacOSInstaller` 流程 | 能装一台 macOS guest 跑起来 |
+| **M3** | macOS guest ✅ | IPSW 装机 + `VZMacOSInstaller` 流程 + 内建下载器 (断点续传) | 能装一台 macOS guest 跑起来 |
 | **M4** | 桥接网络 | `com.apple.vm.networking` 审批通过后落地 | guest 在物理 LAN 有独立 IP |
 | **M5** | hvm-dbg 完整化 | OCR / find-text / wait / exec 全量 | AI agent 能无 osascript 操控 guest |
 | **M6** | 打磨 + 文档完善 | bugfix + 缺口补完 | 个人日常可用 |
@@ -105,17 +105,20 @@ hvm-cli start u1
 - 多显示器 / 高级显示设置 (延后)
 - 剪贴板同步 (延后)
 
-## M3 — macOS guest
+## M3 — macOS guest ✅ (已完成)
 
 ### 范围
 
-1. `HVMInstall`:
-   - `VZMacOSRestoreImage.load` + `VZMacOSInstaller` 封装
-   - IPSW 下载器(可选, 不做则用户自带)
-   - auxiliary 数据生成与持久化
-2. GUI 创建向导加 macOS 分支
-3. `hvm-cli install foo` 对 macOS 全自动
-4. 详情面板显示 IPSW 版本、是否 `autoInstalled`
+1. `HVMInstall` ✅:
+   - `RestoreImageHandle` 封装 `VZMacOSRestoreImage.load`(校验 IPSW、推算最低 CPU/RAM)
+   - `MacInstaller` 封装 `VZMacOSInstaller`(带 KVO 进度 + finalize 写 config)
+   - `MacAuxiliaryFactory` 三件套生成 + **幂等校验**(retry 时 hardware-model 字节比对,跨 IPSW 重试直接报错保护配对)
+   - `IPSWFetcher` 内建下载器:`VZMacOSRestoreImage.fetchLatestSupported` + `URLSessionDataTask`
+     + HTTP `Range` / `If-Range` 断点续传 + `<build>.ipsw.partial.meta` sidecar 保存 ETag
+2. GUI 创建向导加 macOS 分支 ✅(`Use Latest IPSW` 按钮 + `IpswFetchDialog` 进度模态)
+3. `hvm-cli install foo` macOS 全自动 ✅
+4. `hvm-cli ipsw {latest, fetch, list, rm}` 缓存管理 ✅
+5. 详情面板显示 IPSW 版本、是否 `autoInstalled` ✅
 
 ### 完成标准
 

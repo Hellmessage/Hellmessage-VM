@@ -16,6 +16,8 @@ import HVMStorage
 
 @MainActor
 public final class MacInstaller {
+    private static let log = HVMLog.logger("install.macos")
+
     public init() {}
 
     /// 完整装机流程. 进度通过 onProgress 推 (调用线程 = MainActor).
@@ -37,10 +39,12 @@ public final class MacInstaller {
             throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
         }
 
+        Self.log.info("install macOS guest: bundle=\(bundleURL.lastPathComponent, privacy: .public) ipsw=\(ipswURL.lastPathComponent, privacy: .public)")
         onProgress(.preparing)
 
         // 1. 加载 + 校验 IPSW
         let handle = try await RestoreImageHandle.load(from: ipswURL)
+        Self.log.info("ipsw: build=\(handle.info.buildVersion, privacy: .public) os=\(handle.info.osVersion, privacy: .public) minCPU=\(handle.info.minCPU) minMem=\(handle.info.minMemoryMiB)MiB")
 
         // 2. CPU / RAM 与 IPSW 推荐对比
         if config.cpuCount < handle.info.minCPU {
@@ -98,6 +102,7 @@ public final class MacInstaller {
         }
 
         // 8. 异步装机
+        Self.log.info("VZMacOSInstaller.install 开始")
         do {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
                 installer.install { result in
@@ -109,6 +114,7 @@ public final class MacInstaller {
             }
         } catch {
             observer.invalidate()
+            Self.log.error("VZMacOSInstaller.install 失败: \(error.localizedDescription, privacy: .public)")
             throw HVMError.install(.installerFailed(reason: "\(error)"))
         }
         observer.invalidate()
@@ -121,8 +127,10 @@ public final class MacInstaller {
         do {
             try BundleIO.save(config: newConfig, to: bundleURL)
         } catch {
+            Self.log.error("save config 失败: \(error.localizedDescription, privacy: .public)")
             throw HVMError.install(.installerFailed(reason: "save config: \(error)"))
         }
+        Self.log.info("install 完成: bundle=\(bundleURL.lastPathComponent, privacy: .public)")
     }
 }
 

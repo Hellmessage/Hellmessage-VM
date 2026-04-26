@@ -25,6 +25,8 @@ public final class VMHandle {
     /// guest virtio-console 桥接, hvm-dbg console / exec 通过它读写. VM 停止时 close.
     public private(set) var consoleBridge: ConsoleBridge?
 
+    private static let log = HVMLog.logger("backend.vmhandle")
+
     /// VZ VM 实例 (只在 start 成功后非 nil). GUI 拿来挂给 VZVirtualMachineView 做渲染.
     public var virtualMachine: VZVirtualMachine? { vm }
 
@@ -40,12 +42,14 @@ public final class VMHandle {
         guard state == .stopped else {
             throw HVMError.backend(.invalidTransition(from: "\(state)", to: "starting"))
         }
+        Self.log.info("VM start: \(self.config.displayName, privacy: .public) id=\(self.id.uuidString.prefix(8), privacy: .public) cpu=\(self.config.cpuCount) mem=\(self.config.memoryMiB)MiB os=\(self.config.guestOS.rawValue, privacy: .public)")
         updateState(.starting)
 
         let built: ConfigBuilder.BuildResult
         do {
             built = try ConfigBuilder.build(from: config, bundleURL: bundleURL)
         } catch {
+            Self.log.error("ConfigBuilder.build 失败: \(error.localizedDescription, privacy: .public)")
             updateState(.error("\(error)"))
             throw error
         }
@@ -53,9 +57,14 @@ public final class VMHandle {
         let vm = VZVirtualMachine(configuration: built.vzConfig)
         self.vm = vm
         self.consoleBridge = built.consoleBridge
-        let delegate = Delegate { [weak self] newState in
-            Task { @MainActor in self?.onVZStateChanged(to: newState) }
-        }
+        let delegate = Delegate(
+            onStateChange: { [weak self] newState in
+                Task { @MainActor in self?.onVZStateChanged(to: newState) }
+            },
+            onStopWithError: { [weak self] message in
+                Task { @MainActor in self?.onVZStoppedWithError(message: message) }
+            }
+        )
         self.delegate = delegate
         vm.delegate = delegate
 
@@ -69,27 +78,38 @@ public final class VMHandle {
                 }
             }
         } catch {
+            Self.log.error("VZVirtualMachine.start 失败: \(error.localizedDescription, privacy: .public)")
             self.vm = nil
             updateState(.error("\(error)"))
             throw error
         }
+        Self.log.info("VM running: \(self.config.displayName, privacy: .public)")
         updateState(.running)
     }
 
+    /// 请求 ACPI 软关机. vm 不存在 (从未 start / 已 stop) 抛 invalidTransition,
+    /// 与 pause/resume/forceStop 行为一致, GUI/CLI 拿到清晰错误.
     public func requestStop() throws {
         guard let vm = self.vm else {
             throw HVMError.backend(.invalidTransition(from: "\(state)", to: "stopping"))
         }
+        Self.log.info("VM requestStop (ACPI): \(self.config.displayName, privacy: .public)")
         updateState(.stopping)
         do {
             try vm.requestStop()
         } catch {
+            Self.log.error("requestStop 失败: \(error.localizedDescription, privacy: .public)")
             throw HVMError.backend(.vzInternal(description: "requestStop: \(error)"))
         }
     }
 
+    /// 强制停止. vm 不存在抛 invalidTransition (与 requestStop/pause/resume 统一语义).
+    /// 调用方若想"幂等强停", 需要先用 self.state 判断.
     public func forceStop() async throws {
-        guard let vm = self.vm else { return }
+        guard let vm = self.vm else {
+            throw HVMError.backend(.invalidTransition(from: "\(state)", to: "stopping"))
+        }
+        Self.log.warning("VM forceStop: \(self.config.displayName, privacy: .public)")
         updateState(.stopping)
         do {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
@@ -98,6 +118,7 @@ public final class VMHandle {
                 }
             }
         } catch {
+            Self.log.error("forceStop 失败: \(error.localizedDescription, privacy: .public)")
             throw HVMError.backend(.vzInternal(description: "stop: \(error)"))
         }
         updateState(.stopped)
@@ -182,15 +203,29 @@ public final class VMHandle {
             break
         }
     }
+
+    /// VZ delegate didStopWithError 回调: 把 VZ 给的真实错误信息塞进 RunState.error,
+    /// 让 GUI/CLI 能展示具体原因 (而不是泛泛的 "VZ reported .error state").
+    private func onVZStoppedWithError(message: String) {
+        Self.log.error("VZ didStopWithError: \(self.config.displayName, privacy: .public): \(message, privacy: .public)")
+        consoleBridge?.close()
+        consoleBridge = nil
+        updateState(.error(message))
+    }
 }
 
 // MARK: - Delegate 适配器
 
 private final class Delegate: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
     private let onStateChange: ((VZVirtualMachine.State) -> Void)
+    private let onStopWithError: ((String) -> Void)
 
-    init(onStateChange: @escaping (VZVirtualMachine.State) -> Void) {
+    init(
+        onStateChange: @escaping (VZVirtualMachine.State) -> Void,
+        onStopWithError: @escaping (String) -> Void
+    ) {
         self.onStateChange = onStateChange
+        self.onStopWithError = onStopWithError
         super.init()
     }
 
@@ -198,7 +233,9 @@ private final class Delegate: NSObject, VZVirtualMachineDelegate, @unchecked Sen
         onStateChange(.stopped)
     }
 
+    /// VZ 报告 fatal error. 把 error.localizedDescription 透传给 VMHandle, 写进 RunState.error
+    /// 而不是丢失. 常见原因: 磁盘 IO 失败 / config 不支持 / firmware 验证失败 等.
     func virtualMachine(_ virtualMachine: VZVirtualMachine, didStopWithError error: Error) {
-        onStateChange(.error)
+        onStopWithError(error.localizedDescription)
     }
 }
