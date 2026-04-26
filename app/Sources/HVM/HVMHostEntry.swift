@@ -32,7 +32,7 @@ public enum HVMHostEntry {
     public static func run(bundlePath: String) -> Never {
         let bundleURL = URL(fileURLWithPath: bundlePath)
 
-        // 1. 载入 config
+        // 1. 载入 config (共用前置)
         let config: VMConfig
         do {
             config = try BundleIO.load(from: bundleURL)
@@ -41,7 +41,7 @@ public enum HVMHostEntry {
             exit(3)
         }
 
-        // 2. 抢锁
+        // 2. 抢锁 (共用前置)
         let socketURL = HVMPaths.socketPath(for: config.id)
         do {
             try HVMPaths.ensure(HVMPaths.runDir)
@@ -63,6 +63,30 @@ public enum HVMHostEntry {
 
         let startedAt = Date()
 
+        // 3. 按 engine 分派
+        switch config.engine {
+        case .qemu:
+            QemuHostEntry.run(
+                config: config, bundleURL: bundleURL,
+                lock: lock, socketURL: socketURL, startedAt: startedAt
+            )
+        case .vz:
+            runVZ(
+                config: config, bundleURL: bundleURL,
+                lock: lock, socketURL: socketURL, startedAt: startedAt
+            )
+        }
+    }
+
+    /// VZ 后端流程. 调用方已完成 load/lock/dirs 共用前置.
+    @MainActor
+    private static func runVZ(
+        config: VMConfig,
+        bundleURL: URL,
+        lock: BundleLock,
+        socketURL: URL,
+        startedAt: Date
+    ) -> Never {
         // 3. NSApplication 启动: accessory 策略 (menu bar 图标 + 离屏 window 给 VZ view)
         let app = NSApplication.shared
         // .accessory: 不进 Dock / Cmd+Tab, 但 NSStatusItem 可显示在右上角 menu bar.

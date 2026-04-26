@@ -40,7 +40,7 @@ let package = Package(
         // 可执行 target
         .executableTarget(
             name: "HVM",
-            dependencies: ["HVMBackend", "HVMInstall", "HVMIPC", "HVMDisplay", "HVMStorage"]
+            dependencies: ["HVMBackend", "HVMInstall", "HVMIPC", "HVMDisplay", "HVMStorage", "HVMQemu"]
         ),
         .executableTarget(
             name: "hvm-cli",
