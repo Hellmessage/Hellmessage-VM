@@ -73,7 +73,7 @@ public final class VMHandle {
                 vm.start { result in
                     switch result {
                     case .success: cont.resume()
-                    case .failure(let e): cont.resume(throwing: HVMError.backend(.vzInternal(description: "\(e)")))
+                    case .failure(let e): cont.resume(throwing: HVMError.backend(BackendError.fromVZ(e, op: "vm.start")))
                     }
                 }
             }
@@ -99,7 +99,7 @@ public final class VMHandle {
             try vm.requestStop()
         } catch {
             Self.log.error("requestStop 失败: \(error.localizedDescription, privacy: .public)")
-            throw HVMError.backend(.vzInternal(description: "requestStop: \(error)"))
+            throw HVMError.backend(BackendError.fromVZ(error, op: "vm.requestStop"))
         }
     }
 
@@ -119,7 +119,7 @@ public final class VMHandle {
             }
         } catch {
             Self.log.error("forceStop 失败: \(error.localizedDescription, privacy: .public)")
-            throw HVMError.backend(.vzInternal(description: "stop: \(error)"))
+            throw HVMError.backend(BackendError.fromVZ(error, op: "vm.forceStop"))
         }
         updateState(.stopped)
     }
@@ -138,7 +138,7 @@ public final class VMHandle {
                 }
             }
         } catch {
-            throw HVMError.backend(.vzInternal(description: "pause: \(error)"))
+            throw HVMError.backend(BackendError.fromVZ(error, op: "vm.pause"))
         }
         updateState(.paused)
     }
@@ -157,7 +157,7 @@ public final class VMHandle {
                 }
             }
         } catch {
-            throw HVMError.backend(.vzInternal(description: "resume: \(error)"))
+            throw HVMError.backend(BackendError.fromVZ(error, op: "vm.resume"))
         }
         updateState(.running)
     }

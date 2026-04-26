@@ -35,9 +35,20 @@ public final class MacInstaller {
         guard config.guestOS == .macOS else {
             throw HVMError.install(.installerFailed(reason: "MacInstaller 仅用于 macOS guest"))
         }
-        if BundleLock.isBusy(bundleURL: bundleURL) {
-            throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
+
+        // 真正持 BundleLock(.edit) 整个装机流程, 避免装机 -> 启动的窗口期被另一进程抢锁.
+        // 旧实现只 BundleLock.isBusy 探测一下, 探测后到 ConfigBuilder.build / VZ start
+        // 之间另一进程能 fork 出 VMHost 起同一个 bundle, race 后两者都能写 aux/disk, 损坏 bundle.
+        // BundleLock(.edit) 与 (.runtime) 共用同一把 fcntl flock, 互斥; 装完后 release 再让 VM 起.
+        let installLock: BundleLock
+        do {
+            installLock = try BundleLock(bundleURL: bundleURL, mode: .edit)
+        } catch let e as HVMError {
+            throw e  // 已经是合适的 .bundle(.busy) / .lockFailed
+        } catch {
+            throw HVMError.bundle(.lockFailed(reason: "\(error)"))
         }
+        defer { installLock.release() }
 
         Self.log.info("install macOS guest: bundle=\(bundleURL.lastPathComponent, privacy: .public) ipsw=\(ipswURL.lastPathComponent, privacy: .public)")
         onProgress(.preparing)

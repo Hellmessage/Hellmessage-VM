@@ -38,7 +38,9 @@ public enum BundleIO {
         try save(config: config, to: bundleURL)
     }
 
-    /// 读取 bundle 的 config.json 并校验 schema + 基本字段合法性
+    /// 读取 bundle 的 config.json 并校验 schema + 基本字段合法性.
+    /// schemaVersion 比当前低 → 走 ConfigMigrator 升级链 (v1→v2→...→current);
+    /// schemaVersion 比当前高 → 抛 invalidSchema 让用户升 HVM.
     public static func load(from bundleURL: URL) throws -> VMConfig {
         let fm = FileManager.default
         let configURL = BundleLayout.configURL(bundleURL)
@@ -53,22 +55,47 @@ public enum BundleIO {
             throw HVMError.bundle(.parseFailed(reason: error.localizedDescription, path: configURL.path))
         }
 
+        // Step 1: 只解析 schemaVersion, 决定后续走 migrate 还是直接 decode current
+        let envelope: _SchemaEnvelope
+        do {
+            envelope = try JSONDecoder().decode(_SchemaEnvelope.self, from: data)
+        } catch {
+            throw HVMError.bundle(.parseFailed(reason: "无法读取 schemaVersion: \(error)", path: configURL.path))
+        }
+
+        if envelope.schemaVersion > VMConfig.currentSchemaVersion {
+            throw HVMError.bundle(.invalidSchema(
+                version: envelope.schemaVersion,
+                expected: VMConfig.currentSchemaVersion
+            ))
+        }
+
+        // Step 2: 老 schema → 走升级链拿到当前版本的 JSON, 再 decode.
+        let upgradedData: Data
+        if envelope.schemaVersion < VMConfig.currentSchemaVersion {
+            do {
+                upgradedData = try ConfigMigrator.migrate(
+                    data: data,
+                    from: envelope.schemaVersion,
+                    to: VMConfig.currentSchemaVersion
+                )
+            } catch let e as HVMError {
+                throw e
+            } catch {
+                throw HVMError.bundle(.parseFailed(reason: "schema 迁移失败: \(error)", path: configURL.path))
+            }
+        } else {
+            upgradedData = data
+        }
+
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
         let config: VMConfig
         do {
-            config = try decoder.decode(VMConfig.self, from: data)
+            config = try decoder.decode(VMConfig.self, from: upgradedData)
         } catch {
             throw HVMError.bundle(.parseFailed(reason: "\(error)", path: configURL.path))
-        }
-
-        // schema 版本
-        if config.schemaVersion > VMConfig.currentSchemaVersion {
-            throw HVMError.bundle(.invalidSchema(
-                version: config.schemaVersion,
-                expected: VMConfig.currentSchemaVersion
-            ))
         }
 
         // 主盘存在
@@ -124,4 +151,9 @@ public enum BundleIO {
             throw HVMError.bundle(.writeFailed(reason: error.localizedDescription, path: target.path))
         }
     }
+}
+
+/// 仅解 schemaVersion 字段, 用于 load 时决定是否走 migration.
+private struct _SchemaEnvelope: Decodable {
+    let schemaVersion: Int
 }

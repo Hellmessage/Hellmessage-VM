@@ -198,11 +198,24 @@ public final class BundleLock {
 
 ## schema 演化策略
 
-- 新字段**只加不改**, 加字段必须带默认值, 旧 bundle 缺字段时走默认
+- 新字段**只加不改**, 加字段必须带默认值, 旧 bundle 缺字段时走默认 (`Codable` 的 `decode(_:forKey:)` 配 optional 即可)
 - 删字段**保留 JSON key**, 读取时忽略, 避免老 HVM 报错
-- 不兼容变更(改字段语义、重命名字段)必须升 `schemaVersion`, 并提供一次性迁移函数 `migrateV1toV2(json)`
-- 迁移函数写在 `HVMBundle/Migration.swift`, 每次升级跑一次, 写回磁盘
-- 当前版本读到更高版本号时**拒绝加载**, 提示升级 HVM
+- 不兼容变更(改字段语义、重命名字段、字段单位变化)必须升 `schemaVersion`, 并加一次性迁移
+- 迁移实现:
+  - 入口在 `Sources/HVMBundle/ConfigMigrator.swift` 的 `ConfigMigrator.migrate(data:from:to:)`
+  - 在 JSON `Data` 层面操作(字典 patch),不为每个老版本另起 Codable struct
+  - 链式升级:`v1 → v2 → ... → current`,逐版跑;不允许跨版直接跳
+  - 升级后 `BundleIO.save` 会以 `currentSchemaVersion` 重写 `config.json`,以后再 load 不会再走 migrator
+- `BundleIO.load` 流程:
+  1. 用 `_SchemaEnvelope` 只解 `schemaVersion`
+  2. `> currentSchemaVersion` → 抛 `.invalidSchema` 让用户升 HVM
+  3. `< currentSchemaVersion` → 走 `ConfigMigrator.migrate` 升到当前
+  4. `== currentSchemaVersion` → 直接 decode 成 `VMConfig`
+- 加新版本的步骤:
+  1. `VMConfig.currentSchemaVersion` +1
+  2. 在 `ConfigMigrator.migrate` 的 switch 里加 `case (N-1, N): current = try migrate_vN_minus_1_to_vN(current)`
+  3. 实现对应的 `migrate_*_to_*(_:)`(JSON 字典 patch)
+  4. 加完 case 后把 `// version = next` 那一行打开
 
 ## I/O 原子性
 

@@ -20,7 +20,13 @@ elif security find-identity -v -p codesigning 2>/dev/null | grep -q '"Apple Deve
     SIGN="Apple Development"
 else
     SIGN="-"
-    echo "ℹ 使用 ad-hoc 签名 (详见 docs/BUILD_SIGN.md)"
+    cat <<'EOF'
+⚠ ad-hoc 签名 (本机 Keychain 没有 Apple Development 证书)
+  - 本机开发期可用: AMFI 接受 com.apple.security.virtualization, VZ guest 能正常起
+  - 不能拷给其他人用: 其他 Mac 上 AMFI 会拒绝 entitlement, .app 启动即崩
+  - 想出可分发版本: 在 Apple Developer 注册个人证书后 make build 会自动用真实身份
+  - 详见 docs/BUILD_SIGN.md
+EOF
 fi
 
 # SwiftPM 输出路径 (仅 arm64-apple-macosx, 因为项目硬约束 Apple Silicon)
