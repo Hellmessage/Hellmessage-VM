@@ -280,8 +280,9 @@ public final class DbgOps {
         // ready-gui: 出现典型桌面登录/桌面元素 (按 guestOS 分别命中)
         let guiKeywords: [String] = {
             switch guestOS {
-            case .macOS: return ["sign in", "other", "user name", "用户名", "apple", "finder"]
-            case .linux: return ["username", "password", "sign in", "log in", "用户名", "密码"]
+            case .macOS:   return ["sign in", "other", "user name", "用户名", "apple", "finder"]
+            case .linux:   return ["username", "password", "sign in", "log in", "用户名", "密码"]
+            case .windows: return ["sign in", "username", "password", "user", "administrator", "windows", "登录", "用户名", "密码"]
             }
         }()
         if guiKeywords.contains(where: { kw in lowered.contains(where: { $0.contains(kw) }) }) {
@@ -340,8 +341,8 @@ public final class DbgOps {
     /// TODO: 将来 VMConfig 加 displaySpec 后, 这里改成读 config.
     private func guestFramebufferSize() -> (Int, Int) {
         switch guestOS {
-        case .linux: return (1024, 768)
-        case .macOS: return (1920, 1080)
+        case .linux, .windows: return (1024, 768)
+        case .macOS:           return (1920, 1080)
         }
     }
 

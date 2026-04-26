@@ -11,6 +11,8 @@ public enum BundleIO {
     /// 创建一个全新的 .hvmz 目录, 写入初始 config.json 及子目录骨架.
     /// 若目标已存在 (哪怕是空目录) 也拒绝, 避免意外覆盖.
     public static func create(at bundleURL: URL, config: VMConfig) throws {
+        // 先 validate(): engine ↔ guestOS 组合非法时立即报错, 不在 FS 上留半成品
+        try config.validate()
         let fm = FileManager.default
         if fm.fileExists(atPath: bundleURL.path) {
             throw HVMError.bundle(.alreadyExists(path: bundleURL.path))
@@ -27,7 +29,8 @@ public enum BundleIO {
             try fm.createDirectory(at: BundleLayout.metaDir(bundleURL), withIntermediateDirectories: true,
                                    attributes: [.posixPermissions: 0o755])
             switch config.guestOS {
-            case .linux:
+            case .linux, .windows:
+                // Linux/Windows 都走 EDK2 UEFI, 需要 nvram 持久 EFI vars
                 try fm.createDirectory(at: BundleLayout.nvramDir(bundleURL), withIntermediateDirectories: true,
                                        attributes: [.posixPermissions: 0o755])
             case .macOS:
@@ -128,6 +131,8 @@ public enum BundleIO {
 
     /// 原子写入 config.json: 先写 .tmp, 再 rename
     public static func save(config: VMConfig, to bundleURL: URL) throws {
+        // 落盘前 validate(): 防止用户手改 config.json 后通过其他路径写回非法组合
+        try config.validate()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601

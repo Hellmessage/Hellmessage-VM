@@ -28,8 +28,8 @@ struct CreateVMDialog: View {
     /// 装机字段是否合法 (按 OS 分支)
     private var installerPathValid: Bool {
         switch guestOS {
-        case .linux: return !isoPath.isEmpty
-        case .macOS: return !ipswPath.isEmpty
+        case .linux, .windows: return !isoPath.isEmpty
+        case .macOS:           return !ipswPath.isEmpty
         }
     }
 
@@ -111,9 +111,9 @@ struct CreateVMDialog: View {
                 }
             }
 
-            // 装机源: Linux 走 ISO, macOS 走 IPSW
+            // 装机源: Linux/Windows 走 ISO, macOS 走 IPSW
             switch guestOS {
-            case .linux:
+            case .linux, .windows:
                 field("Installer ISO") {
                     HStack(spacing: HVMSpace.sm) {
                         TextField("/path/to/ubuntu-arm64.iso", text: $isoPath)
@@ -342,7 +342,7 @@ struct CreateVMDialog: View {
         do {
             // 装机源校验
             switch guestOS {
-            case .linux: try ISOValidator.validate(at: isoPath)
+            case .linux, .windows: try ISOValidator.validate(at: isoPath)
             case .macOS:
                 guard FileManager.default.fileExists(atPath: ipswPath) else {
                     throw HVMError.install(.ipswNotFound(path: ipswPath))

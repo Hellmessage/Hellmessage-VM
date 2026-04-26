@@ -55,7 +55,7 @@ struct CreateCommand: AsyncParsableCommand {
             var isoPath: String? = nil
             var ipswPath: String? = nil
             switch os {
-            case .linux:
+            case .linux, .windows:
                 guard let p = iso else { throw HVMError.config(.missingField(name: "iso")) }
                 try ISOValidator.validate(at: p)
                 isoPath = p
@@ -121,7 +121,7 @@ struct CreateCommand: AsyncParsableCommand {
                 if let p = ipswPath { print("  ipsw:      \(p)") }
                 print("  mac:       \(macAddr)")
                 switch os {
-                case .linux:
+                case .linux, .windows:
                     print("下一步: hvm-cli start \(name)  (在 guest 内完成安装, 然后 hvm-cli boot-from-disk \(name))")
                 case .macOS:
                     print("下一步: hvm-cli install \(name)  (跑 VZMacOSInstaller, 完成后直接 start)")

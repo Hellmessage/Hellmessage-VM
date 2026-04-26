@@ -40,6 +40,10 @@ struct InstallCommand: AsyncParsableCommand {
                 throw HVMError.install(.installerFailed(
                     reason: "Linux guest 不支持 install 子命令; 走 hvm-cli start <name> 进 guest 内手动装, 然后 hvm-cli boot-from-disk <name>"
                 ))
+            case .windows:
+                throw HVMError.install(.installerFailed(
+                    reason: "Windows guest 不走 install 子命令; 走 hvm-cli start <name> 进 guest 内手动装, 然后 hvm-cli boot-from-disk <name>"
+                ))
             case .macOS:
                 break
             }

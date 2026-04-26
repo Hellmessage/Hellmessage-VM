@@ -7,18 +7,19 @@ import HVMCore
 struct HVMStatusBar: View {
     @Bindable var model: AppModel
 
-    private var stats: (linux: Int, macOS: Int, running: Int) {
-        var l = 0, m = 0, r = 0
+    private var stats: (linux: Int, macOS: Int, windows: Int, running: Int) {
+        var l = 0, m = 0, w = 0, r = 0
         for item in model.list {
             switch item.guestOS {
-            case .linux: l += 1
-            case .macOS: m += 1
+            case .linux:   l += 1
+            case .macOS:   m += 1
+            case .windows: w += 1
             }
             if model.sessions[item.id] != nil || item.runState == "running" {
                 r += 1
             }
         }
-        return (l, m, r)
+        return (l, m, w, r)
     }
 
     var body: some View {
@@ -28,6 +29,10 @@ struct HVMStatusBar: View {
             HStack(spacing: HVMSpace.md) {
                 statItem(label: "linux", value: "\(s.linux)")
                 statItem(label: "macos", value: "\(s.macOS)")
+                if s.windows > 0 {
+                    // windows 仅当存在时才占位 (创建向导默认不出 windows 选项)
+                    statItem(label: "windows", value: "\(s.windows)")
+                }
                 statItem(label: "running",
                          value: "\(s.running)",
                          valueColor: s.running > 0 ? HVMColor.statusRunning : HVMColor.textSecondary)

@@ -74,8 +74,9 @@ public enum HVMHostEntry {
             // 用 guest framebuffer 尺寸, 与 ConfigBuilder 当前硬编码匹配.
             let (w, h): (CGFloat, CGFloat)
             switch config.guestOS {
-            case .linux: (w, h) = (1024, 768)
-            case .macOS: (w, h) = (1920, 1080)
+            case .linux:   (w, h) = (1024, 768)
+            case .windows: (w, h) = (1920, 1080)
+            case .macOS:   (w, h) = (1920, 1080)
             }
             // 位置 -20000, -20000: 远离任何真实显示器, 但 isVisible=true 仍纳入 Window Server
             // 合成树, CGWindowListCreateImage 能抓到帧.

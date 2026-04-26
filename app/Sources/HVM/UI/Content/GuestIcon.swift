@@ -27,6 +27,10 @@ public enum GuestVisual {
             return GuestStyle(label: "macOS",
                               shortSymbol: "⌘",
                               accent: Color(red: 0.85, green: 0.90, blue: 1.00))
+        case .windows:
+            return GuestStyle(label: "windows",
+                              shortSymbol: "▦",
+                              accent: Color(red: 0.45, green: 0.75, blue: 1.00))
         }
     }
 }

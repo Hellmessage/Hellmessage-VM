@@ -38,7 +38,10 @@ public enum ConfigBuilder {
         vz.memorySize = config.memoryMiB * 1024 * 1024
 
         // Platform + BootLoader + 输入/图形设备: 随 guestOS 分支
+        // Windows 走 QEMU 后端, 不应到达 VZ ConfigBuilder; VMConfig.validate() 已拦截 (engine 必须 qemu)
         switch config.guestOS {
+        case .windows:
+            throw HVMError.backend(.unsupportedGuestOS(raw: "windows (VZ 后端不支持, 请用 engine=qemu)"))
         case .macOS:
             // Platform 从 bundle/auxiliary/ 读三件套 (装机阶段已落盘)
             vz.platform = try MacPlatform.load(from: bundleURL)
@@ -170,6 +173,9 @@ public enum ConfigBuilder {
             )
         case .macOS:
             return try VZDiskImageStorageDeviceAttachment(url: url, readOnly: readOnly)
+        case .windows:
+            // 不会到达 (上层 switch 已拦; 此处仅为穷尽性)
+            throw HVMError.backend(.unsupportedGuestOS(raw: "windows (VZ 后端不支持)"))
         }
     }
 

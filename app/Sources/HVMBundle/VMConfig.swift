@@ -2,10 +2,19 @@
 // config.json v1 的 Codable 映射. schema 见 docs/VM_BUNDLE.md
 
 import Foundation
+import HVMCore
 
 public enum GuestOSType: String, Codable, Sendable, CaseIterable {
     case macOS
     case linux
+    case windows
+}
+
+/// 后端引擎. macOS 仅 vz; Linux 二选一; Windows 仅 qemu (CLAUDE.md 约束).
+/// 老 v1 config 缺该字段时, VMConfig.init(from:) 兜底为 .vz, 不需要 schema 迁移.
+public enum Engine: String, Codable, Sendable, CaseIterable {
+    case vz
+    case qemu
 }
 
 public enum DiskRole: String, Codable, Sendable {
@@ -108,6 +117,18 @@ public struct LinuxSpec: Codable, Sendable, Equatable {
     }
 }
 
+public struct WindowsSpec: Codable, Sendable, Equatable {
+    /// Secure Boot 启用 (Win11 强制要求, 默认 true)
+    public var secureBoot: Bool
+    /// TPM 2.0 启用 (Win11 强制要求, 默认 true; QEMU 通过 swtpm unix socket 提供)
+    public var tpmEnabled: Bool
+
+    public init(secureBoot: Bool = true, tpmEnabled: Bool = true) {
+        self.secureBoot = secureBoot
+        self.tpmEnabled = tpmEnabled
+    }
+}
+
 public struct VMConfig: Codable, Sendable, Equatable {
     public static let currentSchemaVersion = 1
 
@@ -116,6 +137,8 @@ public struct VMConfig: Codable, Sendable, Equatable {
     public var createdAt: Date
     public var displayName: String
     public var guestOS: GuestOSType
+    /// 后端引擎. 老 v1 config 缺该字段时由 init(from:) 兜底 .vz, 不需要 schema 迁移
+    public var engine: Engine
     public var cpuCount: Int
     public var memoryMiB: UInt64
     public var disks: [DiskSpec]
@@ -125,12 +148,14 @@ public struct VMConfig: Codable, Sendable, Equatable {
     public var bootFromDiskOnly: Bool
     public var macOS: MacOSSpec?
     public var linux: LinuxSpec?
+    public var windows: WindowsSpec?
 
     public init(
         id: UUID = UUID(),
         createdAt: Date = Date(),
         displayName: String,
         guestOS: GuestOSType,
+        engine: Engine = .vz,
         cpuCount: Int,
         memoryMiB: UInt64,
         disks: [DiskSpec],
@@ -138,13 +163,15 @@ public struct VMConfig: Codable, Sendable, Equatable {
         installerISO: String? = nil,
         bootFromDiskOnly: Bool = false,
         macOS: MacOSSpec? = nil,
-        linux: LinuxSpec? = nil
+        linux: LinuxSpec? = nil,
+        windows: WindowsSpec? = nil
     ) {
         self.schemaVersion = VMConfig.currentSchemaVersion
         self.id = id
         self.createdAt = createdAt
         self.displayName = displayName
         self.guestOS = guestOS
+        self.engine = engine
         self.cpuCount = cpuCount
         self.memoryMiB = memoryMiB
         self.disks = disks
@@ -153,5 +180,51 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.bootFromDiskOnly = bootFromDiskOnly
         self.macOS = macOS
         self.linux = linux
+        self.windows = windows
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, id, createdAt, displayName, guestOS, engine,
+             cpuCount, memoryMiB, disks, networks, installerISO,
+             bootFromDiskOnly, macOS, linux, windows
+    }
+
+    /// 自定义 decode: 仅为 engine 字段提供"缺省 .vz"兜底, 其他字段沿用合成默认行为
+    /// (老 v1 config.json 没有 engine 字段, 直接 decode 出 .vz; encode 时正常写出)
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
+        self.displayName = try c.decode(String.self, forKey: .displayName)
+        self.guestOS = try c.decode(GuestOSType.self, forKey: .guestOS)
+        self.engine = try c.decodeIfPresent(Engine.self, forKey: .engine) ?? .vz
+        self.cpuCount = try c.decode(Int.self, forKey: .cpuCount)
+        self.memoryMiB = try c.decode(UInt64.self, forKey: .memoryMiB)
+        self.disks = try c.decode([DiskSpec].self, forKey: .disks)
+        self.networks = try c.decodeIfPresent([NetworkSpec].self, forKey: .networks) ?? []
+        self.installerISO = try c.decodeIfPresent(String.self, forKey: .installerISO)
+        self.bootFromDiskOnly = try c.decodeIfPresent(Bool.self, forKey: .bootFromDiskOnly) ?? false
+        self.macOS = try c.decodeIfPresent(MacOSSpec.self, forKey: .macOS)
+        self.linux = try c.decodeIfPresent(LinuxSpec.self, forKey: .linux)
+        self.windows = try c.decodeIfPresent(WindowsSpec.self, forKey: .windows)
+    }
+
+    /// 校验 engine 与 guestOS 的合法组合 (CLAUDE.md「支持的 Guest OS 约束」).
+    /// BundleIO.save 与 hvm-cli create 应主动调用; Codable 本身不强制以保持容错.
+    public func validate() throws {
+        let allowed: [Engine]
+        switch guestOS {
+        case .macOS:   allowed = [.vz]            // VZMacOSInstaller 路径, QEMU 跑不了 macOS
+        case .linux:   allowed = [.vz, .qemu]     // 双后端
+        case .windows: allowed = [.qemu]          // VZ 无 TPM, QEMU 唯一选择
+        }
+        guard allowed.contains(engine) else {
+            throw HVMError.config(.invalidEnum(
+                field: "engine",
+                raw: engine.rawValue,
+                allowed: allowed.map(\.rawValue)
+            ))
+        }
     }
 }

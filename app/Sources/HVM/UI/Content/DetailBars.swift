@@ -413,8 +413,8 @@ struct StoppedContentView: View {
     private var bootModeLabel: String {
         if item.config.bootFromDiskOnly { return "from disk" }
         switch item.guestOS {
-        case .linux: return "from iso (installer mode)"
-        case .macOS: return "from ipsw (installer mode)"
+        case .linux, .windows: return "from iso (installer mode)"
+        case .macOS:           return "from ipsw (installer mode)"
         }
     }
 
