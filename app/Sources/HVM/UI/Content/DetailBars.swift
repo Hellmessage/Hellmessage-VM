@@ -766,7 +766,7 @@ struct DetailEmptyState: View {
                     }
                 }
                 .buttonStyle(HeroCTAStyle())
-                Text("⌘N")
+                Text("Cmd+N")
                     .font(HVMFont.small)
                     .foregroundStyle(HVMColor.textTertiary)
             }

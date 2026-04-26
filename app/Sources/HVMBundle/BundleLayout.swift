@@ -93,6 +93,17 @@ public enum BundleLayout {
         bundle.appendingPathComponent("tpm", isDirectory: true)
     }
 
+    /// AutoUnattend.xml 打包后的 ISO 路径 (Win11 SetupBypass + virtio 驱动自动装).
+    /// 由 WindowsUnattend.ensureISO 启动前生成 (幂等), 启动时作为第二个 cdrom 挂入.
+    public static func unattendISOURL(_ bundle: URL) -> URL {
+        bundle.appendingPathComponent("unattend.iso")
+    }
+
+    /// unattend ISO 的 staging 目录 (打 ISO 前的源文件夹). VM 启动后可清.
+    public static func unattendStageDir(_ bundle: URL) -> URL {
+        bundle.appendingPathComponent(".unattend-stage", isDirectory: true)
+    }
+
     /// 判断路径是否落在 disks/ 下 (防越界). path 为 config.json 里的相对路径
     public static func isDiskPathInSandbox(_ path: String) -> Bool {
         // 规范化后必须以 "disks/" 开头且不含 ".." 回跳

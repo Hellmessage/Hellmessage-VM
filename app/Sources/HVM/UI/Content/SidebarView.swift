@@ -14,6 +14,7 @@ struct SidebarView: View {
             header
             list
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(HVMColor.bgSidebar)
     }
 
@@ -74,6 +75,7 @@ struct SidebarView: View {
         }
         .padding(.horizontal, HVMSpace.lg)
         .padding(.top, HVMSpace.sm)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

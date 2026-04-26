@@ -34,6 +34,9 @@ public enum QemuArgsBuilder {
         /// guest serial console 的 unix socket 绝对路径 (QEMU 当 server, HVMHost 当 client).
         /// nil 时不挂 chardev/serial — 仅在 hvm-dbg console.* 不需要时跳过 (一期总是传).
         public let consoleSocketPath: String?
+        /// AutoUnattend ISO 绝对路径 (仅 windows + bypassInstallChecks 时由调用方注入).
+        /// 由 WindowsUnattend.ensureISO 启动前生成. nil 不挂第二 cdrom.
+        public let unattendISOPath: String?
 
         public init(
             config: VMConfig,
@@ -42,7 +45,8 @@ public enum QemuArgsBuilder {
             qmpSocketPath: String,
             virtioWinISOPath: String? = nil,
             swtpmSocketPath: String? = nil,
-            consoleSocketPath: String? = nil
+            consoleSocketPath: String? = nil,
+            unattendISOPath: String? = nil
         ) {
             self.config = config
             self.bundleURL = bundleURL
@@ -51,6 +55,7 @@ public enum QemuArgsBuilder {
             self.virtioWinISOPath = virtioWinISOPath
             self.swtpmSocketPath = swtpmSocketPath
             self.consoleSocketPath = consoleSocketPath
+            self.unattendISOPath = unattendISOPath
         }
     }
 
@@ -130,7 +135,14 @@ public enum QemuArgsBuilder {
             args += ["-drive", "file=\(iso),if=virtio,media=cdrom,readonly=on"]
         }
 
-        // ---- virtio-win 驱动 ISO (仅 windows guest, 第二 cdrom) ----
+        // ---- AutoUnattend ISO (仅 windows + bypassInstallChecks 时, 第二 cdrom) ----
+        // Windows Setup 启动后自动扫所有移动介质找 Autounattend.xml, 跳过硬件检查 +
+        // OOBE 首登录跑 pnputil 装 virtio-win 驱动. 由 WindowsUnattend.ensureISO 启动前生成.
+        if cfg.guestOS == .windows, let unattendPath = inputs.unattendISOPath {
+            args += ["-drive", "file=\(unattendPath),if=virtio,media=cdrom,readonly=on"]
+        }
+
+        // ---- virtio-win 驱动 ISO (仅 windows guest, 第三 cdrom) ----
         // Win11 装机看不到 virtio-blk 主盘, 必须从 virtio-win.iso 加载 viostor.sys
         // 非 windows guest 即便传了 path 也不挂 (省得 Linux 装机界面多个空 cdrom 干扰)
         if cfg.guestOS == .windows, let virtioWinPath = inputs.virtioWinISOPath {

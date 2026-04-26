@@ -180,10 +180,35 @@ public struct WindowsSpec: Codable, Sendable, Equatable {
     public var secureBoot: Bool
     /// TPM 2.0 启用 (Win11 强制要求, 默认 true; QEMU 通过 swtpm unix socket 提供)
     public var tpmEnabled: Bool
+    /// 跳过 Win11 Setup 硬件检查 (TPM/SecureBoot/RAM/CPU/Storage). 默认 true.
+    /// 实现路径: WindowsUnattend.ensureISO 生成 AutoUnattend.xml + hdiutil makehybrid 打 ISO,
+    /// 启动时挂第二个 cdrom; windowsPE pass 跑 reg add LabConfig\Bypass*Check=1.
+    /// 关掉则不挂 unattend.iso, 用户需要在 Setup 里按 Shift+F10 自己跑命令.
+    public var bypassInstallChecks: Bool
+    /// 装完 Windows 后首次登录自动从 virtio-win.iso 静默装 virtio 驱动 (NetKVM/viostor/viogpudo).
+    /// 默认 true. 走 oobeSystem pass 的 FirstLogonCommands 跑 certutil + pnputil /add-driver /subdirs /install.
+    /// 关掉则用户需进系统后手动从 virtio-win cdrom 装驱动.
+    public var autoInstallVirtioWin: Bool
 
-    public init(secureBoot: Bool = true, tpmEnabled: Bool = true) {
+    public init(secureBoot: Bool = true, tpmEnabled: Bool = true,
+                bypassInstallChecks: Bool = true, autoInstallVirtioWin: Bool = true) {
         self.secureBoot = secureBoot
         self.tpmEnabled = tpmEnabled
+        self.bypassInstallChecks = bypassInstallChecks
+        self.autoInstallVirtioWin = autoInstallVirtioWin
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case secureBoot, tpmEnabled, bypassInstallChecks, autoInstallVirtioWin
+    }
+
+    /// 老 config (新增字段前) 缺这两个字段 → 默认 true 兜底.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.secureBoot = try c.decodeIfPresent(Bool.self, forKey: .secureBoot) ?? true
+        self.tpmEnabled = try c.decodeIfPresent(Bool.self, forKey: .tpmEnabled) ?? true
+        self.bypassInstallChecks = try c.decodeIfPresent(Bool.self, forKey: .bypassInstallChecks) ?? true
+        self.autoInstallVirtioWin = try c.decodeIfPresent(Bool.self, forKey: .autoInstallVirtioWin) ?? true
     }
 }
 

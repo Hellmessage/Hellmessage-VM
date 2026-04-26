@@ -105,6 +105,25 @@ public enum QemuHostEntry {
         let consoleSocketURL = HVMPaths.consoleSocketPath(for: config.id)
         try? FileManager.default.removeItem(at: consoleSocketURL)
 
+        // 3.7 AutoUnattend ISO (仅 windows + bypassInstallChecks/autoInstallVirtioWin 任一开).
+        // 启动前用 hdiutil makehybrid 现做现挂; 失败 fail-soft (warn + 不挂第二 cdrom),
+        // 用户仍可手动按 Shift+F10 在 Setup 里跑 reg add. 不阻塞 VM 启动.
+        var unattendISOPath: String? = nil
+        if config.guestOS == .windows, let win = config.windows,
+           win.bypassInstallChecks || win.autoInstallVirtioWin {
+            do {
+                let isoURL = try WindowsUnattend.ensureISO(
+                    bundle: bundleURL,
+                    bypassInstallChecks: win.bypassInstallChecks,
+                    autoInstallVirtioWin: win.autoInstallVirtioWin
+                )
+                unattendISOPath = isoURL.path
+                fputs("HVMHost(qemu): ✔ unattend ISO 就绪 \(isoURL.path) (bypass=\(win.bypassInstallChecks), virtio=\(win.autoInstallVirtioWin))\n", stderr)
+            } catch {
+                fputs("HVMHost(qemu): ⚠ unattend ISO 生成失败 (\(error)); Win11 Setup 将不会自动跳过硬件检查, 用户需手动 Shift+F10 跑 reg add\n", stderr)
+            }
+        }
+
         // 4. 构造 argv
         let args: [String]
         do {
@@ -113,7 +132,8 @@ public enum QemuHostEntry {
                 qemuRoot: qemuRoot, qmpSocketPath: qmpSocketURL.path,
                 virtioWinISOPath: virtioWinPath,
                 swtpmSocketPath: swtpmSockPath,
-                consoleSocketPath: consoleSocketURL.path
+                consoleSocketPath: consoleSocketURL.path,
+                unattendISOPath: unattendISOPath
             )
             args = try QemuArgsBuilder.build(inputs)
         } catch {
