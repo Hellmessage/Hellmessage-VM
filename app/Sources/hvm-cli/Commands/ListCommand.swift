@@ -47,7 +47,10 @@ struct ListCommand: AsyncParsableCommand {
             // 主盘路径走 config.disks (engine-aware), 不再用 BundleLayout 常量推断
             let mainURL = config.mainDiskURL(in: b) ?? b
             let actualBytes = (try? DiskFactory.actualBytes(at: mainURL)) ?? 0
-            let logicalBytes = (try? DiskFactory.logicalBytes(at: mainURL)) ?? 0
+            // qcow2 的 stat.st_size = 文件实际字节 (刚创 ~200KB), 不是 guest 看到的 virtual size,
+            // 直接当 logical 用会显示成 0Gi. 用 DiskSpec.sizeGiB (config 里的名义容量) 兜底.
+            // raw sparse: logicalBytes 等于 ftruncate 撑出来的名义大小, 也跟 sizeGiB 对齐, 仍可一致使用.
+            let logicalGiB = UInt64(config.disks.first?.sizeGiB ?? 0)
 
             rows.append(Row(
                 name: b.deletingPathExtension().lastPathComponent,
@@ -57,7 +60,7 @@ struct ListCommand: AsyncParsableCommand {
                 cpuCount: config.cpuCount,
                 memoryMiB: config.memoryMiB,
                 mainDiskActualGiB: Double(actualBytes) / Double(1 << 30),
-                mainDiskLogicalGiB: logicalBytes / (1 << 30),
+                mainDiskLogicalGiB: logicalGiB,
                 bundlePath: b.path
             ))
         }

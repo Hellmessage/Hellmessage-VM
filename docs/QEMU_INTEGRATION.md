@@ -14,7 +14,7 @@
 | **QEMU 版本** | `v10.2.0` (2025-12) | HVF 路径稳定 + virtio-scsi 多队列 + 5 个月 bake-in;v11.0 太新不赌 |
 | **产物来源** (M5) | **方案 B**: 本地/CI 构建产物落 `third_party/qemu-stage/`, 不进 git | 详见 `scripts/qemu-build.sh` |
 | **Linux 后端** (M7) | **VZ + QEMU 双后端**: 默认 VZ, 高级模式可选 QEMU | UI 需提供切换;Windows 强制 QEMU |
-| **EDK2 firmware** | 从 Linaro 官方下载预编译 `QEMU_EFI.fd` | 由 `qemu-build.sh` 拉取, 不打包 EDK2 源码 |
+| **EDK2 firmware** | 直接用 QEMU 自带 `pc-bios/edk2-aarch64-code.fd.bz2` (kraxel build) | 跟 brew QEMU 同源, 与 Ubuntu 24.04 arm64 / Win11 arm64 ISO 实战兼容; 早期试过 retrage edk2-nightly RELEASE build, 与 Ubuntu ISO 不兼容 (EDK2 splash 后不试 boot device, 已弃用) |
 | **virtio-win 驱动 ISO** | **不入包**, 首次创建 Win VM 按需下载到 `~/Library/Application Support/HVM/cache/virtio-win/` | 体积约 700MB, 入包会让 .app 爆胀 |
 | **TPM** | `swtpm` + `libtpms` 由 brew 锁版本 | Win11 TPM 2.0 必需; QEMU 通过 unix socket 对接 swtpm daemon |
 | **补丁管理** | `patches/qemu/series` + 单文件 `.patch` | 禁止 fork 上游仓库;详见 `patches/qemu/README.md` |
@@ -129,7 +129,7 @@ HVM.app/Contents/
 | 编号 | 内容 |
 |------|------|
 | M1 | ✅ **已决（范围收敛）**：包内只考虑带 `qemu-system-aarch64`；宿主机为 Apple Silicon，guest 仅 AArch64 的 **Windows 与 Linux**。 |
-| M2 | ✅ **已决**：EDK2 firmware 用 Linaro 官方预编译 `QEMU_EFI.fd`，由 `qemu-build.sh` 拉取；GPLv2 license 文本随包，commit SHA 写入 `MANIFEST.json`。 |
+| M2 | ✅ **已决**：EDK2 firmware 直接用 QEMU 自带 `pc-bios/edk2-aarch64-code.fd.bz2` (kraxel build, 与 Ubuntu/Win11 arm64 ISO 兼容)；不再外网下载 (早期 retrage edk2-nightly 与 Ubuntu ISO 不兼容已弃用)；GPLv2 license 文本随包，commit SHA 写入 `MANIFEST.json`。 |
 | M3 | 显示：一期走 **`-display cocoa`**（QEMU 自己开窗口，与 HVM GUI 解耦）；后续若要嵌入 HVM 主窗口，再评估 SPICE/管道帧缓冲方案。 |
 | M4 | 网络：一期走 QEMU `-netdev user`（user-mode NAT），与 VZ 的 NAT 语义对齐；桥接审批通过后再做 `-netdev vmnet-bridged`（Apple 提供，无需 QEMU 桥接 helper）。 |
 | M5 | ✅ **已决（方案 B）**：本地/CI 构建产物落 `third_party/qemu-stage/`，仓库 ignore；`scripts/qemu-build.sh` 一键复现，CI 缓存或本地 `make qemu` 都可。 |

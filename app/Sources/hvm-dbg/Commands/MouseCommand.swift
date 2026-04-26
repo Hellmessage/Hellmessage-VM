@@ -88,11 +88,13 @@ struct MouseCommand: AsyncParsableCommand {
         }
     }
 
-    private func parsePair(_ s: String, label: String) throws -> (Double, Double) {
+    private func parsePair(_ s: String, label: String) throws -> (Int, Int) {
+        // host 侧 (QemuHostState.parseXY / DbgOps.handleMouse) 只接受整数像素 — 用
+        // Double 解析会把 "640.0" 发过去, host 端 Int(xs) 返回 nil 报"必须是整数".
         let parts = s.split(separator: ",")
         guard parts.count == 2,
-              let x = Double(parts[0].trimmingCharacters(in: .whitespaces)),
-              let y = Double(parts[1].trimmingCharacters(in: .whitespaces)) else {
+              let x = Int(parts[0].trimmingCharacters(in: .whitespaces)),
+              let y = Int(parts[1].trimmingCharacters(in: .whitespaces)) else {
             throw HVMError.config(.invalidEnum(field: label, raw: s, allowed: ["x,y"]))
         }
         return (x, y)

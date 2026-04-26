@@ -13,10 +13,18 @@ QEMU_TAG="v10.2.0"
 QEMU_REPO="https://gitlab.com/qemu-project/qemu.git"
 # EDK2 aarch64 UEFI 预编译固件 (Win11 / Linux arm64 启动必需)
 # code.fd 是 RO firmware; vars.fd 是 RW NVRAM vars 模板 (Win11 SecureBoot 必需).
-# 来源说明: 旧用 Linaro releases, 但 Linaro 仅发 QEMU_EFI.fd 不发 QEMU_VARS.fd, 切到 retrage edk2-nightly
-# (github.io 公开镜像, RELEASEAARCH64_* 双文件 build 一致, 不匹配会导致 SecureBoot/Boot 异常).
-EDK2_FIRMWARE_URL="https://retrage.github.io/edk2-nightly/bin/RELEASEAARCH64_QEMU_EFI.fd"
-EDK2_VARS_URL="https://retrage.github.io/edk2-nightly/bin/RELEASEAARCH64_QEMU_VARS.fd"
+#
+# 来源演变:
+#   - 早期: Linaro releases (仅发 QEMU_EFI.fd 不发 QEMU_VARS.fd)
+#   - 中期: retrage edk2-nightly (RELEASEAARCH64_QEMU_{EFI,VARS}.fd) — 实测 v10.2.0
+#           build 与 Ubuntu 24.04.4 arm64 ISO 不兼容: EDK2 splash 后不试 boot device,
+#           卡在 "Start boot option" 不动. 已废弃.
+#   - 当前: 直接用 QEMU 自带 pc-bios/edk2-aarch64-code.fd.bz2 (kraxel build).
+#           v10.2.0 源码 tarball 自带, make install 后落 share/qemu/edk2-aarch64-code.fd.
+#           跟 brew qemu 同源, 跟 Ubuntu / Win11 arm64 ISO 实战兼容.
+#           vars 文件 QEMU 不带 64-bit 版本, 复用 32-bit edk2-arm-vars.fd
+#           (空 vars 通用, hell-vm 同 hack), padding 到 64MB.
+# 不再外网下载 firmware, fetch_edk2_firmware() 改为校验 + 拷贝 QEMU 自带产物.
 
 # brew 包列表 (锁定):
 #   - meson/ninja/pkgconf/glib/pixman/libslirp/dtc/capstone — QEMU 编译依赖
@@ -193,23 +201,45 @@ build_qemu() {
 }
 
 # ---- 7. EDK2 firmware (Win11/Linux arm64 UEFI 引导必需) ----
+# `make install` 已把 QEMU 自带 pc-bios/edk2-aarch64-code.fd.bz2 解压到
+# share/qemu/edk2-aarch64-code.fd; 这里只做两件事:
+#   1) 校验 code.fd 存在且看起来是 firmware (>1MB)
+#   2) QEMU 不带 64-bit vars 模板, 用 edk2-arm-vars.fd 复制后 padding 到 64MB
+# 用 python truncate (BSD/GNU 都没有 `truncate` 命令的兼容写法), 不依赖 brew 的 coreutils.
 fetch_edk2_firmware() {
-    step "下载 EDK2 aarch64 firmware (RELEASEAARCH64_QEMU_{EFI,VARS}.fd, retrage edk2-nightly)"
+    step "校验 + 准备 EDK2 aarch64 firmware (用 QEMU 自带 kraxel build)"
     local fw_dir="$STAGING_DIR/share/qemu"
     local fw_dst="$fw_dir/edk2-aarch64-code.fd"
     local vars_dst="$fw_dir/edk2-aarch64-vars.fd"
-    mkdir -p "$fw_dir"
-    curl -fL --retry 3 -o "$fw_dst.tmp" "$EDK2_FIRMWARE_URL" \
-        || err "EDK2 firmware 下载失败: $EDK2_FIRMWARE_URL"
-    mv "$fw_dst.tmp" "$fw_dst"
-    curl -fL --retry 3 -o "$vars_dst.tmp" "$EDK2_VARS_URL" \
-        || err "EDK2 vars 下载失败: $EDK2_VARS_URL"
-    mv "$vars_dst.tmp" "$vars_dst"
+    local arm_vars="$fw_dir/edk2-arm-vars.fd"
+    [[ -d "$fw_dir" ]] || err "$fw_dir 不存在 (make install 应生成)"
+    [[ -f "$fw_dst" ]] || err "$fw_dst 缺失 (QEMU make install 异常?)"
+    local code_sz; code_sz=$(stat -f %z "$fw_dst" 2>/dev/null || stat -c %s "$fw_dst")
+    [[ "$code_sz" -gt 1048576 ]] || err "$fw_dst 大小异常: $code_sz < 1MB"
+
+    # vars: 复制 32-bit 空 vars (空 vars 通用; hell-vm 同 hack)
+    [[ -f "$arm_vars" ]] || err "$arm_vars 缺失 (期望 QEMU 自带)"
+    cp -f "$arm_vars" "$vars_dst"
+
     # QEMU virt 机器 pflash device 固定 64MB; 必须 padding, 否则启动报
     # "device requires 67108864 bytes, pflash0 block backend provides X bytes"
-    truncate -s 64M "$fw_dst"
-    truncate -s 64M "$vars_dst"
-    ok "EDK2 firmware: $fw_dst (64MB)"
+    pad_to_64m() {
+        python3 -c "
+import os, sys
+p = sys.argv[1]
+sz = os.path.getsize(p)
+target = 64*1024*1024
+if sz < target:
+    with open(p, 'r+b') as f:
+        f.seek(target - 1)
+        f.write(b'\0')
+elif sz > target:
+    raise SystemExit('file %s already larger than 64MB: %d' % (p, sz))
+" "$1"
+    }
+    pad_to_64m "$fw_dst"
+    pad_to_64m "$vars_dst"
+    ok "EDK2 firmware: $fw_dst (64MB, kraxel build 来自 QEMU $QEMU_TAG 源码)"
     ok "EDK2 vars 模板: $vars_dst (64MB; 创建 Win VM 时拷贝到 bundle/nvram/efi-vars.fd)"
 }
 
@@ -478,7 +508,7 @@ write_manifest() {
     "--enable-hvf"
   ],
   "patches": $patches_json,
-  "edk2_firmware_url": "$EDK2_FIRMWARE_URL",
+  "edk2_firmware_source": "QEMU $QEMU_TAG 源码自带 pc-bios/edk2-aarch64-code.fd.bz2 (kraxel build)",
   "source_note": "QEMU 上游可由 qemu_tag + qemu_commit 在 qemu_repo 复现; HVM 自身源码见本仓库 GitHub 公开页"
 }
 EOF
