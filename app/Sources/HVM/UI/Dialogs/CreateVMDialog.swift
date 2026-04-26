@@ -561,15 +561,22 @@ struct CreateVMDialog: View {
             case .shared: netMode = .shared
             }
 
-            // engine-aware 主盘文件: VZ → main.img (raw), QEMU → main.qcow2
+            // engine-aware 主盘: VZ → os.img (raw), QEMU → os.qcow2
+            let mainFormat: DiskFormat = engineValue == .qemu ? .qcow2 : .raw
             let mainDiskFile = "\(BundleLayout.disksDirName)/\(BundleLayout.mainDiskFileName(for: engineValue))"
+            let mainDisk = DiskSpec(
+                role: .main,
+                path: mainDiskFile,
+                sizeGiB: UInt64(diskGiB),
+                format: mainFormat
+            )
             let config = VMConfig(
                 displayName: name,
                 guestOS: guestOS,
                 engine: engineValue,
                 cpuCount: cpu,
                 memoryMiB: UInt64(memoryGiB) * 1024,
-                disks: [DiskSpec(role: .main, path: mainDiskFile, sizeGiB: UInt64(diskGiB))],
+                disks: [mainDisk],
                 networks: [NetworkSpec(mode: netMode, macAddress: MACAddressGenerator.random())],
                 installerISO: guestOS == .macOS ? nil : isoPath,
                 bootFromDiskOnly: false,
@@ -585,11 +592,11 @@ struct CreateVMDialog: View {
                 requiredBytes: UInt64(diskGiB) * (1 << 30)
             )
             try BundleIO.create(at: bundleURL, config: config)
-            // qcow2 路径需要 qemu-img 二进制; raw 路径 qemuImg=nil 走 ftruncate
-            let qemuImg = engineValue == .qemu ? (try? QemuPaths.qemuImgBinary()) : nil
+            let qemuImg = mainFormat == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
             try DiskFactory.create(
-                at: BundleLayout.mainDiskURL(bundleURL, engine: engineValue),
+                at: bundleURL.appendingPathComponent(mainDiskFile),
                 sizeGiB: UInt64(diskGiB),
+                format: mainFormat,
                 qemuImg: qemuImg
             )
 

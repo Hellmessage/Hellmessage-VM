@@ -90,18 +90,20 @@ struct DiskResizeDialog: View {
             if request.diskID == "main" {
                 idx = config.disks.firstIndex { $0.role == .main }
             } else {
+                // 兼容老 .img 与新 .qcow2 数据盘
+                let imgPath   = "\(BundleLayout.disksDirName)/data-\(request.diskID).img"
+                let qcow2Path = "\(BundleLayout.disksDirName)/data-\(request.diskID).qcow2"
                 idx = config.disks.firstIndex {
-                    $0.role == .data &&
-                    $0.path == "\(BundleLayout.disksDirName)/data-\(request.diskID).img"
+                    $0.role == .data && ($0.path == imgPath || $0.path == qcow2Path)
                 }
             }
             guard let i = idx else {
                 throw HVMError.config(.missingField(name: "disk id=\(request.diskID) 未找到"))
             }
             let absURL = request.item.bundleURL.appendingPathComponent(config.disks[i].path)
-            // qcow2 走 qemu-img resize; raw 走 ftruncate. 入口按 absURL 扩展名分发.
-            let qemuImg = (try? QemuPaths.qemuImgBinary())
-            try DiskFactory.grow(at: absURL, toGiB: toGiB, qemuImg: qemuImg)
+            let format = config.disks[i].format
+            let qemuImg = format == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
+            try DiskFactory.grow(at: absURL, toGiB: toGiB, format: format, qemuImg: qemuImg)
             config.disks[i].sizeGiB = toGiB
             try BundleIO.save(config: config, to: request.item.bundleURL)
             model.refreshList()

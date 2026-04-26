@@ -1,29 +1,27 @@
 // HVMStorage/DiskFactory.swift
-// 磁盘文件创建 / 扩容 / 删除. 支持两种格式, 由文件扩展名决定:
-//   - .img   → raw sparse (ftruncate, 依赖 APFS sparse)        — VZ 后端必走
-//   - .qcow2 → QEMU qcow2 (调 qemu-img create / resize)        — QEMU 后端走
-// VZ 后端: VZDiskImageStorageDeviceAttachment 只接受 raw, 必须 .img.
-// QEMU 后端: 新建走 qcow2; 老 VM 已经是 raw .img 仍可继续运行 (QemuArgsBuilder
-// 自动按扩展名选 format=raw/qcow2).
+// 磁盘文件创建 / 扩容 / 删除. 入口接收 DiskFormat 参数显式分流, 不再推断扩展名.
+//   - .raw   → ftruncate sparse (依赖 APFS sparse, VZ 后端必走)
+//   - .qcow2 → qemu-img create / resize (QEMU 后端走, 必传 qemuImg URL)
+// VZ 后端: VZDiskImageStorageDeviceAttachment 只接受 raw, 强约束.
+// QEMU 后端: 新建走 qcow2; 老 VM 已是 raw 仍可继续运行 (DiskSpec.format 持久化在 config).
 //
 // 详见 docs/STORAGE.md + CLAUDE.md "磁盘与存储约束".
 
 import Foundation
 import Darwin
 import HVMCore
+import HVMBundle
 
 public enum DiskFactory {
     private static let log = HVMLog.logger("storage.disk")
 
-    /// 创建磁盘. 按 url 扩展名自动分发:
-    ///   - "*.img"   → raw sparse (ftruncate)
-    ///   - "*.qcow2" → qemu-img create -f qcow2 <path> <size>G    (要求 qemuImg 非 nil)
-    /// - Throws: HVMError.storage.diskAlreadyExists / .creationFailed / .qemuImgUnavailable
-    public static func create(at url: URL, sizeGiB: UInt64, qemuImg: URL? = nil) throws {
+    /// 创建磁盘. format 决定走 raw 还是 qcow2 路径; qcow2 必须传 qemuImg.
+    /// - Throws: HVMError.storage.diskAlreadyExists / .creationFailed
+    public static func create(at url: URL, sizeGiB: UInt64, format: DiskFormat, qemuImg: URL? = nil) throws {
         if FileManager.default.fileExists(atPath: url.path) {
             throw HVMError.storage(.diskAlreadyExists(path: url.path))
         }
-        switch format(of: url) {
+        switch format {
         case .raw:
             try createRaw(at: url, sizeGiB: sizeGiB)
         case .qcow2:
@@ -32,14 +30,12 @@ public enum DiskFactory {
             }
             try createQcow2(at: url, sizeGiB: sizeGiB, qemuImg: qemuImg)
         }
-        Self.log.info("disk created: \(url.lastPathComponent, privacy: .public) sizeGiB=\(sizeGiB)")
+        Self.log.info("disk created: \(url.lastPathComponent, privacy: .public) sizeGiB=\(sizeGiB) format=\(format.rawValue, privacy: .public)")
     }
 
-    /// 扩容磁盘 (只能增大). 按 url 扩展名自动分发:
-    ///   - "*.img"   → ftruncate (raw, host 侧改 size)
-    ///   - "*.qcow2" → qemu-img resize <path> +Δ  (qcow2 内部元数据)
-    public static func grow(at url: URL, toGiB: UInt64, qemuImg: URL? = nil) throws {
-        switch format(of: url) {
+    /// 扩容磁盘 (只能增大). format 决定走 ftruncate 还是 qemu-img resize.
+    public static func grow(at url: URL, toGiB: UInt64, format: DiskFormat, qemuImg: URL? = nil) throws {
+        switch format {
         case .raw:
             try growRaw(at: url, toGiB: toGiB)
         case .qcow2:
@@ -60,7 +56,7 @@ public enum DiskFactory {
         Self.log.info("disk deleted: \(url.lastPathComponent, privacy: .public)")
     }
 
-    /// 逻辑大小 (stat.st_size 对 raw 即名义大小; qcow2 是文件本身字节数, 非 guest 看到的虚拟容量)
+    /// 逻辑大小 (stat.st_size). raw 即名义大小; qcow2 是文件本身字节数, 非 guest 看到的虚拟容量.
     public static func logicalBytes(at url: URL) throws -> UInt64 {
         var st = stat()
         guard stat(url.path, &st) == 0 else {
@@ -84,17 +80,6 @@ public enum DiskFactory {
             .replacingOccurrences(of: "-", with: "")
             .prefix(8)
             .lowercased()
-    }
-
-    // MARK: - 文件格式枚举
-
-    public enum DiskFormat: String, Sendable {
-        case raw, qcow2
-    }
-
-    /// 按文件扩展名识别格式. 未知扩展名当 raw 处理 (向后兼容老 VM 无扩展名场景, 概率极低).
-    public static func format(of url: URL) -> DiskFormat {
-        url.pathExtension.lowercased() == "qcow2" ? .qcow2 : .raw
     }
 
     // MARK: - raw (ftruncate)
@@ -137,13 +122,12 @@ public enum DiskFactory {
     // MARK: - qcow2 (qemu-img)
 
     private static func createQcow2(at url: URL, sizeGiB: UInt64, qemuImg: URL) throws {
-        // qemu-img create -f qcow2 <path> <size>G
         let proc = Process()
         proc.executableURL = qemuImg
         proc.arguments = ["create", "-f", "qcow2", url.path, "\(sizeGiB)G"]
         let stderrPipe = Pipe()
         proc.standardError = stderrPipe
-        proc.standardOutput = Pipe()  // 静默 stdout
+        proc.standardOutput = Pipe()
         do {
             try proc.run()
         } catch {
@@ -159,10 +143,7 @@ public enum DiskFactory {
         }
     }
 
-    /// qcow2 扩容. qemu-img resize 不支持 shrink (无 --shrink 标志时), 与 raw 行为一致.
     private static func growQcow2(at url: URL, toGiB: UInt64, qemuImg: URL) throws {
-        // 当前虚拟容量 (bytes) 由 qemu-img info --output=json 拿. 简化: 直接用 toGiB 绝对值,
-        // qemu-img resize <path> <size>G 会拒绝 shrink (除非加 --shrink), 错误回到 caller.
         let proc = Process()
         proc.executableURL = qemuImg
         proc.arguments = ["resize", url.path, "\(toGiB)G"]
@@ -179,7 +160,6 @@ public enum DiskFactory {
             let stderr = (try? stderrPipe.fileHandleForReading.readToEnd())
                 .flatMap { String(data: $0, encoding: .utf8) } ?? ""
             Self.log.error("qemu-img resize 失败 status=\(proc.terminationStatus) stderr=\(stderr, privacy: .public)")
-            // shrink / 其他失败统一抛 ioError
             throw HVMError.storage(.ioError(errno: EIO, path: url.path))
         }
         Self.log.info("disk grown (qcow2): \(url.lastPathComponent, privacy: .public) → \(toGiB)GiB")

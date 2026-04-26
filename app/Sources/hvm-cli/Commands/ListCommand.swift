@@ -44,7 +44,8 @@ struct ListCommand: AsyncParsableCommand {
             let state = BundleLock.isBusy(bundleURL: b) ? "running" : "stopped"
             guard let config = try? BundleIO.load(from: b) else { continue }
 
-            let mainURL = BundleLayout.mainDiskURL(b)
+            // 主盘路径走 config.disks (engine-aware), 不再用 BundleLayout 常量推断
+            let mainURL = config.mainDiskURL(in: b) ?? b
             let actualBytes = (try? DiskFactory.actualBytes(at: mainURL)) ?? 0
             let logicalBytes = (try? DiskFactory.logicalBytes(at: mainURL)) ?? 0
 

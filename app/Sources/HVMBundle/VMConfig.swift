@@ -1,5 +1,8 @@
 // HVMBundle/VMConfig.swift
-// config.json v1 的 Codable 映射. schema 见 docs/VM_BUNDLE.md
+// config.yaml schema v2 的 Codable 映射. schema 见 docs/VM_BUNDLE.md
+// schema 历史:
+//   v1 (.json): 老格式, 已断兼容, 不再读取
+//   v2 (.yaml): 当前. DiskSpec 加 format 字段 (raw/qcow2)
 
 import Foundation
 import HVMCore
@@ -37,18 +40,52 @@ public enum DiskRole: String, Codable, Sendable {
     case data
 }
 
+/// 磁盘文件格式. 持久化到 config.yaml, 运行时读 disk.format 不再靠扩展名推断.
+///   - raw   → ftruncate sparse, VZ 后端必走
+///   - qcow2 → qemu-img create / resize, QEMU 后端走
+public enum DiskFormat: String, Codable, Sendable, CaseIterable {
+    case raw
+    case qcow2
+}
+
 public struct DiskSpec: Codable, Sendable, Equatable {
     public var role: DiskRole
-    /// 相对 bundle root 的路径 (例 "disks/main.img")
+    /// 相对 bundle root 的路径 (例 "disks/os.img" 或 "disks/os.qcow2")
     public var path: String
     public var sizeGiB: UInt64
     public var readOnly: Bool
+    /// 文件格式. 创建时按 engine 决定 (vz=raw, qemu=qcow2), 持久化到 config.yaml.
+    public var format: DiskFormat
 
-    public init(role: DiskRole, path: String, sizeGiB: UInt64, readOnly: Bool = false) {
+    public init(role: DiskRole, path: String, sizeGiB: UInt64, format: DiskFormat, readOnly: Bool = false) {
         self.role = role
         self.path = path
         self.sizeGiB = sizeGiB
+        self.format = format
         self.readOnly = readOnly
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case role, path, sizeGiB, format, readOnly
+    }
+
+    /// decode 兜底:
+    ///   - readOnly 缺 → false
+    ///   - format 缺 → 按 path 扩展名推断 (.qcow2 → qcow2, 其他 → raw),
+    ///     仅适用 ConfigMigrator v1→v2 临时桥接 (.json 已断兼容,
+    ///     正常情况下 yaml 一定带 format 字段)
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.role = try c.decode(DiskRole.self, forKey: .role)
+        self.path = try c.decode(String.self, forKey: .path)
+        self.sizeGiB = try c.decode(UInt64.self, forKey: .sizeGiB)
+        self.readOnly = try c.decodeIfPresent(Bool.self, forKey: .readOnly) ?? false
+        if let fmt = try c.decodeIfPresent(DiskFormat.self, forKey: .format) {
+            self.format = fmt
+        } else {
+            let ext = (path as NSString).pathExtension.lowercased()
+            self.format = (ext == "qcow2") ? .qcow2 : .raw
+        }
     }
 }
 
@@ -151,7 +188,9 @@ public struct WindowsSpec: Codable, Sendable, Equatable {
 }
 
 public struct VMConfig: Codable, Sendable, Equatable {
-    public static let currentSchemaVersion = 1
+    /// schema v1: JSON, DiskSpec 无 format 字段 (已断兼容, 不再读)
+    /// schema v2: YAML, DiskSpec 加 format (raw / qcow2)
+    public static let currentSchemaVersion = 2
 
     public var schemaVersion: Int
     public var id: UUID
@@ -229,6 +268,19 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.macOS = try c.decodeIfPresent(MacOSSpec.self, forKey: .macOS)
         self.linux = try c.decodeIfPresent(LinuxSpec.self, forKey: .linux)
         self.windows = try c.decodeIfPresent(WindowsSpec.self, forKey: .windows)
+    }
+
+    // MARK: - 主盘路径 helper (运行时不要用 BundleLayout.mainDiskName 之类常量推断)
+
+    /// 主盘 (role=.main) 的 path (相对 bundle 根的路径). 不存在时返 nil.
+    public var mainDiskRelPath: String? {
+        disks.first(where: { $0.role == .main })?.path
+    }
+
+    /// 主盘绝对 URL (从 config 读, 不依赖 BundleLayout 常量).
+    public func mainDiskURL(in bundle: URL) -> URL? {
+        guard let rel = mainDiskRelPath else { return nil }
+        return bundle.appendingPathComponent(rel)
     }
 
     /// 校验 engine 与 guestOS 的合法组合 (CLAUDE.md「支持的 Guest OS 约束」).

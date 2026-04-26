@@ -5,7 +5,9 @@
 import Foundation
 
 public enum BundleLayout {
-    public static let configFileName    = "config.json"
+    public static let configFileName    = "config.yaml"
+    /// 老 .json 文件名, 仅用于 BundleIO 启动时探测并报"已断兼容"错误
+    public static let legacyConfigFileName = "config.json"
     public static let lockFileName      = ".lock"
     public static let disksDirName      = "disks"
     public static let auxiliaryDirName  = "auxiliary"
@@ -14,10 +16,6 @@ public enum BundleLayout {
     public static let metaDirName       = "meta"
     public static let snapshotsDirName  = "snapshots"
 
-    /// 老的常量, 仅 VZ raw 主盘文件名. 新代码请用 mainDiskName(for:).
-    public static let mainDiskName      = "os.img"
-    /// QEMU 后端的主盘文件名 (qcow2)
-    public static let mainDiskNameQcow2 = "os.qcow2"
     public static let nvramFileName     = "efi-vars.fd"
     public static let auxStorageName    = "aux-storage"
     public static let machineIdentifier = "machine-identifier"
@@ -28,6 +26,10 @@ public enum BundleLayout {
         bundle.appendingPathComponent(configFileName)
     }
 
+    public static func legacyConfigURL(_ bundle: URL) -> URL {
+        bundle.appendingPathComponent(legacyConfigFileName)
+    }
+
     public static func lockURL(_ bundle: URL) -> URL {
         bundle.appendingPathComponent(lockFileName)
     }
@@ -36,40 +38,21 @@ public enum BundleLayout {
         bundle.appendingPathComponent(disksDirName, isDirectory: true)
     }
 
-    /// 老 API: 仅适用 VZ raw 主盘. 新代码请用 mainDiskURL(_:engine:).
-    public static func mainDiskURL(_ bundle: URL) -> URL {
-        disksDir(bundle).appendingPathComponent(mainDiskName)
-    }
-
-    /// 按 engine 选择主盘文件名:
-    ///   - .vz   → main.img    (raw, VZ 必需)
-    ///   - .qemu → main.qcow2  (qcow2)
+    /// 创建 VM 时根据 engine 选择主盘文件名 (写入 DiskSpec.path 持久化).
+    /// 运行时永远从 VMConfig.mainDiskRelPath 读, 不再调用此函数.
     public static func mainDiskFileName(for engine: Engine) -> String {
         switch engine {
-        case .vz:   return mainDiskName
-        case .qemu: return mainDiskNameQcow2
+        case .vz:   return "os.img"
+        case .qemu: return "os.qcow2"
         }
     }
 
-    public static func mainDiskURL(_ bundle: URL, engine: Engine) -> URL {
-        disksDir(bundle).appendingPathComponent(mainDiskFileName(for: engine))
-    }
-
-    /// 数据盘文件名按 engine 走相同格式; 老 .img 数据盘运行时仍按扩展名走 raw.
+    /// 数据盘文件名同上, 仅创建时用. 运行时走 DiskSpec.path.
     public static func dataDiskFileName(uuid8: String, engine: Engine) -> String {
         switch engine {
         case .vz:   return "data-\(uuid8).img"
         case .qemu: return "data-\(uuid8).qcow2"
         }
-    }
-
-    /// 老 API: VZ raw 数据盘. 新代码请用 dataDiskURL(_:uuid8:engine:).
-    public static func dataDiskURL(_ bundle: URL, uuid8: String) -> URL {
-        disksDir(bundle).appendingPathComponent("data-\(uuid8).img")
-    }
-
-    public static func dataDiskURL(_ bundle: URL, uuid8: String, engine: Engine) -> URL {
-        disksDir(bundle).appendingPathComponent(dataDiskFileName(uuid8: uuid8, engine: engine))
     }
 
     public static func auxiliaryDir(_ bundle: URL) -> URL {

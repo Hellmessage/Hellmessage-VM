@@ -1,12 +1,12 @@
 // HVMStorage/SnapshotManager.swift
-// 基于 APFS clonefile(2) 的 VM 整体快照: disks/* + config.json.
+// 基于 APFS clonefile(2) 的 VM 整体快照: disks/* + config.yaml.
 // clonefile 是 APFS copy-on-write, 几乎零空间 + 瞬间完成 (10GB 主盘也是 ms 级).
 //
 // 布局:
-//   <bundle>/snapshots/<name>/disks/main.img      (clone of bundle/disks/main.img)
-//   <bundle>/snapshots/<name>/disks/data-*.img    (clone 所有数据盘)
-//   <bundle>/snapshots/<name>/config.json         (config 副本, 普通 copy)
-//   <bundle>/snapshots/<name>/meta.json           ({createdAt, name})
+//   <bundle>/snapshots/<name>/disks/os.{img,qcow2}  (clone of bundle/disks/os.*)
+//   <bundle>/snapshots/<name>/disks/data-*.{img,qcow2}  (clone 所有数据盘)
+//   <bundle>/snapshots/<name>/config.yaml          (config 副本, 普通 copy)
+//   <bundle>/snapshots/<name>/meta.json            ({createdAt, name})
 //
 // 限制:
 //   - VM 必须 stopped (running 时 disk 在写, snapshot 不一致)

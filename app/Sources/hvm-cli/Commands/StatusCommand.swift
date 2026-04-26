@@ -41,7 +41,8 @@ struct StatusCommand: AsyncParsableCommand {
                 }
             }
 
-            let mainURL = BundleLayout.mainDiskURL(bundleURL)
+            // 主盘路径走 config.disks (engine-aware)
+            let mainURL = config.mainDiskURL(in: bundleURL) ?? bundleURL
             let actualBytes = (try? DiskFactory.actualBytes(at: mainURL)) ?? 0
             let logicalBytes = (try? DiskFactory.logicalBytes(at: mainURL)) ?? 0
 

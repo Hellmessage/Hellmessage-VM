@@ -63,13 +63,14 @@ struct DiskAddDialog: View {
             )
             var config = try BundleIO.load(from: item.bundleURL)
             let uuid8 = DiskFactory.newDataDiskUUID8()
-            // 数据盘格式跟随 VM engine: VZ → .img (raw), QEMU → .qcow2
+            // 数据盘格式跟随 VM engine: VZ → raw .img, QEMU → qcow2 .qcow2
+            let format: DiskFormat = config.engine == .qemu ? .qcow2 : .raw
             let fileName = BundleLayout.dataDiskFileName(uuid8: uuid8, engine: config.engine)
             let relPath = "\(BundleLayout.disksDirName)/\(fileName)"
             let absURL = item.bundleURL.appendingPathComponent(relPath)
-            let qemuImg = config.engine == .qemu ? (try? QemuPaths.qemuImgBinary()) : nil
-            try DiskFactory.create(at: absURL, sizeGiB: sizeGiB, qemuImg: qemuImg)
-            config.disks.append(DiskSpec(role: .data, path: relPath, sizeGiB: sizeGiB))
+            let qemuImg = format == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
+            try DiskFactory.create(at: absURL, sizeGiB: sizeGiB, format: format, qemuImg: qemuImg)
+            config.disks.append(DiskSpec(role: .data, path: relPath, sizeGiB: sizeGiB, format: format))
             try BundleIO.save(config: config, to: item.bundleURL)
             model.refreshList()
             close()

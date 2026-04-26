@@ -17,13 +17,26 @@ let package = Package(
             url: "https://github.com/apple/swift-argument-parser",
             from: "1.5.0"
         ),
+        // Yams: YAML 1.1 解析器 (libyaml C 包装). CLAUDE.md 唯一允许的 YAML dep.
+        // BundleIO 用它读写 <bundle>/config.yaml. SwiftPM 默认静态链接, 自动嵌入
+        // HVM/hvm-cli/hvm-dbg 二进制本体, 空白机器无需额外安装.
+        .package(
+            url: "https://github.com/jpsim/Yams",
+            from: "5.1.0"
+        ),
     ],
     targets: [
         // 基础库, 无下游依赖
         .target(name: "HVMCore"),
 
         // 功能模块
-        .target(name: "HVMBundle",  dependencies: ["HVMCore"]),
+        .target(
+            name: "HVMBundle",
+            dependencies: [
+                "HVMCore",
+                .product(name: "Yams", package: "Yams"),
+            ]
+        ),
         .target(name: "HVMStorage", dependencies: ["HVMCore", "HVMBundle"]),
         .target(name: "HVMNet",     dependencies: ["HVMCore", "HVMBundle"]),
         .target(name: "HVMDisplay", dependencies: ["HVMCore", "HVMBundle"]),

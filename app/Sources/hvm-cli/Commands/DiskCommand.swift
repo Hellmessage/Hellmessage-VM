@@ -129,13 +129,13 @@ struct DiskAddCommand: AsyncParsableCommand {
             }
             var config = try BundleIO.load(from: bundleURL)
             let uuid8 = DiskFactory.newDataDiskUUID8()
-            // 数据盘格式跟随 VM engine: VZ → .img (raw), QEMU → .qcow2
+            let diskFormat: DiskFormat = config.engine == .qemu ? .qcow2 : .raw
             let fileName = BundleLayout.dataDiskFileName(uuid8: uuid8, engine: config.engine)
             let relPath = "\(BundleLayout.disksDirName)/\(fileName)"
             let absURL = bundleURL.appendingPathComponent(relPath)
-            let qemuImg = config.engine == .qemu ? (try? QemuPaths.qemuImgBinary()) : nil
-            try DiskFactory.create(at: absURL, sizeGiB: size, qemuImg: qemuImg)
-            config.disks.append(DiskSpec(role: .data, path: relPath, sizeGiB: size))
+            let qemuImg = diskFormat == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
+            try DiskFactory.create(at: absURL, sizeGiB: size, format: diskFormat, qemuImg: qemuImg)
+            config.disks.append(DiskSpec(role: .data, path: relPath, sizeGiB: size, format: diskFormat))
             try BundleIO.save(config: config, to: bundleURL)
             switch format {
             case .human: print("✔ 已加数据盘 id=\(uuid8) size=\(size)gb path=\(relPath)")
@@ -178,7 +178,9 @@ struct DiskResizeCommand: AsyncParsableCommand {
                 throw HVMError.config(.missingField(name: "disk id=\(id) 未找到"))
             }
             let absURL = bundleURL.appendingPathComponent(config.disks[idx].path)
-            try DiskFactory.grow(at: absURL, toGiB: to)
+            let diskFormat = config.disks[idx].format
+            let qemuImg = diskFormat == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
+            try DiskFactory.grow(at: absURL, toGiB: to, format: diskFormat, qemuImg: qemuImg)
             config.disks[idx].sizeGiB = to
             try BundleIO.save(config: config, to: bundleURL)
             switch format {

@@ -78,13 +78,13 @@ public final class MacInstaller {
         // 4. 写 auxiliary 三件套
         try MacAuxiliaryFactory.create(in: bundleURL, from: handle)
 
-        // 5. 主盘按需创建 (装机走的是 raw sparse, VZ 写入)
-        let mainDiskURL = BundleLayout.mainDiskURL(bundleURL)
+        // 5. 主盘按需创建 (macOS 装机仅 VZ, 主盘永远 raw sparse). 路径从 config 读, 不用 BundleLayout 常量.
+        guard let mainDisk = config.disks.first(where: { $0.role == .main }) else {
+            throw HVMError.install(.installerFailed(reason: "config 缺主盘 spec"))
+        }
+        let mainDiskURL = bundleURL.appendingPathComponent(mainDisk.path)
         if !FileManager.default.fileExists(atPath: mainDiskURL.path) {
-            guard let mainDisk = config.disks.first(where: { $0.role == .main }) else {
-                throw HVMError.install(.installerFailed(reason: "config 缺主盘 spec"))
-            }
-            try DiskFactory.create(at: mainDiskURL, sizeGiB: mainDisk.sizeGiB)
+            try DiskFactory.create(at: mainDiskURL, sizeGiB: mainDisk.sizeGiB, format: mainDisk.format)
         }
 
         // 6. 构建 VZ config (走 ConfigBuilder 的 macOS 分支, 读 auxiliary 已经落盘的三件套)

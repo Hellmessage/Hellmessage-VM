@@ -96,15 +96,22 @@ struct CreateCommand: AsyncParsableCommand {
                 requiredBytes: UInt64(disk) * (1 << 30)
             )
 
-            // engine-aware 主盘: VZ → main.img (raw), QEMU → main.qcow2
+            // engine-aware 主盘: VZ → os.img (raw), QEMU → os.qcow2
+            let mainFormat: DiskFormat = engineValue == .qemu ? .qcow2 : .raw
             let mainDiskFile = "\(BundleLayout.disksDirName)/\(BundleLayout.mainDiskFileName(for: engineValue))"
+            let mainDisk = DiskSpec(
+                role: .main,
+                path: mainDiskFile,
+                sizeGiB: disk,
+                format: mainFormat
+            )
             let config = VMConfig(
                 displayName: name,
                 guestOS: os,
                 engine: engineValue,
                 cpuCount: cpu,
                 memoryMiB: memory * 1024,
-                disks: [DiskSpec(role: .main, path: mainDiskFile, sizeGiB: disk)],
+                disks: [mainDisk],
                 networks: [NetworkSpec(mode: network, macAddress: macAddr)],
                 installerISO: isoPath,
                 bootFromDiskOnly: false,
@@ -114,11 +121,11 @@ struct CreateCommand: AsyncParsableCommand {
             )
 
             try BundleIO.create(at: bundleURL, config: config)
-            // qcow2 主盘需要 qemu-img; raw 时 qemuImg=nil 走 ftruncate
-            let qemuImg = engineValue == .qemu ? (try? QemuPaths.qemuImgBinary()) : nil
+            let qemuImg = mainFormat == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
             try DiskFactory.create(
-                at: BundleLayout.mainDiskURL(bundleURL, engine: engineValue),
+                at: bundleURL.appendingPathComponent(mainDiskFile),
                 sizeGiB: disk,
+                format: mainFormat,
                 qemuImg: qemuImg
             )
 
