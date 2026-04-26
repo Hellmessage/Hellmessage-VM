@@ -1,6 +1,12 @@
 // HostLauncher.swift
 // hvm-cli 拉起 HVM.app 作为 VMHost 子进程 (--host-mode-bundle 分支)
 // docs/ARCHITECTURE.md 设计: HVM executable 自带 host 分派
+//
+// 严格只查 .app 安装位置 (CLAUDE.md 第三方二进制约束):
+//   1. HVM_APP_PATH env (CI / 调试)
+//   2. /Applications/HVM.app
+//   3. ~/Applications/HVM.app
+// 不再 fallback 到 build/HVM.app — dev 期 hvm-cli start 前需先 make install.
 
 import Foundation
 import HVMCore
@@ -17,14 +23,7 @@ public enum HostLauncher {
             if fm.isExecutableFile(atPath: candidate.path) { return candidate }
         }
 
-        // 2. 相对 hvm-cli 自身 (开发期 build/ 布局; /usr/local/bin symlink 下 realpath 会解)
-        let cliURL = URL(fileURLWithPath: CommandLine.arguments[0])
-        let cliReal = cliURL.resolvingSymlinksInPath()
-        let dir = cliReal.deletingLastPathComponent()
-        let dev = dir.appendingPathComponent("HVM.app/Contents/MacOS/HVM")
-        if fm.isExecutableFile(atPath: dev.path) { return dev }
-
-        // 3. 常见安装路径
+        // 2. 标准安装路径
         for sys in ["/Applications/HVM.app", "\(NSHomeDirectory())/Applications/HVM.app"] {
             let u = URL(fileURLWithPath: sys).appendingPathComponent("Contents/MacOS/HVM")
             if fm.isExecutableFile(atPath: u.path) { return u }
@@ -39,7 +38,7 @@ public enum HostLauncher {
     public static func launch(bundleURL: URL) throws -> Int32 {
         guard let binary = locateHVMBinary() else {
             throw HVMError.backend(.vzInternal(
-                description: "未找到 HVM.app; 请先 make build 或设置 $HVM_APP_PATH"
+                description: "未找到 HVM.app (仅查 /Applications/HVM.app 与 ~/Applications/HVM.app); 请 make install 或设置 $HVM_APP_PATH"
             ))
         }
 

@@ -119,26 +119,13 @@ public enum VmnetSetupHelper {
     // MARK: - install-vmnet-helper.sh 执行
 
     /// 定位 install-vmnet-helper.sh; nil 表示找不到.
+    /// 严格只走 .app 包内副本 (Bundle.main/Resources/scripts/), 不再 fallback 到仓库 scripts/ —
+    /// 因为 daemon plist 路径写死后必须长期有效, 不接受指向 dev 期临时位置 (CLAUDE.md 第三方二进制约束).
     public static func locateInstallScript() -> URL? {
-        // 1. .app 包内 (打包模式)
-        if let resPath = Bundle.main.resourcePath {
-            let bundled = URL(fileURLWithPath: resPath)
-                .appendingPathComponent("scripts/install-vmnet-helper.sh")
-            if FileManager.default.isExecutableFile(atPath: bundled.path) {
-                return bundled
-            }
-        }
-        // 2. dev 模式: build/HVM.app/Contents/MacOS/HVM → 上溯到仓库根
-        let exec = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
-        let candidate = exec.deletingLastPathComponent()       // MacOS/
-            .deletingLastPathComponent()                       // Contents/
-            .deletingLastPathComponent()                       // HVM.app
-            .deletingLastPathComponent()                       // build/
+        guard let resPath = Bundle.main.resourcePath else { return nil }
+        let bundled = URL(fileURLWithPath: resPath)
             .appendingPathComponent("scripts/install-vmnet-helper.sh")
-        if FileManager.default.isExecutableFile(atPath: candidate.path) {
-            return candidate
-        }
-        return nil
+        return FileManager.default.isExecutableFile(atPath: bundled.path) ? bundled : nil
     }
 
     public enum LaunchOutcome: Equatable, Sendable {

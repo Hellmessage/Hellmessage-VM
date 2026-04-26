@@ -1,11 +1,15 @@
 // HVMQemu/SwtpmPaths.swift
-// 定位 swtpm 二进制. 与 QemuPaths 同三段式回退:
-//   1. 环境变量 HVM_SWTPM_PATH (开发期 / CI 显式覆盖)
-//   2. QEMU 包内 Resources/QEMU/bin/swtpm (打包后 .app)
-//   3. 系统位置 (/opt/homebrew/bin/swtpm Apple Silicon, /usr/local/bin/swtpm Intel)
-//      最终用户机器若没装则报错; 详见 docs/QEMU_INTEGRATION.md
+// 定位 swtpm 二进制. 严格只走包内 (/Applications/HVM.app 或开发期 build/HVM.app),
+// 不再 fallback 到系统 brew (/opt/homebrew, /usr/local) — 防止本机 brew 版本与
+// 包内版本不一致引入诡异 bug (例: brew 升级 swtpm 后 NV header 不兼容).
 //
-// 找到的二进制必须是可执行 Mach-O; 上层不再做 file 类型校验.
+// 路径优先级:
+//   1. 环境变量 HVM_SWTPM_PATH (CI / 开发期显式覆盖)
+//   2. QemuPaths.resolveRoot()/bin/swtpm — 涵盖:
+//      a) Bundle.main/Resources/QEMU (打包后 /Applications/HVM.app 或 build/HVM.app)
+//      b) 从 Bundle.main / cwd 向上找 third_party/qemu (swift run / swift test 兜底)
+//
+// 缺则抛 .binaryMissing, 调用方负责引导 "make qemu / make build-all".
 
 import Foundation
 
@@ -30,20 +34,14 @@ public enum SwtpmPaths {
             }
         }
 
-        // 2. 包内 (打包后 .app, 与 qemu-system-aarch64 同 bin/ 目录)
+        // 2. 包内 (打包后 .app, 与 qemu-system-aarch64 同 bin/ 目录).
+        // QemuPaths.resolveRoot() 已涵盖 Bundle.main/Resources/QEMU + dev third_party/qemu 兜底,
+        // 所以这里不再 brew fallback — 只信任包内副本, 防版本错位.
         if let qemuRoot = try? QemuPaths.resolveRoot() {
             let bundled = qemuRoot.appendingPathComponent("bin/swtpm")
             searched.append("bundled \(bundled.path)")
             if FileManager.default.isExecutableFile(atPath: bundled.path) {
                 return bundled
-            }
-        }
-
-        // 3. 系统位置 (Homebrew default; 最终用户若没 brew install swtpm 则失败)
-        for sys in ["/opt/homebrew/bin/swtpm", "/usr/local/bin/swtpm"] {
-            searched.append(sys)
-            if FileManager.default.isExecutableFile(atPath: sys) {
-                return URL(fileURLWithPath: sys)
             }
         }
 

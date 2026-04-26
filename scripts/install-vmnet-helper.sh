@@ -43,29 +43,15 @@ require_root() {
 }
 
 # ---- 探测 socket_vmnet 二进制 ----
-# 优先级: 显式 --bin > HVM_SOCKET_VMNET_PATH env > .app 包内 > 仓库 third_party > brew
+# 严格只走 /Applications/HVM.app 内的副本: launchd plist 把路径写死, 必须指向用户已安装
+# 的稳定位置 (build/HVM.app 临时, make clean 后 daemon 即失效; brew 版本可能与打包版本协议不一致).
+# 优先级: 显式 --bin > HVM_SOCKET_VMNET_PATH env > /Applications/HVM.app > ~/Applications/HVM.app
 auto_locate() {
     if [[ -n "${HVM_SOCKET_VMNET_PATH:-}" && -x "$HVM_SOCKET_VMNET_PATH" ]]; then
         echo "$HVM_SOCKET_VMNET_PATH"; return
     fi
     for app in "/Applications/HVM.app" "$HOME/Applications/HVM.app"; do
         local cand="$app/Contents/Resources/QEMU/bin/socket_vmnet"
-        if [[ -x "$cand" ]]; then echo "$cand"; return; fi
-    done
-    local script_dir
-    script_dir="$(cd "$(dirname "$0")/.." && pwd)"
-    for cand in \
-        "$script_dir/build/HVM.app/Contents/Resources/QEMU/bin/socket_vmnet" \
-        "$script_dir/third_party/qemu/bin/socket_vmnet"
-    do
-        if [[ -x "$cand" ]]; then echo "$cand"; return; fi
-    done
-    for cand in \
-        "/opt/homebrew/opt/socket_vmnet/bin/socket_vmnet" \
-        "/opt/homebrew/bin/socket_vmnet" \
-        "/usr/local/opt/socket_vmnet/bin/socket_vmnet" \
-        "/usr/local/bin/socket_vmnet"
-    do
         if [[ -x "$cand" ]]; then echo "$cand"; return; fi
     done
     echo ""
@@ -190,7 +176,13 @@ esac
 require_root "$@"
 SOCKET_VMNET="${explicit_bin:-$(auto_locate)}"
 if [[ -z "$SOCKET_VMNET" || ! -x "$SOCKET_VMNET" ]]; then
-    err "找不到 socket_vmnet 二进制. 用 --bin <path> 显式指定; 或先 make build-all (会打包入 .app)"
+    err "找不到 socket_vmnet 二进制 (仅查 /Applications/HVM.app 与 ~/Applications/HVM.app).
+    daemon plist 路径写死, 必须指向稳定位置, 不接受 build/ 或 brew fallback.
+    解决:
+      1) make build-all (出 build/HVM.app, 含 socket_vmnet)
+      2) make install (拷到 /Applications/HVM.app)
+      3) sudo $0 [iface...]
+    显式覆盖 (调试用): $0 --bin /path/to/socket_vmnet"
 fi
 # 安全: 路径必须以 /socket_vmnet 结尾
 if [[ "${SOCKET_VMNET##*/}" != "socket_vmnet" ]]; then

@@ -1,12 +1,14 @@
 // HVMQemu/QemuPaths.swift
 // 解析 QEMU 二进制 + 固件 + share 目录的实际路径.
 //
-// 三段式回退 (优先级递减):
-//   1. 环境变量 HVM_QEMU_ROOT - CI / 开发期显式覆盖
-//   2. Bundle.main/Contents/Resources/QEMU - 打包后的 .app 走这里
-//   3. 从 executable 与 cwd 向上找 third_party/qemu/ - swift run / swift test
+// 严格只走 .app 包内, 不再 fallback 到 third_party/qemu / brew (CLAUDE.md 第三方二进制约束):
+//   1. 环境变量 HVM_QEMU_ROOT - CI / 调试显式覆盖
+//   2. Bundle.main/Contents/Resources/QEMU - 当前进程 .app 包内
+//      a) dev: open build/HVM.app → Bundle.main = build/HVM.app
+//      b) prod: open /Applications/HVM.app → Bundle.main = /Applications/HVM.app
 //
-// 决策记录见 docs/QEMU_INTEGRATION.md "关键决策" + CLAUDE.md "QEMU 后端约束".
+// 不再支持 swift run / swift test 直接跑 QEMU 路径 (测试用 env override 覆盖).
+// 决策记录见 docs/QEMU_INTEGRATION.md + CLAUDE.md "第三方二进制 / Helper 脚本约束".
 
 import Foundation
 
@@ -33,38 +35,14 @@ public enum QemuPaths {
             if isValidRoot(url) { return url }
         }
 
-        // 2. Bundle.main 资源 (打包后 .app)
+        // 2. Bundle.main 资源 (打包后 .app: dev = build/HVM.app, prod = /Applications/HVM.app)
+        // 不再 fallback 到 third_party/qemu — 见 CLAUDE.md "第三方二进制 / Helper 脚本约束".
+        // swift run / swift test 须用 HVM_QEMU_ROOT env 显式指定 root.
         if let resURL = Bundle.main.resourceURL {
             let candidate = resURL.appendingPathComponent("QEMU", isDirectory: true)
             searched.append("Bundle.main/QEMU at \(candidate.path)")
             if isValidRoot(candidate) { return candidate }
         }
-
-        // 3a. 从 main bundle URL 向上找 third_party/qemu/ (开发期, .build/... 路径)
-        var dir = Bundle.main.bundleURL
-        for _ in 0..<10 {
-            let candidate = dir.appendingPathComponent("third_party/qemu", isDirectory: true)
-            if isValidRoot(candidate) {
-                return candidate
-            }
-            let parent = dir.deletingLastPathComponent()
-            if parent == dir { break }
-            dir = parent
-        }
-        searched.append("Bundle.main parents → third_party/qemu")
-
-        // 3b. 从 cwd 向上找 (兜底, 比如直接 swift test 时 cwd = 项目根)
-        var cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
-        for _ in 0..<10 {
-            let candidate = cwd.appendingPathComponent("third_party/qemu", isDirectory: true)
-            if isValidRoot(candidate) {
-                return candidate
-            }
-            let parent = cwd.deletingLastPathComponent()
-            if parent == cwd { break }
-            cwd = parent
-        }
-        searched.append("cwd parents → third_party/qemu")
 
         throw NotFoundError.rootMissing(searched: searched)
     }
