@@ -1,4 +1,4 @@
-// HVM/UI/MenuPopoverView.swift
+// HVM/UI/Shell/MenuPopoverView.swift
 // status item 弹出的 NSPopover 内容 (SwiftUI).
 // 视觉风格: 深色 + monospace accent, 跟主窗口一致.
 //

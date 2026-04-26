@@ -1,4 +1,4 @@
-// HVM/UI/ThumbnailCache.swift
+// HVM/UI/App/ThumbnailCache.swift
 // 缩略图内存缓存. mtime invalidation + LRU 淘汰.
 //
 // 之前 menu bar popover 弹出时会同步 NSImage(contentsOf:) 每个运行中 VM 的 thumbnail,
