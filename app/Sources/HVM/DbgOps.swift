@@ -58,11 +58,11 @@ public final class DbgOps {
             return .failure(id: req.id, code: "dbg.vm_not_running",
                             message: "VM 未运行 (state=\(stateString(s))), 无法截图")
         }
-        // 截图给 Claude / 通用消费场景: cap 最长边 1568px.
+        // 截图给 Claude / 通用消费场景: cap 最长边 HVMScreenshot.apiMaxEdge (=1568).
         // Retina 上 1920x1080 离屏 window 抓出来本是 3840x2160, 超 Claude API
         // many-image 2000px 单边上限. 1568 是 Anthropic 推荐尺寸, 兼顾质量与体积.
         // OCR / find-text 走另一条路, 不传 maxEdge, 保留全分辨率以维持识别精度.
-        guard let shot = ScreenCapture.capturePNG(from: view, maxEdge: 1568) else {
+        guard let shot = ScreenCapture.capturePNG(from: view, maxEdge: HVMScreenshot.apiMaxEdge) else {
             return .failure(id: req.id, code: "dbg.frame_unavailable",
                             message: "view 还未渲染或 frame buffer 为空")
         }

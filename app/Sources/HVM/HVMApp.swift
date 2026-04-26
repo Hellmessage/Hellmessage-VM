@@ -103,8 +103,8 @@ final class HVMAppDelegate: NSObject, NSApplicationDelegate {
         let sessions = Array(model.sessions.values)
         for s in sessions { try? s.requestStop() }
 
-        // 轮询等所有 VM 进入 stopped 或超 10s
-        let deadline = Date().addingTimeInterval(10)
+        // 轮询等所有 VM 进入 stopped 或超 HVMTimeout.gracefulShutdown
+        let deadline = Date().addingTimeInterval(HVMTimeout.gracefulShutdown)
         while Date() < deadline {
             let allStopped = model.sessions.values.allSatisfy { $0.state == .stopped }
             if allStopped { return }

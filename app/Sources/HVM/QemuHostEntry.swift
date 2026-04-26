@@ -153,7 +153,7 @@ public enum QemuHostEntry {
             let client = await tryConnectQmp(
                 socketPath: qmpSocketURL.path,
                 runner: runner,
-                deadlineSec: 15
+                deadlineSec: HVMTimeout.qmpConnect
             )
             guard let client else {
                 fputs("HVMHost(qemu): QMP 连接失败 (15s 超时); 查看 \(stderrLog.path)\n", stderr)
@@ -171,8 +171,8 @@ public enum QemuHostEntry {
                 socketPath: consoleSocketURL.path,
                 logsDir: BundleLayout.logsDir(bundleURL)
             )
-            // QEMU 监听 console socket 几乎跟 QMP 同时就绪; 仍 poll 5s 防 race
-            let consDeadline = Date().addingTimeInterval(5)
+            // QEMU 监听 console socket 几乎跟 QMP 同时就绪; 仍 poll 防 race (HVMTimeout.consoleBridgeConnect)
+            let consDeadline = Date().addingTimeInterval(HVMTimeout.consoleBridgeConnect)
             var connected = false
             while Date() < consDeadline {
                 if FileManager.default.fileExists(atPath: consoleSocketURL.path) {
@@ -305,8 +305,8 @@ public enum QemuHostEntry {
         }
 
         // 4. 阻塞等 socket 文件就绪 (swtpm 通常 <500ms; QEMU 比 swtpm 早连会 ECONNREFUSED).
-        //    主动 poll, 最多 5s; 若 swtpm 早退也立即报错.
-        let deadline = Date().addingTimeInterval(5)
+        //    主动 poll (HVMTimeout.swtpmSocketReady); 若 swtpm 早退也立即报错.
+        let deadline = Date().addingTimeInterval(HVMTimeout.swtpmSocketReady)
         var ready = false
         while Date() < deadline {
             switch runner.state {
@@ -512,11 +512,11 @@ final class QemuHostState {
             return .failure(id: req.id, code: "backend.qmp_unavailable", message: "QMP 未就绪")
         }
         do {
-            // maxEdge=1568 与 VZ 路径一致 (Anthropic many-image 上限)
+            // 与 VZ 路径一致 (Anthropic many-image 上限, HVMScreenshot.apiMaxEdge)
             let shot = try await QemuScreenshot.capture(
                 via: client,
                 tempDir: HVMPaths.runDir,
-                maxEdge: 1568
+                maxEdge: HVMScreenshot.apiMaxEdge
             )
             lastFrameSha256 = shot.sha256
             let payload = IPCDbgScreenshotPayload(
@@ -814,13 +814,13 @@ final class QemuHostState {
     /// QMP 必须已就绪. 失败仅 NSLog 不影响 VM 主流程.
     func startThumbnailTimer() {
         thumbnailTimer?.invalidate()
-        thumbnailTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { _ in
+        thumbnailTimer = Timer.scheduledTimer(withTimeInterval: HVMScreenshot.thumbnailIntervalSec, repeats: true) { _ in
             Task { @MainActor in
                 guard let client = QemuHostState.shared.qmpClient,
                       let bundleURL = QemuHostState.shared.bundleURL else { return }
                 do {
                     let shot = try await QemuScreenshot.capture(
-                        via: client, tempDir: HVMPaths.runDir, maxEdge: 512
+                        via: client, tempDir: HVMPaths.runDir, maxEdge: HVMScreenshot.thumbnailMaxEdge
                     )
                     try ThumbnailWriter.writeAtomic(shot.pngData, to: bundleURL)
                 } catch {

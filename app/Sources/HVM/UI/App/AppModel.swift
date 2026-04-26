@@ -188,8 +188,8 @@ public final class AppModel {
             let bundleURL = item.bundleURL.resolvingSymlinksInPath().standardizedFileURL
             try spawnExternalHost(bundleURL: bundleURL)
             // 轮询子进程是否成功拿到 BundleLock (子进程在 HVMHostEntry 入口即抢锁; 冷启动 dyld/首次签名偶发 >5s)
-            // 与 QMP 15s 超时同一量级, 留足 bridged + socket_vmnet 起 sidecar 前的余量
-            let waitSeconds = 20
+            // 与 QMP 超时同一量级, 留足 bridged + socket_vmnet 起 sidecar 前的余量 (HVMTimeout.hostStartupLockPoll)
+            let waitSeconds = HVMTimeout.hostStartupLockPoll
             let deadline = Date().addingTimeInterval(TimeInterval(waitSeconds))
             var locked = false
             while Date() < deadline {

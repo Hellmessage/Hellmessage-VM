@@ -63,6 +63,16 @@ public enum HVMBar {
     public static let statusBarHeight: CGFloat = 26
 }
 
+/// 主窗口尺寸. 用户日常想调主窗口大小直接改这里.
+public enum HVMWindow {
+    /// 创建窗口时的 contentRect 尺寸 (打开时的默认大小)
+    public static let mainDefault   = CGSize(width: 1200, height: 1090)
+    /// 窗口最小尺寸 (用户拖拽缩放下限)
+    public static let mainMin       = CGSize(width: 1020, height: 640)
+    /// VM 退出后切回 stopped 视图时把窗口拉回的"舒适"尺寸 (避免 running 时撑大的窗口尺寸继续占屏)
+    public static let mainStopped   = CGSize(width: 1080, height: 720)
+}
+
 public enum HVMFont {
     // proportional (标题 / 名字 / 大数字)
     public static let hero    = Font.system(size: 22, weight: .semibold)
@@ -151,6 +161,143 @@ public struct HVMFormMenuField<Content: View>: View {
                 RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
                     .stroke(HVMColor.border, lineWidth: 1)
             )
+    }
+}
+
+/// 自绘下拉: 与 `HVMFormMenuField` 同字色/边距, 在槽位下方**内联**展开列表 (无 popover 气球/尖角), 与 `HVMNetModeSegment` 的选中/描边语汇一致
+public struct HVMFormSelect: View {
+    public let options: [(value: String, label: String)]
+    @Binding public var selection: String
+    /// 无障碍读名
+    public var accessibilityLabel: String
+
+    @State private var isOpen: Bool = false
+    @State private var hoveredValue: String?
+
+    public init(
+        options: [(value: String, label: String)],
+        selection: Binding<String>,
+        accessibilityLabel: String = "选择"
+    ) {
+        self.options = options
+        self._selection = selection
+        self.accessibilityLabel = accessibilityLabel
+    }
+
+    private var currentLabel: String {
+        if let f = options.first(where: { $0.value == selection }) {
+            return f.label
+        }
+        return selection
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                isOpen.toggle()
+            } label: {
+                HStack(spacing: HVMSpace.sm) {
+                    Text(currentLabel)
+                        .font(HVMFont.body)
+                        .foregroundStyle(HVMColor.textPrimary)
+                        .lineLimit(1)
+                        .multilineTextAlignment(.leading)
+                    Spacer(minLength: 0)
+                    Image(systemName: isOpen ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(HVMColor.textTertiary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, HVMSpace.md)
+            .padding(.vertical, 5)
+            .background(HVMColor.bgCardHi)
+
+            if isOpen {
+                Rectangle()
+                    .fill(HVMColor.border)
+                    .frame(height: 1)
+                listBody
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(
+            RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
+                .stroke(isOpen ? HVMColor.borderAccent : HVMColor.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous))
+        .animation(.snappy(duration: 0.18), value: isOpen)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue(currentLabel)
+        .focusable()
+        .onKeyPress(.escape) {
+            guard isOpen else { return .ignored }
+            isOpen = false
+            return .handled
+        }
+        .onChange(of: isOpen) { _, new in
+            if !new { hoveredValue = nil }
+        }
+    }
+
+    @ViewBuilder
+    private var listBody: some View {
+        let selectBlock: (String) -> Void = { v in
+            selection = v
+            isOpen = false
+        }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(options, id: \.value) { opt in
+                    let isSel = (selection == opt.value)
+                    Button {
+                        selectBlock(opt.value)
+                    } label: {
+                        HStack(spacing: HVMSpace.sm) {
+                            Text(opt.label)
+                                .font(HVMFont.body)
+                                .foregroundStyle(isSel ? HVMColor.accent : HVMColor.textPrimary)
+                                .multilineTextAlignment(.leading)
+                                .lineLimit(2)
+                            Spacer(minLength: 0)
+                            if isSel {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(HVMColor.accent)
+                            }
+                        }
+                        .padding(.horizontal, HVMSpace.md)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .background(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(rowFill(isSelected: isSel, value: opt.value))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { inside in
+                        if inside {
+                            hoveredValue = opt.value
+                        } else if hoveredValue == opt.value {
+                            hoveredValue = nil
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: 220, alignment: .topLeading)
+        .background(HVMColor.bgBase)
+    }
+
+    private func rowFill(isSelected: Bool, value: String) -> Color {
+        if isSelected { return HVMColor.bgSelected }
+        if hoveredValue == value { return HVMColor.bgHover }
+        return .clear
     }
 }
 

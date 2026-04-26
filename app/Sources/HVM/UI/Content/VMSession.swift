@@ -174,7 +174,7 @@ public final class VMSession {
 
     private func startThumbnailTimer() {
         thumbnailTimer?.invalidate()
-        thumbnailTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+        thumbnailTimer = Timer.scheduledTimer(withTimeInterval: HVMScreenshot.thumbnailIntervalSec, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
                 _ = ThumbnailGenerator.capture(from: self.attachment.view, to: self.bundleURL)

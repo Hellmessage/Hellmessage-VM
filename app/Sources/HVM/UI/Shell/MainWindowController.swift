@@ -34,7 +34,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         self.confirms = confirms
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1080, height: 720),
+            contentRect: NSRect(origin: .zero, size: HVMWindow.mainDefault),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -44,7 +44,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.tabbingMode = .disallowed
         window.titlebarAppearsTransparent = false
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 1020, height: 640)
+        window.minSize = HVMWindow.mainMin
         window.center()
 
         super.init(window: window)
@@ -85,7 +85,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         contentView.layer?.backgroundColor = NSColor.black.cgColor
 
         // 关键: 强制初始 content size, 避免 NSHostingView intrinsic size 把 window 挤小
-        window?.setContentSize(NSSize(width: 1080, height: 720))
+        window?.setContentSize(HVMWindow.mainStopped)
 
         // SwiftUI 子视图
         let toolbar = NSHostingView(rootView: HVMToolbar(model: model, errors: errors))

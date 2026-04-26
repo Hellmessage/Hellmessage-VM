@@ -340,15 +340,11 @@ struct CreateVMDialog: View {
                 .font(HVMFont.caption)
                 .foregroundStyle(HVMColor.textTertiary)
         } else {
-            HVMFormMenuField {
-                Picker("", selection: $bridgedInterface) {
-                    ForEach(availableInterfaces, id: \.name) { ifc in
-                        Text(ifc.displayName).tag(ifc.name)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-            }
+            HVMFormSelect(
+                options: availableInterfaces.map { (value: $0.name, label: $0.displayName) },
+                selection: $bridgedInterface,
+                accessibilityLabel: "网卡"
+            )
         }
     }
 

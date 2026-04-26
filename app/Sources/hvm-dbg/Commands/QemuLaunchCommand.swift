@@ -112,7 +112,7 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         // QMP 连接重试: QEMU bind unix socket 与 listen 之间有窗口, ECONNREFUSED 期间重试.
         // 同时若 QEMU 进程提前退出 (例如缺 ROM / 配置错误), 不再继续重试.
         var client: QmpClient?
-        let connectDeadline = Date().addingTimeInterval(15)
+        let connectDeadline = Date().addingTimeInterval(TimeInterval(HVMTimeout.qmpConnect))
         var lastErr: Error?
         while Date() < connectDeadline {
             // QEMU 已退出 (例如配置错误立即崩) → 不再重试

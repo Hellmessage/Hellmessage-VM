@@ -149,15 +149,11 @@ struct EditConfigDialog: View {
                         .font(HVMFont.caption)
                         .foregroundStyle(HVMColor.textTertiary)
                 } else {
-                    HVMFormMenuField {
-                        Picker("", selection: $bridgedInterface) {
-                            ForEach(availableInterfaces, id: \.name) { ifc in
-                                Text(ifc.displayName).tag(ifc.name)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                    }
+                    HVMFormSelect(
+                        options: availableInterfaces.map { (value: $0.name, label: $0.displayName) },
+                        selection: $bridgedInterface,
+                        accessibilityLabel: "网卡"
+                    )
                 }
             }
         }
@@ -165,20 +161,26 @@ struct EditConfigDialog: View {
 
     @ViewBuilder
     private func formRow(label: String, suffix: String, text: Binding<String>) -> some View {
-        HStack(spacing: HVMSpace.md) {
-            Text(label)
-                .font(HVMFont.label)
-                .tracking(1.5)
-                .foregroundStyle(HVMColor.textTertiary)
-                .frame(width: 80, alignment: .leading)
-            TextField("", text: text)
-                .textFieldStyle(.roundedBorder)
-                .font(HVMFont.body)
-                .frame(maxWidth: .infinity)
-            Text(suffix)
-                .font(HVMFont.caption)
-                .foregroundStyle(HVMColor.textTertiary)
-                .frame(width: 40, alignment: .leading)
+        HStack {
+            Spacer()
+            HStack(spacing: HVMSpace.md) {
+                Text(label)
+                    .font(HVMFont.label)
+                    .tracking(1.5)
+                    .foregroundStyle(HVMColor.textTertiary)
+                    .frame(width: 72, alignment: .trailing)
+                TextField("", text: text)
+                    .textFieldStyle(.roundedBorder)
+                    .font(HVMFont.body)
+                    .multilineTextAlignment(.center)
+                    .frame(width: 112)
+                Text(suffix)
+                    .font(HVMFont.caption)
+                    .foregroundStyle(HVMColor.textTertiary)
+                    .frame(width: 44, alignment: .leading)
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            Spacer()
         }
     }
 
