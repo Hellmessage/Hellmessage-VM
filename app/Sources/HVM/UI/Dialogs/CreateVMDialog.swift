@@ -8,6 +8,7 @@ import HVMBundle
 import HVMCore
 import HVMInstall
 import HVMNet
+import HVMQemu
 import HVMStorage
 
 struct CreateVMDialog: View {
@@ -24,6 +25,9 @@ struct CreateVMDialog: View {
     @State private var creating: Bool = false
     /// IPSW cache 列表; 切到 macOS 分支时刷新, Use Latest / fetch 完成后刷新
     @State private var ipswCache: [IPSWCacheItem] = []
+    /// 进入向导时探测一次 QEMU 后端是否就绪 (third_party/qemu 或 .app/Contents/Resources/QEMU);
+    /// 不可用时 Windows 按钮 disabled, 给清晰的"先 make qemu"提示
+    @State private var qemuBackendAvailable: Bool = false
 
     /// 装机字段是否合法 (按 OS 分支)
     private var installerPathValid: Bool {
@@ -53,7 +57,10 @@ struct CreateVMDialog: View {
             .clipShape(RoundedRectangle(cornerRadius: HVMRadius.lg))
             .shadow(color: .black.opacity(0.6), radius: 24, x: 0, y: 10)
         }
-        .onAppear { reloadCache() }
+        .onAppear {
+            reloadCache()
+            qemuBackendAvailable = (try? QemuPaths.resolveRoot()) != nil
+        }
         .onChange(of: guestOS) { _, _ in reloadCache() }
         // banner 完成态消失也意味着 cache 可能新增, 跟着刷
         .onChange(of: model.ipswFetchState == nil) { _, _ in reloadCache() }
@@ -85,16 +92,37 @@ struct CreateVMDialog: View {
             }
 
             field("Guest OS") {
-                HStack(spacing: HVMSpace.sm) {
-                    Button { guestOS = .linux } label: {
-                        osChip("Linux", selected: guestOS == .linux)
-                    }
-                    .buttonStyle(.plain)
+                VStack(alignment: .leading, spacing: HVMSpace.xs) {
+                    HStack(spacing: HVMSpace.sm) {
+                        Button { guestOS = .linux } label: {
+                            osChip("Linux", selected: guestOS == .linux, disabled: false)
+                        }
+                        .buttonStyle(.plain)
 
-                    Button { guestOS = .macOS } label: {
-                        osChip("macOS", selected: guestOS == .macOS)
+                        Button { guestOS = .macOS } label: {
+                            osChip("macOS", selected: guestOS == .macOS, disabled: false)
+                        }
+                        .buttonStyle(.plain)
+
+                        Button { guestOS = .windows } label: {
+                            osChip("Windows", selected: guestOS == .windows,
+                                   disabled: !qemuBackendAvailable)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!qemuBackendAvailable)
+                        .help(qemuBackendAvailable
+                              ? "实验性: Windows arm64 走 QEMU 后端"
+                              : "Windows 需要 QEMU 后端: 请先 make qemu (或 make build-all)")
                     }
-                    .buttonStyle(.plain)
+                    if guestOS == .windows {
+                        Text("// 实验性: Windows arm64 走 QEMU 后端 (强制 engine=qemu)")
+                            .font(HVMFont.caption)
+                            .foregroundStyle(HVMColor.textTertiary)
+                    } else if !qemuBackendAvailable {
+                        Text("// Windows 暂不可选 — third_party/qemu 未就绪 (需先 make qemu)")
+                            .font(HVMFont.caption)
+                            .foregroundStyle(HVMColor.textTertiary)
+                    }
                 }
             }
 
@@ -116,7 +144,10 @@ struct CreateVMDialog: View {
             case .linux, .windows:
                 field("Installer ISO") {
                     HStack(spacing: HVMSpace.sm) {
-                        TextField("/path/to/ubuntu-arm64.iso", text: $isoPath)
+                        TextField(guestOS == .windows
+                                  ? "/path/to/Win11_arm64.iso"
+                                  : "/path/to/ubuntu-arm64.iso",
+                                  text: $isoPath)
                             .textFieldStyle(.roundedBorder)
                             .font(HVMFont.body)
                         Button("Browse") { pickISO() }
@@ -221,12 +252,14 @@ struct CreateVMDialog: View {
     }()
 
     @ViewBuilder
-    private func osChip(_ label: String, selected: Bool) -> some View {
+    private func osChip(_ label: String, selected: Bool, disabled: Bool = false) -> some View {
         Text(label)
             .font(.system(size: 12, weight: .medium))
             .padding(.horizontal, HVMSpace.md)
             .padding(.vertical, 6)
-            .foregroundStyle(selected ? HVMColor.textOnAccent : HVMColor.textSecondary)
+            .foregroundStyle(disabled
+                             ? HVMColor.textTertiary
+                             : (selected ? HVMColor.textOnAccent : HVMColor.textSecondary))
             .background(
                 RoundedRectangle(cornerRadius: HVMRadius.sm)
                     .fill(selected ? HVMColor.accent : HVMColor.bgBase)
@@ -235,6 +268,7 @@ struct CreateVMDialog: View {
                 RoundedRectangle(cornerRadius: HVMRadius.sm)
                     .stroke(selected ? Color.clear : HVMColor.border, lineWidth: 1)
             )
+            .opacity(disabled ? 0.45 : 1.0)
     }
 
     private func pickISO() {
@@ -349,17 +383,36 @@ struct CreateVMDialog: View {
                 }
             }
 
+            // Windows 强制 QEMU 后端 + WindowsSpec 默认开 SecureBoot + TPM (Win11 必需)
+            let engineValue: Engine
+            let macOSSpec: MacOSSpec?
+            let linuxSpec: LinuxSpec?
+            let windowsSpec: WindowsSpec?
+            switch guestOS {
+            case .linux:
+                engineValue = .vz; macOSSpec = nil; linuxSpec = LinuxSpec(); windowsSpec = nil
+            case .macOS:
+                engineValue = .vz
+                macOSSpec = MacOSSpec(ipsw: ipswPath, autoInstalled: false)
+                linuxSpec = nil; windowsSpec = nil
+            case .windows:
+                engineValue = .qemu; macOSSpec = nil; linuxSpec = nil
+                windowsSpec = WindowsSpec()
+            }
+
             let config = VMConfig(
                 displayName: name,
                 guestOS: guestOS,
+                engine: engineValue,
                 cpuCount: cpu,
                 memoryMiB: UInt64(memoryGiB) * 1024,
                 disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: UInt64(diskGiB))],
                 networks: [NetworkSpec(mode: .nat, macAddress: MACAddressGenerator.random())],
-                installerISO: guestOS == .linux ? isoPath : nil,
+                installerISO: guestOS == .macOS ? nil : isoPath,
                 bootFromDiskOnly: false,
-                macOS: guestOS == .macOS ? MacOSSpec(ipsw: ipswPath, autoInstalled: false) : nil,
-                linux: guestOS == .linux ? LinuxSpec() : nil
+                macOS: macOSSpec,
+                linux: linuxSpec,
+                windows: windowsSpec
             )
 
             try HVMPaths.ensure(HVMPaths.vmsRoot)
