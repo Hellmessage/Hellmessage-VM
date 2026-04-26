@@ -60,6 +60,26 @@ public struct IPCResponse: Codable, Sendable {
         IPCResponse(id: id, ok: false, data: nil,
                     error: IPCErrorPayload(code: code, message: message, details: details))
     }
+
+    /// 把 Codable payload 编码为 JSON, 包成 success 响应; 编码失败返 failure(ipc.encode_failed).
+    /// 替代调用方 14 处重复的 `try? JSONEncoder().encode + guard + .success/.failure` 模式.
+    /// kind: 用于失败 message, 例 "screenshot" / "ocr" / "find_text" 让客户端定位是哪类响应失败.
+    /// dateStrategy: 默认 .iso8601 (与 hvm-cli status 等业务约定一致); 调用方需要别的可显式传.
+    public static func encoded<T: Encodable>(
+        id: String,
+        payload: T,
+        kind: String,
+        dateStrategy: JSONEncoder.DateEncodingStrategy = .iso8601
+    ) -> IPCResponse {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = dateStrategy
+        guard let data = try? encoder.encode(payload),
+              let json = String(data: data, encoding: .utf8) else {
+            return .failure(id: id, code: "ipc.encode_failed",
+                            message: "\(kind) payload 编码失败")
+        }
+        return .success(id: id, data: ["payload": json])
+    }
 }
 
 public struct IPCErrorPayload: Codable, Sendable {

@@ -633,10 +633,7 @@ final class QemuHostState {
                 heightPx: shot.heightPx,
                 sha256: shot.sha256
             )
-            guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
-                return .failure(id: req.id, code: "ipc.encode_failed", message: "screenshot payload 编码失败")
-            }
-            return .success(id: req.id, data: ["payload": json])
+            return .encoded(id: req.id, payload: payload, kind: "screenshot")
         } catch {
             return .failure(id: req.id, code: "dbg.frame_unavailable", message: "\(error)")
         }
@@ -656,12 +653,9 @@ final class QemuHostState {
             guestWidthPx: gw,
             guestHeightPx: gh,
             lastFrameSha256: lastFrameSha256,
-            consoleAgentOnline: false  // QEMU console 通道一期未接入
+            consoleAgentOnline: consoleBridge != nil
         )
-        guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
-            return .failure(id: req.id, code: "ipc.encode_failed", message: "dbg status payload 编码失败")
-        }
-        return .success(id: req.id, data: ["payload": json])
+        return .encoded(id: req.id, payload: payload, kind: "dbg status")
     }
 
     private func handleDbgOcr(req: IPCRequest) async -> IPCResponse {
@@ -694,10 +688,7 @@ final class QemuHostState {
                     text: $0.text, confidence: $0.confidence
                 ) }
             )
-            guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
-                return .failure(id: req.id, code: "ipc.encode_failed", message: "ocr payload 编码失败")
-            }
-            return .success(id: req.id, data: ["payload": json])
+            return .encoded(id: req.id, payload: payload, kind: "ocr")
         } catch let e as HVMError {
             let uf = e.userFacing
             return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)
@@ -790,10 +781,7 @@ final class QemuHostState {
         let elapsed: Int? = startedAt.map { Int(Date().timeIntervalSince($0)) }
         func reply(_ phase: String, _ confidence: Float) -> IPCResponse {
             let payload = IPCDbgBootProgressPayload(phase: phase, confidence: confidence, elapsedSec: elapsed)
-            guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
-                return .failure(id: req.id, code: "ipc.encode_failed", message: "boot_progress 编码失败")
-            }
-            return .success(id: req.id, data: ["payload": json])
+            return .encoded(id: req.id, payload: payload, kind: "boot_progress")
         }
 
         // 进程未 running → bios
@@ -829,10 +817,7 @@ final class QemuHostState {
             totalBytes: r.totalBytes,
             returnedSinceBytes: r.returnedSinceBytes
         )
-        guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
-            return .failure(id: req.id, code: "ipc.encode_failed", message: "console.read payload 编码失败")
-        }
-        return .success(id: req.id, data: ["payload": json])
+        return .encoded(id: req.id, payload: payload, kind: "console.read")
     }
 
     private func handleDbgConsoleWrite(req: IPCRequest) -> IPCResponse {
@@ -885,10 +870,7 @@ final class QemuHostState {
             } else {
                 payload = IPCDbgFindTextPayload(match: false)
             }
-            guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
-                return .failure(id: req.id, code: "ipc.encode_failed", message: "find_text payload 编码失败")
-            }
-            return .success(id: req.id, data: ["payload": json])
+            return .encoded(id: req.id, payload: payload, kind: "find_text")
         } catch let e as HVMError {
             let uf = e.userFacing
             return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)
@@ -924,13 +906,7 @@ final class QemuHostState {
             pid: getpid(),
             startedAt: startedAt
         )
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(payload),
-              let json = String(data: data, encoding: .utf8) else {
-            return .failure(id: req.id, code: "ipc.encode_failed", message: "响应编码失败")
-        }
-        return .success(id: req.id, data: ["payload": json])
+        return .encoded(id: req.id, payload: payload, kind: "host status")
     }
 
     private func qemuRunnerStateString(_ s: QemuProcessRunner.State) -> String {

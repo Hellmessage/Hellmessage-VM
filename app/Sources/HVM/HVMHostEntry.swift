@@ -310,13 +310,7 @@ final class HostState {
                 pid: getpid(),
                 startedAt: startedAt
             )
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            guard let data = try? encoder.encode(payload),
-                  let json = String(data: data, encoding: .utf8) else {
-                return .failure(id: req.id, code: "ipc.encode_failed", message: "响应编码失败")
-            }
-            return .success(id: req.id, data: ["payload": json])
+            return .encoded(id: req.id, payload: payload, kind: "host status")
 
         case IPCOp.stop.rawValue:
             do {

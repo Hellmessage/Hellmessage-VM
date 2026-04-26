@@ -73,10 +73,7 @@ public final class DbgOps {
             heightPx: shot.heightPx,
             sha256: shot.sha256
         )
-        guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
-            return .failure(id: req.id, code: "ipc.encode_failed", message: "screenshot payload 编码失败")
-        }
-        return .success(id: req.id, data: ["payload": json])
+        return .encoded(id: req.id, payload: payload, kind: "screenshot")
     }
 
     private func handleStatus(_ req: IPCRequest) -> IPCResponse {
@@ -89,10 +86,7 @@ public final class DbgOps {
             lastFrameSha256: lastFrameSha256,
             consoleAgentOnline: consoleBridgeProvider() != nil
         )
-        guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
-            return .failure(id: req.id, code: "ipc.encode_failed", message: "dbg status payload 编码失败")
-        }
-        return .success(id: req.id, data: ["payload": json])
+        return .encoded(id: req.id, payload: payload, kind: "dbg status")
     }
 
     private func handleKey(_ req: IPCRequest) -> IPCResponse {
@@ -184,10 +178,7 @@ public final class DbgOps {
                     text: $0.text, confidence: $0.confidence
                 ) }
             )
-            guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
-                return .failure(id: req.id, code: "ipc.encode_failed", message: "ocr payload 编码失败")
-            }
-            return .success(id: req.id, data: ["payload": json])
+            return .encoded(id: req.id, payload: payload, kind: "ocr")
         } catch let e as HVMError {
             let uf = e.userFacing
             return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)
@@ -224,10 +215,7 @@ public final class DbgOps {
             } else {
                 payload = IPCDbgFindTextPayload(match: false)
             }
-            guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
-                return .failure(id: req.id, code: "ipc.encode_failed", message: "find_text payload 编码失败")
-            }
-            return .success(id: req.id, data: ["payload": json])
+            return .encoded(id: req.id, payload: payload, kind: "find_text")
         } catch let e as HVMError {
             let uf = e.userFacing
             return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)
@@ -245,10 +233,7 @@ public final class DbgOps {
 
         func reply(_ phase: String, _ confidence: Float) -> IPCResponse {
             let payload = IPCDbgBootProgressPayload(phase: phase, confidence: confidence, elapsedSec: elapsed)
-            guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
-                return .failure(id: req.id, code: "ipc.encode_failed", message: "boot_progress payload 编码失败")
-            }
-            return .success(id: req.id, data: ["payload": json])
+            return .encoded(id: req.id, payload: payload, kind: "boot_progress")
         }
 
         // 非 running: 直接 bios (含 starting / paused / stopped / error / stopping)
@@ -282,10 +267,7 @@ public final class DbgOps {
             totalBytes: r.totalBytes,
             returnedSinceBytes: r.returnedSinceBytes
         )
-        guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
-            return .failure(id: req.id, code: "ipc.encode_failed", message: "console.read payload 编码失败")
-        }
-        return .success(id: req.id, data: ["payload": json])
+        return .encoded(id: req.id, payload: payload, kind: "console.read")
     }
 
     /// console.write: 写一段字节到 guest stdin. args: dataBase64 (优先) 或 text (UTF-8).

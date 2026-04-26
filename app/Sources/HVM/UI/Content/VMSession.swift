@@ -218,13 +218,7 @@ public final class VMSession {
                 pid: hostPid,
                 startedAt: startedAt
             )
-            let enc = JSONEncoder()
-            enc.dateEncodingStrategy = .iso8601
-            guard let data = try? enc.encode(payload),
-                  let json = String(data: data, encoding: .utf8) else {
-                return .failure(id: req.id, code: "ipc.encode_failed", message: "响应编码失败")
-            }
-            return .success(id: req.id, data: ["payload": json])
+            return .encoded(id: req.id, payload: payload, kind: "host status")
 
         case IPCOp.stop.rawValue:
             do {
