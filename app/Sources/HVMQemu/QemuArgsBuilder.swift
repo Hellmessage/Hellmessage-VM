@@ -31,6 +31,9 @@ public enum QemuArgsBuilder {
         /// swtpm 控制 socket 绝对路径 (仅 windows + tpmEnabled 时用).
         /// nil 时即便 windows.tpmEnabled=true 也不注入 TPM args (调用方负责事先启动 swtpm).
         public let swtpmSocketPath: String?
+        /// socket_vmnet 监听 socket 绝对路径 (仅 networks 含 bridged 时用).
+        /// nil 时 bridged NetworkSpec 抛 configInvalid (一期不再 throw 通用 "未实现").
+        public let socketVmnetPath: String?
 
         public init(
             config: VMConfig,
@@ -38,7 +41,8 @@ public enum QemuArgsBuilder {
             qemuRoot: URL,
             qmpSocketPath: String,
             virtioWinISOPath: String? = nil,
-            swtpmSocketPath: String? = nil
+            swtpmSocketPath: String? = nil,
+            socketVmnetPath: String? = nil
         ) {
             self.config = config
             self.bundleURL = bundleURL
@@ -46,6 +50,7 @@ public enum QemuArgsBuilder {
             self.qmpSocketPath = qmpSocketPath
             self.virtioWinISOPath = virtioWinISOPath
             self.swtpmSocketPath = swtpmSocketPath
+            self.socketVmnetPath = socketVmnetPath
         }
     }
 
@@ -130,11 +135,18 @@ public enum QemuArgsBuilder {
                 args += ["-netdev", "user,id=\(netId)"]
                 args += ["-device", "virtio-net-pci,netdev=\(netId),mac=\(net.macAddress)"]
             case .bridged:
-                // vmnet-bridged 需要 entitlement + 接口检查, QEMU 后端一期不实现
-                throw HVMError.backend(.configInvalid(
-                    field: "networks[\(idx)].mode",
-                    reason: "bridged 网络在 QEMU 后端尚未实现, 改用 nat 或等待后续版本"
-                ))
+                // socket_vmnet sidecar 提供 vmnet-bridged 桥接 (跨物理 LAN).
+                // 需调用方先启动 socket_vmnet 进程并把 socket path 注入 socketVmnetPath.
+                guard let sockPath = inputs.socketVmnetPath else {
+                    throw HVMError.backend(.configInvalid(
+                        field: "networks[\(idx)].mode",
+                        reason: "bridged 网络需要 socket_vmnet sidecar; 调用方未启动. " +
+                                "首次使用走 GUI 创建向导自动配置 sudoers, 或 scripts/install-vmnet-helper.sh"
+                    ))
+                }
+                // QEMU 10+ 的 stream netdev 直接连 unix socket (无需 socket_vmnet_client wrapper)
+                args += ["-netdev", "stream,id=\(netId),addr.type=unix,addr.path=\(sockPath),server=off"]
+                args += ["-device", "virtio-net-pci,netdev=\(netId),mac=\(net.macAddress)"]
             }
         }
 

@@ -16,7 +16,8 @@ final class QemuArgsBuilderTests: XCTestCase {
         qemuRoot: String = "/opt/test/qemu",
         qmpPath: String = "/tmp/hvm-test/run/foo.qmp",
         virtioWinISOPath: String? = nil,
-        swtpmSocketPath: String? = nil
+        swtpmSocketPath: String? = nil,
+        socketVmnetPath: String? = nil
     ) -> QemuArgsBuilder.Inputs {
         QemuArgsBuilder.Inputs(
             config: config,
@@ -24,7 +25,8 @@ final class QemuArgsBuilderTests: XCTestCase {
             qemuRoot: URL(fileURLWithPath: qemuRoot, isDirectory: true),
             qmpSocketPath: qmpPath,
             virtioWinISOPath: virtioWinISOPath,
-            swtpmSocketPath: swtpmSocketPath
+            swtpmSocketPath: swtpmSocketPath,
+            socketVmnetPath: socketVmnetPath
         )
     }
 
@@ -133,11 +135,33 @@ final class QemuArgsBuilderTests: XCTestCase {
                             && $0.contains("mac=02:11:22:33:44:55") }))
     }
 
-    func testBridgedNetworkThrowsForNow() {
+    func testBridgedWithoutSocketVmnetThrows() {
+        // bridged + 未注入 socketVmnetPath: builder 应抛 configInvalid 让调用方启 sidecar
         var cfg = linuxConfig()
         cfg.networks = [NetworkSpec(mode: .bridged(interface: "en0"),
                                     macAddress: "02:00:00:00:00:01")]
         XCTAssertThrowsError(try QemuArgsBuilder.build(makeInputs(config: cfg)))
+    }
+
+    func testBridgedWithSocketVmnetRendersStreamNetdev() throws {
+        var cfg = linuxConfig()
+        cfg.networks = [NetworkSpec(mode: .bridged(interface: "en0"),
+                                    macAddress: "02:00:00:00:00:01")]
+        let args = try QemuArgsBuilder.build(makeInputs(
+            config: cfg, socketVmnetPath: "/tmp/run/abc.vmnet.sock"
+        ))
+        // -netdev stream 直接连 unix socket (QEMU 10+)
+        XCTAssertTrue(args.allFlagValues("-netdev").contains(where: {
+            $0.hasPrefix("stream,")
+                && $0.contains("addr.type=unix")
+                && $0.contains("addr.path=/tmp/run/abc.vmnet.sock")
+                && $0.contains("server=off")
+        }))
+        // virtio-net-pci device 的 mac 仍正确
+        XCTAssertTrue(args.allFlagValues("-device").contains(where: {
+            $0.hasPrefix("virtio-net-pci")
+                && $0.contains("mac=02:00:00:00:00:01")
+        }))
     }
 
     // MARK: - guestOS 边界
