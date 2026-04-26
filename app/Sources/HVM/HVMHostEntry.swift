@@ -95,13 +95,9 @@ public enum HVMHostEntry {
         // 4. 在 MainActor 准备 view + window + VM + IPC
         Task { @MainActor in
             // 4a. 离屏 window + HVMView
-            // 用 guest framebuffer 尺寸, 与 ConfigBuilder 当前硬编码匹配.
-            let (w, h): (CGFloat, CGFloat)
-            switch config.guestOS {
-            case .linux:   (w, h) = (1024, 768)
-            case .windows: (w, h) = (1920, 1080)
-            case .macOS:   (w, h) = (1920, 1080)
-            }
+            // 走 GuestOSType.defaultFramebufferSize (Linux=1024x768, macOS/Windows=1920x1080)
+            let _fbSize = config.guestOS.defaultFramebufferSize
+            let (w, h): (CGFloat, CGFloat) = (CGFloat(_fbSize.width), CGFloat(_fbSize.height))
             // 位置 -20000, -20000: 远离任何真实显示器, 但 isVisible=true 仍纳入 Window Server
             // 合成树, CGWindowListCreateImage 能抓到帧.
             let window = NSWindow(

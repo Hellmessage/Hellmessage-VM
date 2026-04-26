@@ -212,10 +212,9 @@ public final class DbgOps {
         lastFrameSha256 = shot.sha256
         do {
             let items = try OCREngine.recognize(pngData: shot.data, region: nil)
-            let needle = query.lowercased()
-            let hit = items.first { $0.text.lowercased().contains(needle) }
             let payload: IPCDbgFindTextPayload
-            if let it = hit {
+            if let hit = OCRTextSearch.find(in: items, query: query) {
+                let it = hit.item
                 payload = IPCDbgFindTextPayload(
                     match: true,
                     x: it.x, y: it.y, width: it.width, height: it.height,
@@ -266,31 +265,8 @@ public final class DbgOps {
         do { items = try OCREngine.recognize(pngData: shot.data, region: nil) }
         catch { return reply("boot-logo", 0.5) }
 
-        if items.isEmpty { return reply("boot-logo", 0.6) }
-
-        let lowered = items.map { $0.text.lowercased() }
-        let joined = lowered.joined(separator: " ")
-
-        // ready-tty: 出现明确的 tty 登录提示
-        let ttyKeywords = ["login:", "localhost login", "raspberrypi login"]
-        if ttyKeywords.contains(where: { joined.contains($0) }) {
-            return reply("ready-tty", 0.9)
-        }
-
-        // ready-gui: 出现典型桌面登录/桌面元素 (按 guestOS 分别命中)
-        let guiKeywords: [String] = {
-            switch guestOS {
-            case .macOS:   return ["sign in", "other", "user name", "用户名", "apple", "finder"]
-            case .linux:   return ["username", "password", "sign in", "log in", "用户名", "密码"]
-            case .windows: return ["sign in", "username", "password", "user", "administrator", "windows", "登录", "用户名", "密码"]
-            }
-        }()
-        if guiKeywords.contains(where: { kw in lowered.contains(where: { $0.contains(kw) }) }) {
-            return reply("ready-gui", 0.8)
-        }
-
-        // 有文字但没命中关键词: 可能在装机向导中间步骤, 不给硬结论
-        return reply("unknown", 0.4)
+        let cls = BootPhaseClassifier.classify(items: items, guestOS: guestOS)
+        return reply(cls.phase, cls.confidence)
     }
 
     /// console.read: 增量拉 guest stdout. args: sinceBytes (默认 0).
@@ -340,10 +316,8 @@ public final class DbgOps {
     /// guest framebuffer 分辨率 (与 ConfigBuilder 当前硬编码对齐).
     /// TODO: 将来 VMConfig 加 displaySpec 后, 这里改成读 config.
     private func guestFramebufferSize() -> (Int, Int) {
-        switch guestOS {
-        case .linux, .windows: return (1024, 768)
-        case .macOS:           return (1920, 1080)
-        }
+        let s = guestOS.defaultFramebufferSize
+        return (s.width, s.height)
     }
 
     private func parsePoint(_ x: String?, _ y: String?) throws -> CGPoint {

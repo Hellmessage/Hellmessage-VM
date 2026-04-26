@@ -10,6 +10,21 @@ public enum GuestOSType: String, Codable, Sendable, CaseIterable {
     case windows
 }
 
+public extension GuestOSType {
+    /// 各 guestOS 的默认 framebuffer 尺寸 (px). VZ 离屏 window / QEMU 鼠标 abs 映射 / dbg
+    /// status 都用这个估算; 实际尺寸 guest 内可改, 这只是 host 侧的"假定值".
+    /// 决策:
+    ///   - Linux: 1024x768 — text mode + 早期 X / Wayland session 默认
+    ///   - macOS: 1920x1080 — VZMacGraphicsDisplayConfiguration 我们硬编码 1080p
+    ///   - Windows: 1920x1080 — Win11 推荐最低, 用同 macOS 尺寸保持一致
+    var defaultFramebufferSize: (width: Int, height: Int) {
+        switch self {
+        case .linux:   return (1024, 768)
+        case .macOS, .windows: return (1920, 1080)
+        }
+    }
+}
+
 /// 后端引擎. macOS 仅 vz; Linux 二选一; Windows 仅 qemu (CLAUDE.md 约束).
 /// 老 v1 config 缺该字段时, VMConfig.init(from:) 兜底为 .vz, 不需要 schema 迁移.
 public enum Engine: String, Codable, Sendable, CaseIterable {

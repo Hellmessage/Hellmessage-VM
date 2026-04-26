@@ -84,6 +84,10 @@ let package = Package(
             dependencies: ["HVMIPC", "HVMCore"]
         ),
         .testTarget(
+            name: "HVMDisplayTests",
+            dependencies: ["HVMDisplay", "HVMBundle", "HVMCore"]
+        ),
+        .testTarget(
             name: "HVMQemuTests",
             dependencies: ["HVMQemu", "HVMBundle", "HVMCore"]
         ),

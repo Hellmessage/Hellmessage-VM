@@ -644,13 +644,11 @@ final class QemuHostState {
 
     private func handleDbgStatus(req: IPCRequest) -> IPCResponse {
         // QEMU 端 framebuffer 尺寸: 当前 cocoa 自带窗口, 没有简单 API 取实时尺寸;
-        // 用 guestOS 估算 (跟 DbgOps.guestFramebufferSize 等价).
+        // 用 guestOS 估算 (走 GuestOSType.defaultFramebufferSize, 与 VZ DbgOps 一致)
         let (gw, gh): (Int, Int)
-        switch config?.guestOS {
-        case .linux, .windows: (gw, gh) = (1024, 768)
-        case .macOS:           (gw, gh) = (1920, 1080)
-        case .none:            (gw, gh) = (0, 0)
-        }
+        if let os = config?.guestOS {
+            let s = os.defaultFramebufferSize; (gw, gh) = (s.width, s.height)
+        } else { (gw, gh) = (0, 0) }
         let stateString: String
         if case .running = runner?.state { stateString = "running" } else { stateString = "starting" }
         let payload = IPCDbgStatusPayload(
@@ -745,11 +743,9 @@ final class QemuHostState {
         }
         // guest framebuffer 尺寸 (与 dbgStatus 同, 估算)
         let (gw, gh): (Int, Int)
-        switch config?.guestOS {
-        case .linux, .windows: (gw, gh) = (1024, 768)
-        case .macOS:           (gw, gh) = (1920, 1080)
-        case .none:            (gw, gh) = (1, 1)
-        }
+        if let os = config?.guestOS {
+            let s = os.defaultFramebufferSize; (gw, gh) = (s.width, s.height)
+        } else { (gw, gh) = (1, 1) }
         let guestSize = CGSize(width: gw, height: gh)
         let button = req.args["button"] ?? "left"
         do {
@@ -816,26 +812,9 @@ final class QemuHostState {
         let items: [OCREngine.TextItem]
         do { items = try OCREngine.recognize(pngData: shot.pngData, region: nil) }
         catch { return reply("boot-logo", 0.5) }
-        if items.isEmpty { return reply("boot-logo", 0.6) }
-
-        let lowered = items.map { $0.text.lowercased() }
-        let joined = lowered.joined(separator: " ")
-        let ttyKeywords = ["login:", "localhost login", "raspberrypi login"]
-        if ttyKeywords.contains(where: { joined.contains($0) }) {
-            return reply("ready-tty", 0.9)
-        }
-        let guiKeywords: [String] = {
-            switch config?.guestOS {
-            case .macOS:   return ["sign in", "other", "user name", "用户名", "apple", "finder"]
-            case .linux:   return ["username", "password", "sign in", "log in", "用户名", "密码"]
-            case .windows: return ["sign in", "username", "password", "user", "administrator", "windows", "登录", "用户名", "密码"]
-            case .none:    return []
-            }
-        }()
-        if guiKeywords.contains(where: { kw in lowered.contains(where: { $0.contains(kw) }) }) {
-            return reply("ready-gui", 0.8)
-        }
-        return reply("unknown", 0.4)
+        guard let os = config?.guestOS else { return reply("unknown", 0.0) }
+        let cls = BootPhaseClassifier.classify(items: items, guestOS: os)
+        return reply(cls.phase, cls.confidence)
     }
 
     private func handleDbgConsoleRead(req: IPCRequest) -> IPCResponse {
@@ -894,10 +873,9 @@ final class QemuHostState {
         lastFrameSha256 = shot.sha256
         do {
             let items = try OCREngine.recognize(pngData: shot.pngData, region: nil)
-            let needle = query.lowercased()
-            let hit = items.first { $0.text.lowercased().contains(needle) }
             let payload: IPCDbgFindTextPayload
-            if let it = hit {
+            if let hit = OCRTextSearch.find(in: items, query: query) {
+                let it = hit.item
                 payload = IPCDbgFindTextPayload(
                     match: true,
                     x: it.x, y: it.y, width: it.width, height: it.height,
