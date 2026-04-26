@@ -17,8 +17,11 @@ struct CreateCommand: AsyncParsableCommand {
     @Option(name: .long, help: "VM 名称 (必填)")
     var name: String
 
-    @Option(name: .long, help: "Guest OS: linux | macOS")
+    @Option(name: .long, help: "Guest OS: linux | macOS | windows")
     var os: String = "linux"
+
+    @Option(name: .long, help: "后端引擎: vz | qemu (默认按 guestOS: linux/macOS=vz, windows=qemu)")
+    var engine: String?
 
     @Option(name: .long, help: "CPU 核心数")
     var cpu: Int = 4
@@ -50,6 +53,7 @@ struct CreateCommand: AsyncParsableCommand {
     func run() async throws {
         do {
             let os = try parseGuestOS(self.os)
+            let engineValue = try resolveEngine(explicit: self.engine, guestOS: os)
 
             // OS 分支专属字段校验
             var isoPath: String? = nil
@@ -94,6 +98,7 @@ struct CreateCommand: AsyncParsableCommand {
             let config = VMConfig(
                 displayName: name,
                 guestOS: os,
+                engine: engineValue,
                 cpuCount: cpu,
                 memoryMiB: memory * 1024,
                 disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: disk)],
@@ -101,7 +106,8 @@ struct CreateCommand: AsyncParsableCommand {
                 installerISO: isoPath,
                 bootFromDiskOnly: false,
                 macOS: os == .macOS ? MacOSSpec(ipsw: ipswPath, autoInstalled: false) : nil,
-                linux: os == .linux ? LinuxSpec() : nil
+                linux: os == .linux ? LinuxSpec() : nil,
+                windows: os == .windows ? WindowsSpec() : nil
             )
 
             try BundleIO.create(at: bundleURL, config: config)
@@ -115,6 +121,7 @@ struct CreateCommand: AsyncParsableCommand {
                 print("✔ 已创建 \(bundleURL.path)")
                 print("  id:        \(config.id.uuidString)")
                 print("  guestOS:   \(config.guestOS.rawValue)")
+                print("  engine:    \(config.engine.rawValue)")
                 print("  cpu/mem:   \(config.cpuCount) 核 / \(config.memoryMiB / 1024) GiB")
                 print("  disk:      \(disk) GiB (raw sparse)")
                 if let p = isoPath  { print("  iso:       \(p)") }
@@ -144,6 +151,24 @@ struct CreateCommand: AsyncParsableCommand {
             field: "os", raw: raw,
             allowed: GuestOSType.allCases.map { $0.rawValue }
         ))
+    }
+
+    /// 显式 --engine > 按 guestOS 默认 (linux/macOS=vz, windows=qemu).
+    /// 最终结果由 VMConfig.validate() 在 BundleIO.create 入口处再校验一次.
+    private func resolveEngine(explicit: String?, guestOS: GuestOSType) throws -> Engine {
+        if let raw = explicit {
+            guard let v = Engine(rawValue: raw) else {
+                throw HVMError.config(.invalidEnum(
+                    field: "engine", raw: raw,
+                    allowed: Engine.allCases.map { $0.rawValue }
+                ))
+            }
+            return v
+        }
+        switch guestOS {
+        case .linux, .macOS: return .vz
+        case .windows:       return .qemu
+        }
     }
 
     private func parseNetwork(_ raw: String) throws -> NetworkMode {

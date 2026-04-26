@@ -46,16 +46,16 @@ public struct QmpEvent: Sendable, Equatable {
 }
 
 /// query-status 的响应载荷.
-/// QEMU 返回 {"return": {"status": "running", "running": true, "singlestep": false}}
+/// QEMU 返回 {"return": {"status": "running", "running": true}} (10.x 起 singlestep 已移除)
 public struct QmpStatus: Sendable, Codable, Equatable {
     /// 详细 vm 状态字符串. 常见: "running" / "paused" / "shutdown" / "internal-error" / ...
     public let status: String
     /// CPU 是否在执行
     public let running: Bool
-    /// 是否单步调试模式
-    public let singlestep: Bool
+    /// 是否单步调试模式 (QEMU 8.x 起从 vm 级别移到 vCPU 级别, 新版本不再返回此字段)
+    public let singlestep: Bool?
 
-    public init(status: String, running: Bool, singlestep: Bool) {
+    public init(status: String, running: Bool, singlestep: Bool? = nil) {
         self.status = status
         self.running = running
         self.singlestep = singlestep

@@ -204,9 +204,11 @@ prune_share() {
     # 1) 删非 aarch64 的 EDK2 固件 (16-64MB 一个, 大头)
     # 2) 删其他架构 firmware: PowerPC (slof/skiboot/u-boot/vof/pnv/canyonlands/bamboo/pegasos)
     #    SPARC (QEMU,*) MIPS HPPA RISC-V (opensbi) s390 LoongArch Aspeed-BMC NPCM
-    # 3) 删 x86 启动相关 (vgabios/pxe/efi-*/multiboot/linuxboot/kvmvapic/pvh/sgabios/openbios/bios*)
+    # 3) 删 x86 启动相关 (vgabios/pxe/multiboot/linuxboot/kvmvapic/pvh/sgabios/openbios/bios*)
     # 4) 删 Microblaze (petalogix-*) 与 Alpha (palcode-clipper)
     # 5) 删 Windows 安装器素材 (qemu-nsis.bmp)
+    # 6) efi-*.rom 是 PCI NIC iPXE boot ROM. 必须保留 efi-virtio.rom (virtio-net-pci 必需);
+    #    其他 (e1000 / rtl8139 / ne2k_pci / pcnet / vmxnet3 / eepro100) 是 x86 模拟 NIC 用
     find "$share" -maxdepth 1 -type f \( \
         -name 'edk2-arm-*'         -o \
         -name 'edk2-riscv-*'       -o \
@@ -225,7 +227,12 @@ prune_share() {
         -name 's390-*'             -o \
         -name 'vgabios*.bin'       -o \
         -name 'pxe-*'              -o \
-        -name 'efi-*'              -o \
+        -name 'efi-e1000*'         -o \
+        -name 'efi-eepro100*'      -o \
+        -name 'efi-ne2k_pci*'      -o \
+        -name 'efi-pcnet*'         -o \
+        -name 'efi-rtl8139*'       -o \
+        -name 'efi-vmxnet3*'       -o \
         -name 'linuxboot*'         -o \
         -name 'multiboot*'         -o \
         -name 'kvmvapic.bin'       -o \

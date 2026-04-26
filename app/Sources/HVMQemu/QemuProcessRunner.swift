@@ -138,11 +138,12 @@ public final class QemuProcessRunner: @unchecked Sendable {
         }
     }
 
-    /// SIGKILL: 强杀, 对应 hvm-cli kill 语义
+    /// SIGKILL: 强杀, 对应 hvm-cli kill 语义.
+    /// 不依赖 process.isRunning (有竞态), 直接 POSIX kill; ESRCH 表示已死, 忽略.
     public func forceKill() {
-        if process.isRunning {
-            // Foundation.Process 没暴露 kill(2), 用 POSIX
-            kill(process.processIdentifier, SIGKILL)
+        let pid = process.processIdentifier
+        if pid > 0 {
+            _ = kill(pid, SIGKILL)
         }
     }
 

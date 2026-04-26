@@ -64,7 +64,7 @@ final class QmpClientTests: XCTestCase {
         let status = try await client.queryStatus()
         XCTAssertEqual(status.status, "running")
         XCTAssertTrue(status.running)
-        XCTAssertFalse(status.singlestep)
+        XCTAssertEqual(status.singlestep, false)
         client.close()
     }
 
