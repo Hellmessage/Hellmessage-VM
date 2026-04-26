@@ -193,6 +193,30 @@ socket_vmnet 是 macOS `vmnet` 的非 root 桥接 daemon (Lima 项目). 设计:
 - 一次性 sudoers 配置: `/etc/sudoers.d/hvm-socket-vmnet` 由 `scripts/install-vmnet-helper.sh` 引导写入
 - 二进制 + 依赖 dylib 同 swtpm 模式打包入 `Resources/QEMU/bin/socket_vmnet` (`install_name_tool` 重定向)
 
+### 用户首次配置 (一次性)
+
+```bash
+# 自动探测 socket_vmnet 路径 (优先 /Applications/HVM.app, 兜底 brew)
+./scripts/install-vmnet-helper.sh
+
+# 或: 检查现有 sudoers 配置
+./scripts/install-vmnet-helper.sh --check
+
+# 或: 卸载
+./scripts/install-vmnet-helper.sh --uninstall
+```
+
+会写入 `/etc/sudoers.d/hvm-socket-vmnet`, 内容格式:
+```
+%admin ALL=(root:root) NOPASSWD:NOSETENV: /Applications/HVM.app/Contents/Resources/QEMU/bin/socket_vmnet *
+```
+
+之后 `hvm-cli create --engine qemu --network bridged:en0 ...` + `hvm-cli start` 自动起 socket_vmnet 不再问密码.
+
+**移动 .app 后**需重新跑 `install-vmnet-helper.sh` 更新路径 (sudoers 绑定的是绝对路径).
+
+GUI 创建向导**当前不暴露 bridged 网络选项** (硬编码 NAT). 加 GUI bridged 入口的 commit 会一并补上 sudoers 配置自动检测 + 引导 dialog.
+
 ## 相关文档
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 模块与进程模型，后续在「后端」章节增加 QEMU 分支。
