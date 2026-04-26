@@ -12,9 +12,12 @@ QEMU_REPO="https://gitlab.com/qemu-project/qemu.git"
 # Linaro 官方预编译 EDK2 (aarch64 UEFI), Win11/Linux arm64 启动必需
 EDK2_FIRMWARE_URL="https://releases.linaro.org/components/kernel/uefi-linaro/latest/release/qemu64/QEMU_EFI.fd"
 
-# brew 包列表 (锁定; swtpm/libtpms 是 Win11 TPM 2.0 必需)
+# brew 包列表 (锁定):
+#   - meson/ninja/pkgconf/glib/pixman/libslirp/dtc/capstone — QEMU 编译依赖
+#   - swtpm/libtpms — Win11 TPM 2.0 sidecar (打包入 .app/Resources/QEMU/bin/swtpm)
+#   - socket_vmnet — vmnet bridged/shared 非 root 桥接 (打包入 .app/Resources/QEMU/bin/socket_vmnet)
 # 注: Homebrew 已把 pkg-config 别名到 pkgconf, 直接用新名避免每次 install no-op
-BREW_PACKAGES=(meson ninja pkgconf glib pixman libslirp dtc capstone swtpm libtpms)
+BREW_PACKAGES=(meson ninja pkgconf glib pixman libslirp dtc capstone swtpm libtpms socket_vmnet)
 
 # ---- 路径 ----
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -329,6 +332,53 @@ bundle_swtpm() {
     ok "swtpm 嵌入完成 ($(otool -L "$bin_dst" 2>/dev/null | wc -l | tr -d ' ') 个 dylib 引用)"
 }
 
+# ---- 9.6 嵌入 socket_vmnet + 依赖 dylib (vmnet bridged/shared 非 root 桥接) ----
+# 与 bundle_swtpm 同形态; 复用 bundle_dylib_deps. 用户机器装 .app 后无需 brew install
+# socket_vmnet, 走包内即可. 实际启动需 sudo NOPASSWD, 由 scripts/install-vmnet-helper.sh
+# 引导写 /etc/sudoers.d/hvm-socket-vmnet (一次性).
+bundle_socket_vmnet() {
+    step "嵌入 socket_vmnet + 依赖 dylib (vmnet 桥接)"
+
+    local sv_src
+    if [[ -x /opt/homebrew/opt/socket_vmnet/bin/socket_vmnet ]]; then
+        sv_src=/opt/homebrew/opt/socket_vmnet/bin/socket_vmnet
+    elif [[ -x /opt/homebrew/bin/socket_vmnet ]]; then
+        sv_src=/opt/homebrew/bin/socket_vmnet
+    elif command -v socket_vmnet >/dev/null 2>&1; then
+        sv_src="$(command -v socket_vmnet)"
+    elif [[ -x /usr/local/opt/socket_vmnet/bin/socket_vmnet ]]; then
+        sv_src=/usr/local/opt/socket_vmnet/bin/socket_vmnet
+    else
+        warn "找不到 socket_vmnet 二进制 (brew install socket_vmnet 已在 ensure_brew_packages 装过, 不应到这)"
+        return
+    fi
+
+    local bin_dir="$VENDOR_DIR/bin"
+    local lib_dir="$VENDOR_DIR/lib"
+    mkdir -p "$bin_dir" "$lib_dir"
+
+    local bin_dst="$bin_dir/socket_vmnet"
+    cp "$sv_src" "$bin_dst"
+    chmod u+w "$bin_dst"
+    codesign --remove-signature "$bin_dst" 2>/dev/null || true
+
+    # 复用 bundle_dylib_deps (与 swtpm 共享 processed set 不必要; 各自独立)
+    local processed
+    processed="$(mktemp -t hvm-bundle-deps-vmnet)"
+    : > "$processed"
+    bundle_dylib_deps "$bin_dst" "$lib_dir" "$processed"
+    rm -f "$processed"
+
+    local leftover
+    leftover="$(otool -L "$bin_dst" 2>/dev/null | grep -E '(/opt/homebrew|/usr/local)' || true)"
+    if [[ -n "$leftover" ]]; then
+        warn "socket_vmnet 仍引用 brew 路径 (打包不完整):"
+        echo "$leftover"
+    fi
+
+    ok "socket_vmnet 嵌入完成"
+}
+
 # bundle_dylib_deps <target_macho> <lib_out_dir> <processed_set_file>
 # 递归: 把 target 所有非系统 dylib 引用复制到 lib_out_dir, 改 install name + 改引用,
 # 然后对每个新拷的 dylib 重复. processed_set_file 防重复处理.
@@ -440,6 +490,7 @@ main() {
     prune_share
     install_to_vendor
     bundle_swtpm
+    bundle_socket_vmnet
     write_manifest
     echo
     c_green "════════════════════════════════════════"
