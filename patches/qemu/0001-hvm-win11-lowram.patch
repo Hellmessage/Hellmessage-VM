@@ -1,0 +1,179 @@
+diff --git a/hw/arm/boot.c b/hw/arm/boot.c
+index b916602..7e0191d 100644
+--- a/hw/arm/boot.c
++++ b/hw/arm/boot.c
+@@ -578,6 +578,19 @@ int arm_load_dtb(hwaddr addr, const struct arm_boot_info *binfo,
+         }
+     }
+ 
++    /* HVM: 写额外 /memory 节点 (Win11 ARM64 bootmgfw 兼容).
++     * binfo->extra_ram_size 由 virt machine 在 hvm_win11_lowram=on 时填,
++     * 默认 0 表示不写, 行为跟 stock QEMU 一致. */
++    if (binfo->extra_ram_size > 0) {
++        rc = fdt_add_memory_node(fdt, acells, binfo->extra_ram_base,
++                                 scells, binfo->extra_ram_size, -1);
++        if (rc < 0) {
++            fprintf(stderr, "HVM: couldn't add extra /memory@%"PRIx64" node\n",
++                    binfo->extra_ram_base);
++            goto fail;
++        }
++    }
++
+     md_list = qmp_memory_device_list();
+     for (MemoryDeviceInfoList *m = md_list; m != NULL; m = m->next) {
+         MemoryDeviceInfo *mi = m->value;
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+index 25fb2ba..5197aa1 100644
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -201,6 +201,12 @@ static const MemMapEntry base_memmap[] = {
+     [VIRT_PCIE_MMIO] =          { 0x10000000, 0x2eff0000 },
+     [VIRT_PCIE_PIO] =           { 0x3eff0000, 0x00010000 },
+     [VIRT_PCIE_ECAM] =          { 0x3f000000, 0x01000000 },
++    /*
++     * HVM: 占位 16MB RAM 孔 (0x10000000), 默认 size=0 不挂. 仅当 machvirt_init 中
++     * vms->hvm_win11_lowram=true 时, 把 PCIe MMIO 头部 16MB 让给这块 RAM, 给
++     * Win11 ARM64 bootmgfw 用. base_memmap 自身不变, 默认行为完全跟 stock 一致.
++     */
++    [VIRT_HVM_WIN11_LOWRAM] =   { 0x10000000, 0 },
+     /* Actual RAM size depends on initial RAM and device memory settings */
+     [VIRT_MEM] =                { GiB, LEGACY_RAMLIMIT_BYTES },
+ };
+@@ -2450,6 +2456,33 @@ static void machvirt_init(MachineState *machine)
+     memory_region_add_subregion(sysmem, vms->memmap[VIRT_MEM].base,
+                                 machine->ram);
+ 
++    /*
++     * HVM: opt-in 低地址 RAM 孔, 用于兼容 Win11 ARM64 bootmgfw 对 0x10000000
++     * 附近内存的硬编码假设 (会调 ConvertPages/SetMemoryAttributes; 原 PCIe MMIO
++     * 操作失败导致 bootmgfw 超时退出). 启用时把 PCIe MMIO 头部 16MB 让给这块 RAM,
++     * 同时填 vms->memmap[VIRT_HVM_WIN11_LOWRAM] 的 size, 让后续 DTB / boot.c 看见.
++     * 默认关闭, 行为完全跟 stock virt 一致, Linux/BSD guest 不受影响.
++     * 要求配套 patch 过的 EDK2 (按 PcdSystemMemoryBase 选主 RAM, stock EDK2 取
++     * 最低地址 /memory 节点会拿到 0x10000000 当主 RAM 触发 ASSERT).
++     */
++    if (vms->hvm_win11_lowram) {
++        const uint64_t hvm_lowram_base = 0x10000000ULL;
++        const uint64_t hvm_lowram_size = 0x01000000ULL; /* 16 MiB */
++        MemoryRegion *lowram = g_new(MemoryRegion, 1);
++
++        /* 把 PCIe MMIO 头部 16MB 让出来 */
++        if (vms->memmap[VIRT_PCIE_MMIO].base == hvm_lowram_base &&
++            vms->memmap[VIRT_PCIE_MMIO].size > hvm_lowram_size) {
++            vms->memmap[VIRT_PCIE_MMIO].base += hvm_lowram_size;
++            vms->memmap[VIRT_PCIE_MMIO].size -= hvm_lowram_size;
++        }
++        vms->memmap[VIRT_HVM_WIN11_LOWRAM].size = hvm_lowram_size;
++
++        memory_region_init_ram(lowram, NULL, "hvm.win11_lowram",
++                               hvm_lowram_size, &error_fatal);
++        memory_region_add_subregion(sysmem, hvm_lowram_base, lowram);
++    }
++
+     cxl_fmws_update_mmio();
+ 
+     virt_flash_fdt(vms, sysmem, secure_sysmem ?: sysmem);
+@@ -2552,6 +2585,18 @@ static void machvirt_init(MachineState *machine)
+     vms->bootinfo.ram_size = machine->ram_size;
+     vms->bootinfo.board_id = -1;
+     vms->bootinfo.loader_start = vms->memmap[VIRT_MEM].base;
++    /*
++     * HVM: opt-in 把 lowram 报为额外 /memory 节点 (boot.c arm_load_dtb 消费).
++     * 配套 patched EDK2: QemuVirtMemInfoPeiLibConstructor 按 PcdSystemMemoryBase 选
++     * 主 RAM, 把 0x10000000 节点收集进 GUID HOB, MemoryPeim 注册成
++     * EFI_RESOURCE_SYSTEM_MEMORY + 映射到 MMU. Win11 bootmgfw 才能成功 ConvertPages.
++     * stock EDK2 + 额外 /memory 节点 = ASSERT 挂死, 故必须 gate 在 hvm_win11_lowram.
++     */
++    if (vms->hvm_win11_lowram &&
++        vms->memmap[VIRT_HVM_WIN11_LOWRAM].size > 0) {
++        vms->bootinfo.extra_ram_base = vms->memmap[VIRT_HVM_WIN11_LOWRAM].base;
++        vms->bootinfo.extra_ram_size = vms->memmap[VIRT_HVM_WIN11_LOWRAM].size;
++    }
+     vms->bootinfo.get_dtb = machvirt_dtb;
+     vms->bootinfo.skip_dtb_autoload = true;
+     vms->bootinfo.firmware_loaded = firmware_loaded;
+@@ -2723,6 +2768,21 @@ static void virt_set_dtb_randomness(Object *obj, bool value, Error **errp)
+     vms->dtb_randomness = value;
+ }
+ 
++/* HVM: hvm-win11-lowram property — opt-in 16MB RAM 孔在 0x10000000, Win11 ARM64 用 */
++static bool virt_get_hvm_win11_lowram(Object *obj, Error **errp)
++{
++    VirtMachineState *vms = VIRT_MACHINE(obj);
++
++    return vms->hvm_win11_lowram;
++}
++
++static void virt_set_hvm_win11_lowram(Object *obj, bool value, Error **errp)
++{
++    VirtMachineState *vms = VIRT_MACHINE(obj);
++
++    vms->hvm_win11_lowram = value;
++}
++
+ static char *virt_get_oem_id(Object *obj, Error **errp)
+ {
+     VirtMachineState *vms = VIRT_MACHINE(obj);
+@@ -3442,6 +3502,19 @@ static void virt_machine_class_init(ObjectClass *oc, const void *data)
+     object_class_property_set_description(oc, "dtb-kaslr-seed",
+                                           "Deprecated synonym of dtb-randomness");
+ 
++    /*
++     * HVM: opt-in 16MB RAM 孔 (0x10000000), 仅 Windows 11 ARM64 VM 开
++     * (HVM Swift 侧 QemuArgsBuilder 给 windows guest 加 hvm-win11-lowram=on).
++     * 要求配套 patched EDK2; stock EDK2 + 这个开关 = ASSERT 挂死.
++     */
++    object_class_property_add_bool(oc, "hvm-win11-lowram",
++                                   virt_get_hvm_win11_lowram,
++                                   virt_set_hvm_win11_lowram);
++    object_class_property_set_description(oc, "hvm-win11-lowram",
++                                          "HVM: add a 16MB RAM hole at 0x10000000 "
++                                          "for Win11 ARM64 bootmgr compat (requires "
++                                          "patched EDK2)");
++
+     object_class_property_add_str(oc, "x-oem-id",
+                                   virt_get_oem_id,
+                                   virt_set_oem_id);
+diff --git a/include/hw/arm/boot.h b/include/hw/arm/boot.h
+index a2e22bd..71fef87 100644
+--- a/include/hw/arm/boot.h
++++ b/include/hw/arm/boot.h
+@@ -107,6 +107,12 @@ struct arm_boot_info {
+     hwaddr initrd_size;
+     hwaddr entry;
+ 
++    /* HVM: 额外 RAM 区, 当非 0 时 arm_load_dtb 会写一个额外的 /memory 节点.
++     * Win11 ARM64 bootmgfw 假设 0x10000000 处有 RAM, virt machine 在 hvm_win11_lowram=on
++     * 时会塞这块. 0 表示不写额外节点 (默认行为, 跟 stock QEMU 一致). */
++    hwaddr extra_ram_base;
++    hwaddr extra_ram_size;
++
+     /* Boot firmware has been loaded, typically at address 0, with -bios or
+      * -pflash. It also implies that fw_cfg_find() will succeed.
+      */
+diff --git a/include/hw/arm/virt.h b/include/hw/arm/virt.h
+index c77a33f..6054703 100644
+--- a/include/hw/arm/virt.h
++++ b/include/hw/arm/virt.h
+@@ -82,6 +82,9 @@ enum {
+     VIRT_NVDIMM_ACPI,
+     VIRT_PVTIME,
+     VIRT_ACPI_PCIHP,
++    /* HVM: 16MB RAM 孔位于 0x10000000, 仅当 -machine virt,hvm-win11-lowram=on 时挂载;
++     * 默认 .size = 0 占位, 实际 mapping 在 machvirt_init 里按 win11_lowram 分支决定. */
++    VIRT_HVM_WIN11_LOWRAM,
+     VIRT_LOWMEMMAP_LAST,
+ };
+ 
+@@ -152,6 +155,11 @@ struct VirtMachineState {
+     bool ras;
+     bool mte;
+     bool dtb_randomness;
++    /* HVM: opt-in 16MB RAM 孔 (0x10000000) 给 Win11 ARM64 bootmgfw 用.
++     * 默认 false; QemuArgsBuilder 给 windows guest 加 -machine virt,hvm-win11-lowram=on
++     * 同时打开后, machvirt_init 会挂 RAM region + 让 PCIe MMIO 头部 16MB 让位.
++     * 要求配套 patch 过的 EDK2; stock EDK2 看到 0x10000000 /memory 节点会 ASSERT. */
++    bool hvm_win11_lowram;
+     bool second_ns_uart_present;
+     OnOffAuto acpi;
+     VirtGICType gic_version;

@@ -1,2 +1,3 @@
 # QEMU 补丁应用顺序; 一行一个文件名; # 开头为注释; 空行忽略
-# 当前 v10.2.0 原样构建, 暂无补丁
+# 0001: opt-in 16MB RAM 孔 (0x10000000), Win11 ARM64 bootmgfw 兼容 (要求配套 EDK2 patch)
+0001-hvm-win11-lowram.patch

@@ -74,7 +74,18 @@ public enum QemuArgsBuilder {
 
         // ---- 机器 + CPU + 加速器 ----
         // virt: aarch64 标准虚拟机型; gic-version=3 给现代 ARM Linux/Win 用
-        args += ["-machine", "virt,gic-version=3"]
+        // hvm-win11-lowram=on (仅 windows guest, 且 env HVM_QEMU_WIN11_LOWRAM=1 时):
+        //   我们 patch 过的 QEMU 自带选项, 在 0x10000000 挂 16MB RAM 孔, 让
+        //   Win11 ARM64 bootmgfw 能成功 ConvertPages. **要求配套 patch 过的 EDK2 firmware**;
+        //   stock kraxel firmware 看到 0x10000000 /memory 节点会 ASSERT 挂死, 所以默认关.
+        //   开启路径: 跑 scripts/edk2-build.sh build 出 patched firmware 拷进 stage, 再 export
+        //   HVM_QEMU_WIN11_LOWRAM=1 启动 Win11 VM. 详见 docs/QEMU_INTEGRATION.md.
+        var machineOpts = "virt,gic-version=3"
+        if cfg.guestOS == .windows,
+           ProcessInfo.processInfo.environment["HVM_QEMU_WIN11_LOWRAM"] == "1" {
+            machineOpts += ",hvm-win11-lowram=on"
+        }
+        args += ["-machine", machineOpts]
         // host: 透传 CPU 特性, HVF 必须用 host
         args += ["-cpu", "host"]
         // hvf: Apple Hypervisor.framework, 不允许 fallback (CLAUDE.md 约束)

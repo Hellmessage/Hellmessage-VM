@@ -36,3 +36,9 @@ app/Resources/embedded.provisionprofile
 # qemu-stage: 编译 + 裁剪 + 嵌 swtpm/socket_vmnet 后的成品 (~180M, bundle.sh 直接拷进 .app)
 third_party/qemu-src/
 third_party/qemu-stage/
+
+# EDK2 firmware (Win11 ARM64 兼容, 由 scripts/edk2-build.sh 产出, 不进 git)
+# edk2-src:   上游 edk2-stable202508 git clone (~700M, 含 submodules)
+# edk2-stage: cross-compile 出来的 edk2-aarch64-code.fd (64MB, qemu-build.sh 拷入 qemu-stage)
+third_party/edk2-src/
+third_party/edk2-stage/

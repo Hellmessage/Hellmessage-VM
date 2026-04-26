@@ -201,25 +201,45 @@ build_qemu() {
 }
 
 # ---- 7. EDK2 firmware (Win11/Linux arm64 UEFI 引导必需) ----
-# `make install` 已把 QEMU 自带 pc-bios/edk2-aarch64-code.fd.bz2 解压到
-# share/qemu/edk2-aarch64-code.fd; 这里只做两件事:
-#   1) 校验 code.fd 存在且看起来是 firmware (>1MB)
-#   2) QEMU 不带 64-bit vars 模板, 用 edk2-arm-vars.fd 复制后 padding 到 64MB
-# 用 python truncate (BSD/GNU 都没有 `truncate` 命令的兼容写法), 不依赖 brew 的 coreutils.
+# 优先用 third_party/edk2-stage/edk2-aarch64-code.fd (scripts/edk2-build.sh 自己 build,
+# patch 过的 ArmVirtPkg 支持 Win11 ARM64 bootmgr 0x10000000 RAM 孔). 没有则降级用
+# QEMU make install 出来的 share/qemu/edk2-aarch64-code.fd (kraxel build, 跟 brew 同源,
+# 只够 Linux arm64 装机, Win11 装机 bootmgr 会 stuck).
+# vars 模板: QEMU 不带 64-bit vars, 用 edk2-arm-vars.fd 复制后 padding 到 64MB
+# (空 vars 32/64-bit 通用; 我们自己 build 的 EDK2 也产 QEMU_VARS.fd, 优先用那个).
+# 用 python truncate (BSD/GNU 都没有 `truncate` 命令的兼容写法), 不依赖 brew coreutils.
 fetch_edk2_firmware() {
-    step "校验 + 准备 EDK2 aarch64 firmware (用 QEMU 自带 kraxel build)"
+    step "准备 EDK2 aarch64 firmware (优先 third_party/edk2-stage/, 否则 QEMU 自带)"
     local fw_dir="$STAGING_DIR/share/qemu"
     local fw_dst="$fw_dir/edk2-aarch64-code.fd"
     local vars_dst="$fw_dir/edk2-aarch64-vars.fd"
     local arm_vars="$fw_dir/edk2-arm-vars.fd"
+    local edk2_stage="$ROOT/third_party/edk2-stage"
+    local edk2_stage_code="$edk2_stage/edk2-aarch64-code.fd"
+    local edk2_build_vars="$ROOT/third_party/edk2-src/Build/ArmVirtQemu-AARCH64/RELEASE_GCC5/FV/QEMU_VARS.fd"
     [[ -d "$fw_dir" ]] || err "$fw_dir 不存在 (make install 应生成)"
-    [[ -f "$fw_dst" ]] || err "$fw_dst 缺失 (QEMU make install 异常?)"
-    local code_sz; code_sz=$(stat -f %z "$fw_dst" 2>/dev/null || stat -c %s "$fw_dst")
-    [[ "$code_sz" -gt 1048576 ]] || err "$fw_dst 大小异常: $code_sz < 1MB"
 
-    # vars: 复制 32-bit 空 vars (空 vars 通用; hell-vm 同 hack)
-    [[ -f "$arm_vars" ]] || err "$arm_vars 缺失 (期望 QEMU 自带)"
-    cp -f "$arm_vars" "$vars_dst"
+    # 1. code.fd: 优先 patched EDK2 (Win11 兼容); 否则降级 QEMU 自带 (Linux 够用)
+    if [[ -f "$edk2_stage_code" ]]; then
+        cp -f "$edk2_stage_code" "$fw_dst"
+        ok "EDK2 code: 用 third_party/edk2-stage/ (patched, Win11 ARM64 兼容)"
+    else
+        warn "third_party/edk2-stage/ 不存在 (没跑 scripts/edk2-build.sh), 用 QEMU 自带 firmware"
+        warn "  Linux arm64 装机 ok; Win11 ARM64 bootmgr 会 stuck (缺 0x10000000 RAM 孔)"
+        [[ -f "$fw_dst" ]] || err "$fw_dst 缺失 (QEMU make install 异常?)"
+        local code_sz; code_sz=$(stat -f %z "$fw_dst" 2>/dev/null || stat -c %s "$fw_dst")
+        [[ "$code_sz" -gt 1048576 ]] || err "$fw_dst 大小异常: $code_sz < 1MB"
+    fi
+
+    # 2. vars.fd: 优先 patched EDK2 build 出来的; 否则 32-bit 空 vars 兜底 (空 vars 通用)
+    if [[ -f "$edk2_build_vars" ]]; then
+        cp -f "$edk2_build_vars" "$vars_dst"
+        ok "EDK2 vars: 用 patched EDK2 build 出来的 QEMU_VARS.fd"
+    else
+        [[ -f "$arm_vars" ]] || err "$arm_vars 缺失 (期望 QEMU 自带)"
+        cp -f "$arm_vars" "$vars_dst"
+        warn "EDK2 vars: fallback 32-bit edk2-arm-vars.fd (空 vars 通用)"
+    fi
 
     # QEMU virt 机器 pflash device 固定 64MB; 必须 padding, 否则启动报
     # "device requires 67108864 bytes, pflash0 block backend provides X bytes"
@@ -239,7 +259,7 @@ elif sz > target:
     }
     pad_to_64m "$fw_dst"
     pad_to_64m "$vars_dst"
-    ok "EDK2 firmware: $fw_dst (64MB, kraxel build 来自 QEMU $QEMU_TAG 源码)"
+    ok "EDK2 firmware: $fw_dst (64MB)"
     ok "EDK2 vars 模板: $vars_dst (64MB; 创建 Win VM 时拷贝到 bundle/nvram/efi-vars.fd)"
 }
 

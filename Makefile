@@ -14,7 +14,7 @@ ENTITLEMENTS  := $(PKG_DIR)/Resources/HVM.entitlements
 QEMU_STAGE    := third_party/qemu-stage
 QEMU_BIN      := $(QEMU_STAGE)/bin/qemu-system-aarch64
 
-.PHONY: all build bundle compile dev test verify clean help icon register-types qemu qemu-clean build-all xed install uninstall
+.PHONY: all build bundle compile dev test verify clean help icon register-types qemu qemu-clean edk2 edk2-clean build-all xed install uninstall
 
 # 默认: release 模式 + 完整 .app 签名
 all: build
@@ -34,9 +34,11 @@ help:
 	@echo "  make clean      — 清除 build/ 和 app/.build/"
 	@echo
 	@echo "QEMU 后端 (Win arm64 / 可选 Linux arm64; 详见 docs/QEMU_INTEGRATION.md):"
+	@echo "  make edk2       — 拉 EDK2 + apply Win11 patch + 编译 (~5 分钟; 仅打包者跑; Win11 ARM64 装机必需)"
+	@echo "  make edk2-clean — 清除 third_party/edk2-src/, third_party/edk2-stage/"
 	@echo "  make qemu       — 装 brew 依赖 + 拉源码 + 编译 QEMU (10-30 分钟; 仅打包者跑)"
 	@echo "  make qemu-clean — 清除 third_party/qemu-src/, third_party/qemu-stage/"
-	@echo "  make build-all  — make qemu + make build (发布完整流程)"
+	@echo "  make build-all  — make edk2 + make qemu + make build (发布完整流程)"
 
 # 1. SwiftPM 编译全部 executable
 compile:
@@ -66,8 +68,19 @@ clean:
 	rm -rf $(BUILD_DIR) $(SWIFTPM_DIR)
 	@echo "✔ 已清除 build/ 与 $(SWIFTPM_DIR)/"
 
+# EDK2 build (仅打包者跑; 详见 scripts/edk2-build.sh)
+# 第一次跑会拉 edk2-stable202508 + submodules, apply Win11 patch, cross compile ~3-5 分钟
+edk2:
+	@bash scripts/edk2-build.sh
+
+# 仅清 EDK2 相关产物, 不动 QEMU / SwiftPM
+edk2-clean:
+	rm -rf third_party/edk2-src third_party/edk2-stage
+	@echo "✔ 已清除 third_party/edk2-src/, third_party/edk2-stage/"
+
 # QEMU 后端构建 (仅打包者跑; 详见 scripts/qemu-build.sh 与 docs/QEMU_INTEGRATION.md)
 # 第一次跑会自动装 Homebrew + 一组锁定 brew 依赖, 拉 v10.2.0 源码, 编译 ~10-30 分钟
+# 优先用 third_party/edk2-stage/ 里的 patched firmware (给 Win11 ARM64); 没有则降级 QEMU 自带
 qemu:
 	@bash scripts/qemu-build.sh
 
@@ -76,8 +89,13 @@ qemu-clean:
 	rm -rf third_party/qemu-src third_party/qemu-stage
 	@echo "✔ 已清除 third_party/qemu-src/, third_party/qemu-stage/"
 
-# 完整发布: 确保 QEMU 已就绪 (不存在则触发 make qemu) + 组装 .app 嵌入 QEMU
+# 完整发布: 确保 EDK2 + QEMU 已就绪 (不存在则触发 make edk2 + make qemu) + 组装 .app 嵌入 QEMU
+EDK2_BIN := third_party/edk2-stage/edk2-aarch64-code.fd
 build-all:
+	@if [ ! -f "$(EDK2_BIN)" ]; then \
+		echo "ℹ EDK2 产物不存在 ($(EDK2_BIN)), 先跑 make edk2"; \
+		$(MAKE) edk2; \
+	fi
 	@if [ ! -x "$(QEMU_BIN)" ]; then \
 		echo "ℹ QEMU 产物不存在 ($(QEMU_BIN)), 先跑 make qemu"; \
 		$(MAKE) qemu; \

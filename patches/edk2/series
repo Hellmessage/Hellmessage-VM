@@ -1,0 +1,6 @@
+# EDK2 补丁应用顺序; 一行一个文件名; # 开头为注释; 空行忽略
+# 0001: ArmVirtPkg 按 PcdSystemMemoryBase 选主 RAM (而非取最低地址), 收集额外
+#       /memory 节点到 GUID HOB, MemoryPeim 注册成 SYSTEM_MEMORY + 加 MMU 页表.
+#       搭配 patches/qemu/0001-hvm-win11-lowram.patch 让 Win11 ARM64 bootmgfw
+#       的 0x10000000 内存操作能成功.
+0001-armvirt-extra-ram-region-for-win11.patch
