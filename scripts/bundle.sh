@@ -75,7 +75,8 @@ if [ -f "$ROOT/app/Resources/embedded.provisionprofile" ]; then
 fi
 
 # 4.4 拷贝 install-vmnet-helper.sh 入 Resources/scripts/, 让 GUI 引导按钮可定位.
-#     dev 模式仍可直接走仓库 scripts/, 这是打包后兜底
+#     按 CLAUDE.md 第三方二进制约束, GUI 严格只走 Bundle.main/Resources/scripts/, 不再 fallback 到仓库;
+#     改完此脚本必须 make install 才能让 /Applications/HVM.app 内的副本同步.
 mkdir -p "$RESOURCES/scripts"
 if [ -f "$ROOT/scripts/install-vmnet-helper.sh" ]; then
     cp "$ROOT/scripts/install-vmnet-helper.sh" "$RESOURCES/scripts/install-vmnet-helper.sh"
