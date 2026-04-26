@@ -165,7 +165,7 @@ public final class ConsoleBridge: @unchecked Sendable {
                 FileManager.default.createFile(atPath: url.path, contents: nil)
             }
             if let fh = try? FileHandle(forWritingTo: url) {
-                try? fh.seekToEnd()
+                _ = try? fh.seekToEnd()
                 logHandle = fh
             }
             currentDay = today

@@ -205,13 +205,13 @@ public enum IPSWFetcher {
 
         let decoder = JSONDecoder()
         // ipsw.me 用 ISO8601 但带毫秒, 自定义 dateDecodingStrategy 兼容多种格式
-        let iso8601 = ISO8601DateFormatter()
-        iso8601.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let iso8601NoFrac = ISO8601DateFormatter()
-        iso8601NoFrac.formatOptions = [.withInternetDateTime]
         decoder.dateDecodingStrategy = .custom { d in
             let c = try d.singleValueContainer()
             let s = try c.decode(String.self)
+            let iso8601 = ISO8601DateFormatter()
+            iso8601.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let iso8601NoFrac = ISO8601DateFormatter()
+            iso8601NoFrac.formatOptions = [.withInternetDateTime]
             if let v = iso8601.date(from: s) { return v }
             if let v = iso8601NoFrac.date(from: s) { return v }
             throw DecodingError.dataCorruptedError(in: c, debugDescription: "无法解析日期: \(s)")
