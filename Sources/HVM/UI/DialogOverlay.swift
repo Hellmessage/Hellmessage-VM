@@ -18,6 +18,9 @@ struct DialogOverlay: View {
             if let state = model.installState {
                 InstallDialog(state: state)
             }
+            if let fetchState = model.ipswFetchState {
+                IpswFetchDialog(state: fetchState)
+            }
             if let editItem = model.editConfigItem {
                 EditConfigDialog(model: model, errors: errors, item: editItem)
             }
@@ -30,6 +33,7 @@ struct DialogOverlay: View {
         .allowsHitTesting(
             model.showCreateWizard ||
             model.installState != nil ||
+            model.ipswFetchState != nil ||
             model.editConfigItem != nil ||
             model.snapshotCreateItem != nil ||
             errors.current != nil ||

@@ -40,6 +40,8 @@ public final class AppModel {
     public var showCreateWizard: Bool = false
     /// 正在跑 macOS 装机时的进度. 非 nil → DialogOverlay 显示 InstallDialog 模态
     public var installState: InstallProgressState? = nil
+    /// 正在拉 IPSW 时的进度. 非 nil → DialogOverlay 显示 IpswFetchDialog 模态
+    public var ipswFetchState: IpswFetchState? = nil
     /// 编辑 cpu/memory 弹窗的当前 VM. 非 nil → DialogOverlay 显示 EditConfigDialog 模态
     public var editConfigItem: VMListItem? = nil
     /// 新建 snapshot 弹窗的当前 VM. 非 nil → DialogOverlay 显示 SnapshotCreateDialog 模态
@@ -53,6 +55,19 @@ public final class AppModel {
 
         public enum Phase: String, Sendable, Equatable {
             case preparing, installing, finalizing
+        }
+    }
+
+    /// IPSW 下载进度. 由 startIpswFetch 维护, IpswFetchDialog 读.
+    public struct IpswFetchState: Sendable, Equatable {
+        public var phase: Phase
+        /// 例 "macOS 15.0.1 (24A335)"; resolving 阶段为 "querying Apple…"
+        public var info: String
+        public var receivedBytes: Int64
+        public var totalBytes: Int64?
+
+        public enum Phase: String, Sendable, Equatable {
+            case resolving, downloading, alreadyCached, completed
         }
     }
 
@@ -183,6 +198,69 @@ public final class AppModel {
                 self?.refreshList()
             }
         }
+    }
+
+    // MARK: - IPSW 下载
+
+    /// 异步下载 Apple 推荐的最新 IPSW 到 cache 目录, 完成后回调 onComplete 把本地路径回填上层 (向导).
+    /// 失败走 errors.present 标准错误弹窗, 不调 onComplete.
+    /// 进度通过 ipswFetchState 更新, IpswFetchDialog 读.
+    ///
+    /// AppModel 是 App 生命周期内的根对象, 不用 [weak self] (单例语义).
+    /// IPSWFetcher 的 onProgress 闭包是 @Sendable (在 URLSession 后台 queue 调), 这里跨 actor 调度回 MainActor.
+    public func startIpswFetch(
+        errors: ErrorPresenter,
+        onComplete: @escaping @MainActor (URL) -> Void
+    ) {
+        ipswFetchState = IpswFetchState(
+            phase: .resolving,
+            info: "querying Apple…",
+            receivedBytes: 0,
+            totalBytes: nil
+        )
+        Task { @MainActor in
+            do {
+                let entry = try await IPSWFetcher.resolveLatest()
+                self.ipswFetchState = IpswFetchState(
+                    phase: .downloading,
+                    info: "macOS \(entry.osVersion) (\(entry.buildVersion))",
+                    receivedBytes: 0,
+                    totalBytes: nil
+                )
+                let local = try await IPSWFetcher.downloadIfNeeded(entry: entry) { p in
+                    Task { @MainActor [self] in
+                        self.applyIpswProgress(p)
+                    }
+                }
+                self.ipswFetchState = nil
+                onComplete(local)
+            } catch {
+                self.ipswFetchState = nil
+                errors.present(error)
+            }
+        }
+    }
+
+    /// 把 IPSWFetchProgress 应用到 ipswFetchState. 在 MainActor 上调.
+    private func applyIpswProgress(_ p: IPSWFetchProgress) {
+        guard var s = ipswFetchState else { return }
+        switch p.phase {
+        case .resolving:
+            s.phase = .resolving
+        case .alreadyCached:
+            s.phase = .alreadyCached
+            s.receivedBytes = p.receivedBytes
+            s.totalBytes = p.totalBytes
+        case .downloading:
+            s.phase = .downloading
+            s.receivedBytes = p.receivedBytes
+            s.totalBytes = p.totalBytes
+        case .completed:
+            s.phase = .completed
+            s.receivedBytes = p.receivedBytes
+            s.totalBytes = p.totalBytes
+        }
+        ipswFetchState = s
     }
 
     /// session 自然结束时通知 (guestDidStop / error) -> 从 sessions 移除

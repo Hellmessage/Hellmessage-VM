@@ -45,6 +45,7 @@ hvm-cli iso select <vm> <path>      指定安装 ISO
 hvm-cli boot-from-disk <vm>         切 bootFromDiskOnly=true
 hvm-cli logs <vm>                   查看日志
 hvm-cli install <vm>                驱动装机流程 (macOS IPSW / Linux ISO)
+hvm-cli ipsw <op>                   IPSW 下载与缓存管理
 ```
 
 ## 命令详解
@@ -283,6 +284,29 @@ hvm-cli install foo
 - **Linux**: 启动 VM 挂 ISO → 让用户自己在 guest 内完成安装流程(CLI 只是帮起 VM, 不自动按键) → 安装完毕用户执行 `hvm-cli boot-from-disk foo` 切回硬盘启动
 
 详见 [GUEST_OS_INSTALL.md](GUEST_OS_INSTALL.md)。
+
+### `ipsw <op>`
+
+IPSW 下载器 + 本地缓存管理. 缓存路径 `~/Library/Application Support/HVM/cache/ipsw/<buildVersion>.ipsw`,文件名按 VZ 报告的 build 派生(同 build 视为同一份)。
+
+```
+hvm-cli ipsw latest                 查询 Apple 推荐的最新 IPSW (不下载)
+hvm-cli ipsw fetch [--force]        下载最新 IPSW 到 cache (已缓存默认跳过)
+hvm-cli ipsw list                   列出本地已缓存的 IPSW
+hvm-cli ipsw rm <build|all>         删除单个 build 或清空全部缓存
+```
+
+`fetch` 选项:
+
+- `--force` — 即使已缓存也强制重新下载
+- `--format json` — JSON 输出
+- `--follow` — JSON 模式下流式推每一帧 progress(默认按 1% 步进)
+
+human 模式下走 `\r` 单行刷新进度;json 模式下每帧一行 `{"phase":"downloading","receivedBytes":...,"totalBytes":...,"fraction":"0.4231"}`。
+
+**断点续传**:`fetch` 自带断点续传。下载落 `<build>.ipsw.partial`,完成后原子 rename 成 `<build>.ipsw`。中途断网 / kill / 系统重启都安全,下次再 `fetch` 看到 `.partial` 就发 `Range: bytes=N-` 续传(human 模式会打印 `resume: 4.2 GiB already on disk → 续传`)。`--force` 强制清掉 `.ipsw + .partial` 全新下;`rm <build>` 也同时清两者。
+
+实现走 `VZMacOSRestoreImage.fetchLatestSupported` 拿 Apple CDN URL,`URLSessionDataTask` + 自管 `FileHandle` 流式落盘,不解析 SUCatalog。详见 [GUEST_OS_INSTALL.md](GUEST_OS_INSTALL.md#ipsw-缓存管理)。
 
 ## 输出格式
 

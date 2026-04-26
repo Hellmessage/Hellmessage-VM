@@ -22,8 +22,10 @@
 
 - 一份与物理 Mac 兼容的 macOS IPSW 文件(restore image)
 - 来源:
-  - Apple 官方下载: `ipsw.me` / `mrmacintosh.com` 收录的官方 URL
-  - HVM 自带下载器(可选): 从 Apple 的 SUCatalog 查最新 IPSW URL, 流式下载到 `~/Library/Application Support/HVM/cache/ipsw/`
+  - **HVM 内建下载器**(推荐): 走 `VZMacOSRestoreImage.fetchLatestSupported()` 取 Apple 当前推荐的 IPSW URL, `URLSession.downloadTask` 流式落到 `~/Library/Application Support/HVM/cache/ipsw/<buildVersion>.ipsw`
+    - GUI: 创建向导 macOS 分支点 `Use Latest`
+    - CLI: `hvm-cli ipsw fetch` (或先 `hvm-cli ipsw latest` 看元信息再决定是否下)
+  - 用户自带 IPSW 文件(任意来源, 例 ipsw.me): 直接在向导 / `--ipsw` 里指定路径
 
 ### 流程
 
@@ -241,10 +243,35 @@ hvm-cli install foo --format json --follow
 ## IPSW 缓存管理
 
 - 缓存目录: `~/Library/Application Support/HVM/cache/ipsw/`
-- 文件名: `<buildVersion>.ipsw`(如 `24A335.ipsw`)
-- 下载成功后 SHA256 校验(若有官方校验值)
-- 清理: GUI 设置里"清空缓存", CLI `hvm-cli cache clean`
-- 不自动清理, 以免下次装机重下
+- 文件名:
+  - `<buildVersion>.ipsw` — 完成态(由 VZ 报告的 `buildVersion` 派生,同 build 视为同一份)
+  - `<buildVersion>.ipsw.partial` — 半成品,下载未完成 / 中断时留在原地
+- 命中策略: `.ipsw` 存在且 size > 0 即视为可用; 真正的内容校验交给后续 `RestoreImageHandle.load`(VZ 内部签名校验)
+- 下载实现: `HVMInstall.IPSWFetcher.downloadIfNeeded(entry:force:onProgress:)`,基于 `URLSessionDataTask` + 自管 `FileHandle`,100ms 节流上报进度
+
+### 断点续传
+
+不用 `URLSessionDownloadTask` 的 `resumeData` blob(跨进程不可靠 / tmp 路径不可控),自己管文件 + HTTP `Range` 头:
+
+1. 下载中文件名 `<build>.ipsw.partial`;完成后**原子** rename 成 `<build>.ipsw`
+2. 下次 `fetch` 检查 `.partial` size > 0 → 发 `Range: bytes=N-` 请求续传
+3. 服务器三种响应分别处理:
+   - `206 Partial Content` → seek-to-end 追加,`Content-Range` 头解析完整文件大小
+   - `200 OK` (服务器忽略 Range)→ truncate `.partial`,从头开始
+   - `416 Range Not Satisfiable` → `.partial` 已等于完整大小,直接 promote 成 `.ipsw`
+4. App 崩溃 / 系统重启 / `kill -9` 都不影响 `.partial`,下次 fetch 自动续
+
+Apple CDN 静态 IPSW 资源原生支持 Range 请求,该路径稳定。`--force` 同时清 `.ipsw + .partial` 强制全新下载;`hvm-cli ipsw rm <build>` 也会清两者。
+
+### 接口一览
+
+- CLI:
+  - `hvm-cli ipsw latest` — 查询最新, 不下载
+  - `hvm-cli ipsw fetch [--force] [--format json --follow]` — 下载 (已缓存默认跳过, 有 .partial 自动续传)
+  - `hvm-cli ipsw list` — 列出本地缓存(完成态 + 半成品分两段输出)
+  - `hvm-cli ipsw rm <build|all>` — 删除单个或全部缓存(含 .partial)
+- GUI 接口: 创建向导 macOS 分支 `Use Latest` 按钮 → 弹 `IpswFetchDialog` 模态进度条 → 完成后回填 ipsw 路径(中途关闭 App 也安全,下次按钮再点继续从断点)
+- 不自动清理 cache,以免下次装机重下;空间紧张时用户手动 `hvm-cli ipsw rm all`
 
 ## 不做什么
 
@@ -258,7 +285,7 @@ hvm-cli install foo --format json --follow
 
 | 编号 | 问题 | 默认方案 | 决策时机 |
 |---|---|---|---|
-| J1 | 是否做内置 IPSW 下载器 | M3 再做, MVP 让用户自己下 IPSW 文件 | M3 |
+| J1 | 是否做内置 IPSW 下载器 | **已决: 做**. 走 `VZMacOSRestoreImage.fetchLatestSupported` + `URLSessionDownloadTask`,落 `cache/ipsw/<build>.ipsw`,不解析 SUCatalog | M3 已决 |
 | J2 | Linux 向导是否推荐特定发行版 | 不推荐, 用户自带 ISO | 已决 |
 | J3 | 是否支持"从已装好的系统迁移" | 不支持, 走 dd + raw image 手动挂 | 已决 |
 

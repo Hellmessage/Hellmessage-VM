@@ -118,12 +118,21 @@ struct CreateVMDialog: View {
                 }
             case .macOS:
                 field("Installer IPSW") {
-                    HStack(spacing: HVMSpace.sm) {
-                        TextField("/path/to/UniversalMac_*.ipsw", text: $ipswPath)
-                            .textFieldStyle(.roundedBorder)
-                            .font(HVMFont.body)
-                        Button("Browse") { pickIPSW() }
-                            .buttonStyle(GhostButtonStyle())
+                    VStack(alignment: .leading, spacing: HVMSpace.xs) {
+                        HStack(spacing: HVMSpace.sm) {
+                            TextField("/path/to/UniversalMac_*.ipsw", text: $ipswPath)
+                                .textFieldStyle(.roundedBorder)
+                                .font(HVMFont.body)
+                            Button("Browse") { pickIPSW() }
+                                .buttonStyle(GhostButtonStyle())
+                            Button("Use Latest") { fetchLatestIPSW() }
+                                .buttonStyle(GhostButtonStyle())
+                                .disabled(creating || model.ipswFetchState != nil)
+                                .help("调 VZMacOSRestoreImage.fetchLatestSupported 拉 Apple 推荐的最新 IPSW 到 cache")
+                        }
+                        Text("// 大约 10-15 GiB. 已缓存的 build 不会重复下载.")
+                            .font(HVMFont.caption)
+                            .foregroundStyle(HVMColor.textTertiary)
                     }
                 }
             }
@@ -218,6 +227,14 @@ struct CreateVMDialog: View {
         panel.allowedContentTypes = [.diskImage, .data]
         if panel.runModal() == .OK, let url = panel.url {
             isoPath = url.path
+        }
+    }
+
+    /// 走 IPSWFetcher 拉 Apple 最新 IPSW. 期间 model.ipswFetchState 非 nil →
+    /// DialogOverlay 显示 IpswFetchDialog 模态 (盖在向导之上). 完成后回填 ipswPath.
+    private func fetchLatestIPSW() {
+        model.startIpswFetch(errors: errors) { localURL in
+            self.ipswPath = localURL.path
         }
     }
 
