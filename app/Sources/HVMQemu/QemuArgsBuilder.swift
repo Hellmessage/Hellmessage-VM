@@ -112,10 +112,13 @@ public enum QemuArgsBuilder {
         // -L: QEMU 找 keymap / firmware descriptor 等辅助资源
         args += ["-L", inputs.qemuRoot.appendingPathComponent("share/qemu").path]
 
-        // ---- 磁盘 (virtio-blk + raw, 顺序与 cfg.disks 一致) ----
+        // ---- 磁盘 (virtio-blk, 顺序与 cfg.disks 一致). format 按文件扩展名: ----
+        //   .qcow2 → qcow2 (新建 QEMU VM 默认)
+        //   .img   → raw   (老 raw VM 兼容; VZ raw 偶尔被 QEMU 加载也能跑)
         for disk in cfg.disks {
-            let path = inputs.bundleURL.appendingPathComponent(disk.path).path
-            var spec = "file=\(path),if=virtio,format=raw,cache=none"
+            let pathStr = inputs.bundleURL.appendingPathComponent(disk.path).path
+            let format = (disk.path as NSString).pathExtension.lowercased() == "qcow2" ? "qcow2" : "raw"
+            var spec = "file=\(pathStr),if=virtio,format=\(format),cache=none"
             if disk.readOnly {
                 spec += ",readonly=on"
             }

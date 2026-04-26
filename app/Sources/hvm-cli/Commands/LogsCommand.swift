@@ -1,5 +1,10 @@
 // LogsCommand.swift
-// hvm-cli logs — 打印 VM 当天的 host 日志 (非 guest serial console; serial 在 M5 hvm-dbg console 里做)
+// hvm-cli logs — 打印 VM 当天的 host 端日志.
+//
+// 路径:
+//   全局 host 侧 .log → ~/Library/Application Support/HVM/logs/<displayName>-<uuid8>/
+//     (host-*.log / qemu-stderr.log / swtpm*.log)
+//   guest serial console-*.log 仍在 bundle/logs/ — 由 hvm-dbg console 读, 不在此命令.
 
 import ArgumentParser
 import Foundation
@@ -24,9 +29,10 @@ struct LogsCommand: AsyncParsableCommand {
     func run() async throws {
         do {
             let bundleURL = try BundleResolve.resolve(vm)
-            let logsDir = bundleURL.appendingPathComponent("logs", isDirectory: true)
+            let config = try BundleIO.load(from: bundleURL)
+            let logsDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id)
             guard FileManager.default.fileExists(atPath: logsDir.path) else {
-                print("(无日志)")
+                print("(无日志: \(logsDir.path))")
                 return
             }
 

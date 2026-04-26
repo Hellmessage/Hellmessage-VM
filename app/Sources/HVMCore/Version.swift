@@ -5,7 +5,7 @@
 public enum HVMVersion {
     /// 开发期默认版本字符串. Release 包以 Info.plist 的 CFBundleShortVersionString 为准
     public static let marketing = "0.0.1"
-    public static let milestone = "M0 skeleton"
+    public static let milestone = "development"
 
     /// 组合字符串, 用于 CLI --version 与 GUI 占位
     public static var displayString: String {

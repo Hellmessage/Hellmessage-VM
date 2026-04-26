@@ -21,9 +21,34 @@ public enum HVMPaths {
         appSupport.appendingPathComponent("run", isDirectory: true)
     }
 
-    /// 全局日志目录 (每 VM 另有自己的 bundle/logs/)
+    /// 全局日志目录. HVM 软件本身的所有 host 侧 .log 都落这里:
+    ///   - 顶层 yyyy-MM-dd.log: LogSink mirror 的 os.Logger 输出 (跨 VM)
+    ///   - 子目录 <displayName>-<uuid8>/: 该 VM 的 host 侧 .log
+    ///       host-<date>.log     ← VMHost (HVM 进程) stdout/stderr
+    ///       qemu-stderr.log     ← QEMU host 进程 stderr
+    ///       swtpm.log           ← swtpm 自身 log
+    ///       swtpm-stderr.log    ← swtpm 进程 stderr
+    /// guest 自身串口输出 (console-*.log) 仍留 bundle/logs/, 不在此处.
     public static var logsDir: URL {
         appSupport.appendingPathComponent("logs", isDirectory: true)
+    }
+
+    /// 给定 VM 的全局 host 侧日志子目录. 子目录名 <displayName>-<uuid8>, displayName 改名时
+    /// 旧目录留为 orphan (排查老问题保留), 不主动清理.
+    public static func vmLogsDir(displayName: String, id: UUID) -> URL {
+        let uuid8 = id.uuidString.lowercased().prefix(8)
+        let safeName = sanitizeForFilesystem(displayName)
+        return logsDir.appendingPathComponent("\(safeName)-\(uuid8)", isDirectory: true)
+    }
+
+    /// VM displayName 转可作为目录名的 token (剔除 / : 等不友好字符).
+    private static func sanitizeForFilesystem(_ raw: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(.init(charactersIn: "-_."))
+        var out = ""
+        for s in raw.unicodeScalars {
+            out.append(allowed.contains(s) ? Character(s) : "_")
+        }
+        return out.isEmpty ? "vm" : out
     }
 
     /// IPSW 缓存目录, ~/Library/Application Support/HVM/cache/ipsw

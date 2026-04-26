@@ -1,5 +1,5 @@
 // SidebarView.swift
-// 左栏: 只放 "VMS" section + VM 列表. 顶部 toolbar / 底部 status bar 已搬走, 此处保持极简
+// 左栏: VM 列表卡片化. 顶部 section header (Virtual Machines + 计数), 列表项 = guest icon + 名 + 状态.
 
 import SwiftUI
 import HVMBundle
@@ -20,15 +20,18 @@ struct SidebarView: View {
     // MARK: - section header
 
     private var header: some View {
-        HStack(spacing: 6) {
-            Text(">")
-                .font(HVMFont.bodyBold)
-                .foregroundStyle(HVMColor.accent)
-            LabelText("VMs (\(model.list.count))", color: HVMColor.textSecondary)
+        HStack(spacing: HVMSpace.sm) {
+            Text("Virtual Machines")
+                .font(HVMFont.label)
+                .foregroundStyle(HVMColor.textTertiary)
             Spacer()
+            Text("\(model.list.count)")
+                .font(HVMFont.small.weight(.semibold))
+                .foregroundStyle(HVMColor.textTertiary)
+                .monospacedDigit()
         }
         .padding(.horizontal, HVMSpace.lg)
-        .padding(.top, HVMSpace.md)
+        .padding(.top, HVMSpace.lg)
         .padding(.bottom, HVMSpace.sm)
     }
 
@@ -40,7 +43,7 @@ struct SidebarView: View {
             emptyState
         } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 1) {
+                LazyVStack(alignment: .leading, spacing: 4) {
                     ForEach(model.list) { item in
                         Row(item: item,
                             isSelected: model.selectedID == item.id,
@@ -56,14 +59,18 @@ struct SidebarView: View {
     }
 
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: HVMSpace.xs) {
-            Text("// no vms yet")
+        VStack(alignment: .leading, spacing: HVMSpace.md) {
+            Text("No VMs yet")
                 .font(HVMFont.caption)
                 .foregroundStyle(HVMColor.textTertiary)
             Button(action: { model.showCreateWizard = true }) {
-                EmptyCreateLink()
+                HStack(spacing: 4) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Create VM")
+                }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GhostButtonStyle())
         }
         .padding(.horizontal, HVMSpace.lg)
         .padding(.top, HVMSpace.sm)
@@ -71,25 +78,7 @@ struct SidebarView: View {
     }
 }
 
-// 左栏 empty state 里那行可点击的 "└─ + create first vm"
-private struct EmptyCreateLink: View {
-    @State private var hover: Bool = false
-    var body: some View {
-        HStack(spacing: 6) {
-            Text("└─")
-                .foregroundStyle(HVMColor.border)
-            Text("+ create first vm")
-                .foregroundStyle(hover ? HVMColor.accentHover : HVMColor.accent)
-                .underline(hover, color: HVMColor.accent)
-        }
-        .font(HVMFont.caption)
-        .contentShape(Rectangle())
-        .onHover { hover = $0 }
-        .animation(.easeOut(duration: 0.1), value: hover)
-    }
-}
-
-// MARK: - 单行
+// MARK: - 单卡
 
 private struct Row: View {
     let item: AppModel.VMListItem
@@ -99,49 +88,51 @@ private struct Row: View {
 
     var body: some View {
         HStack(spacing: HVMSpace.sm) {
-            // 左侧 accent 竖条 (选中时)
-            Rectangle()
-                .fill(isSelected ? HVMColor.accent : Color.clear)
-                .frame(width: 2)
+            GuestBadge(os: item.guestOS, size: 30)
 
-            // 状态 sigil
-            Group {
-                if isRunning {
-                    PulseDot(color: HVMColor.statusRunning, size: 5)
-                        .frame(width: 14, height: 14)
-                } else {
-                    Text("○")
-                        .font(HVMFont.caption)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.displayName)
+                    .font(HVMFont.bodyBold)
+                    .foregroundStyle(HVMColor.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                HStack(spacing: 5) {
+                    if isRunning {
+                        Circle()
+                            .fill(HVMColor.statusRunning)
+                            .frame(width: 6, height: 6)
+                        Text("Running")
+                            .font(HVMFont.small)
+                            .foregroundStyle(HVMColor.statusRunning)
+                    } else {
+                        Circle()
+                            .fill(HVMColor.statusStopped.opacity(0.6))
+                            .frame(width: 6, height: 6)
+                        Text("Stopped")
+                            .font(HVMFont.small)
+                            .foregroundStyle(HVMColor.textTertiary)
+                    }
+                    Text("·")
+                        .font(HVMFont.small)
                         .foregroundStyle(HVMColor.textTertiary)
-                        .frame(width: 14, height: 14)
+                    Text(GuestVisual.style(for: item.guestOS).label)
+                        .font(HVMFont.small)
+                        .foregroundStyle(HVMColor.textTertiary)
                 }
             }
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(item.displayName)
-                    .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(HVMColor.textPrimary)
-                    .lineLimit(1)
-                Text(isRunning ? "running" : "stopped")
-                    .font(HVMFont.small)
-                    .foregroundStyle(isRunning ? HVMColor.statusRunning
-                                               : HVMColor.textTertiary)
-            }
-
             Spacer(minLength: 0)
-
-            // 右侧 guest 标识 (小号, 不抢焦点)
-            Text(GuestVisual.style(for: item.guestOS).label)
-                .font(HVMFont.small)
-                .foregroundStyle(HVMColor.textTertiary)
         }
-        .padding(.leading, HVMSpace.xs)
-        .padding(.trailing, HVMSpace.md)
+        .padding(.horizontal, HVMSpace.sm)
         .padding(.vertical, HVMSpace.sm)
         .background(
-            RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
+            RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
                 .fill(isSelected ? HVMColor.bgSelected
                                  : (hover ? HVMColor.bgHover : Color.clear))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
+                .stroke(isSelected ? HVMColor.borderAccent : Color.clear, lineWidth: 1)
         )
         .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.1), value: hover)

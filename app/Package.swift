@@ -46,7 +46,7 @@ let package = Package(
             name: "hvm-cli",
             dependencies: [
                 "HVMCore", "HVMBundle", "HVMStorage", "HVMNet",
-                "HVMBackend", "HVMInstall", "HVMIPC",
+                "HVMBackend", "HVMInstall", "HVMIPC", "HVMQemu",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),

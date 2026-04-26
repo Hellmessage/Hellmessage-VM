@@ -1,48 +1,48 @@
 // Buttons.swift
-// Hacker 风按钮: outline / filled 二态, accent 青绿单色
+// 按钮 style 集合. 专业工具风: SF Pro / 句首大写 / 无 glow / 蓝 accent.
+// 业务代码必须从这五种里挑一个用, 不允许裸 Button 不带 buttonStyle.
 
 import SwiftUI
 
+/// 主按钮: 蓝色实心, 用于"创建 / 保存 / 启动" 等正向主操作.
 public struct PrimaryButtonStyle: ButtonStyle {
     public init() {}
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12, weight: .bold, design: .monospaced))
-            .tracking(0.8)
+            .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(HVMColor.textOnAccent)
             .padding(.horizontal, HVMSpace.lg)
-            .padding(.vertical, 8)
+            .padding(.vertical, 7)
             .background(
-                RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
+                RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
                     .fill(configuration.isPressed
                           ? HVMColor.accent.opacity(0.80)
                           : HVMColor.accent)
             )
-            .shadow(color: HVMColor.accent.opacity(configuration.isPressed ? 0 : 0.25),
-                    radius: 6, x: 0, y: 2)
             .contentShape(Rectangle())
     }
 }
 
+/// 次按钮: 透明 + 1px 边. 用于 "取消 / 暂停 / 停止 / 弹出 ISO" 等次级操作.
+/// destructive=true 时改红字红边, 用于 "删除 / Kill" 等破坏性操作.
 public struct GhostButtonStyle: ButtonStyle {
     var destructive: Bool = false
     public init(destructive: Bool = false) { self.destructive = destructive }
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12, weight: .medium, design: .monospaced))
-            .tracking(0.6)
+            .font(.system(size: 13, weight: .medium))
             .foregroundStyle(destructive ? HVMColor.danger : HVMColor.textPrimary)
-            .padding(.horizontal, HVMSpace.lg)
-            .padding(.vertical, 7)
+            .padding(.horizontal, HVMSpace.md)
+            .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
+                RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
                     .fill(configuration.isPressed
-                          ? HVMColor.bgSelected
+                          ? (destructive ? HVMColor.danger.opacity(0.12) : HVMColor.bgHover)
                           : Color.clear)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
-                    .stroke(destructive ? HVMColor.danger.opacity(0.5)
+                RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
+                    .stroke(destructive ? HVMColor.danger.opacity(0.55)
                                         : HVMColor.border,
                             lineWidth: 1)
             )
@@ -50,64 +50,54 @@ public struct GhostButtonStyle: ButtonStyle {
     }
 }
 
+/// 仅图标按钮 (顶栏 X / 刷新 / etc).
 public struct IconButtonStyle: ButtonStyle {
     public init() {}
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12, design: .monospaced))
+            .font(.system(size: 12))
             .foregroundStyle(HVMColor.textSecondary)
-            .frame(width: 26, height: 26)
+            .frame(width: 28, height: 28)
             .background(
                 RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
-                    .fill(configuration.isPressed ? HVMColor.bgSelected : Color.clear)
+                    .fill(configuration.isPressed ? HVMColor.bgHover : Color.clear)
             )
             .contentShape(Rectangle())
     }
 }
 
-/// 空状态居中大号 CTA, 比 PillAccent 更粗更带 glow
+/// 空状态居中 CTA. 比 Primary 更大更醒目.
 public struct HeroCTAStyle: ButtonStyle {
     public init() {}
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 14, weight: .bold, design: .monospaced))
-            .tracking(2.0)
-            .foregroundStyle(HVMColor.accent)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(HVMColor.textOnAccent)
             .padding(.horizontal, HVMSpace.xl)
-            .padding(.vertical, 12)
+            .padding(.vertical, 10)
             .background(
-                RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
+                RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
                     .fill(configuration.isPressed
-                          ? HVMColor.accent.opacity(0.20)
-                          : HVMColor.accentMuted)
+                          ? HVMColor.accent.opacity(0.80)
+                          : HVMColor.accent)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
-                    .stroke(HVMColor.accent, lineWidth: 1)
-            )
-            .shadow(color: HVMColor.accent.opacity(configuration.isPressed ? 0.15 : 0.35),
-                    radius: 12, x: 0, y: 0)
             .contentShape(Rectangle())
     }
 }
 
-/// 顶栏 "+ NEW" 这种 pill 按钮
+/// 顶栏 "+ New VM" 这种 pill 按钮. 蓝底白字, 比 Primary 更小巧.
 public struct PillAccentButtonStyle: ButtonStyle {
     public init() {}
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 11, weight: .bold, design: .monospaced))
-            .tracking(1.2)
-            .foregroundStyle(HVMColor.accent)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(HVMColor.textOnAccent)
             .padding(.horizontal, HVMSpace.md)
             .padding(.vertical, 5)
             .background(
                 Capsule().fill(configuration.isPressed
-                               ? HVMColor.accent.opacity(0.18)
-                               : HVMColor.accentMuted)
-            )
-            .overlay(
-                Capsule().stroke(HVMColor.accent.opacity(0.45), lineWidth: 1)
+                               ? HVMColor.accent.opacity(0.80)
+                               : HVMColor.accent)
             )
             .contentShape(Rectangle())
     }

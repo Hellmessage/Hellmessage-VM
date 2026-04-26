@@ -10,6 +10,7 @@ import ArgumentParser
 import Foundation
 import HVMBundle
 import HVMCore
+import HVMQemu
 import HVMStorage
 
 struct DiskCommand: AsyncParsableCommand {
@@ -28,22 +29,25 @@ struct DiskCommand: AsyncParsableCommand {
 // MARK: - 共享 helpers
 
 private enum DiskHelpers {
-    /// 在 config.disks 里按 id 找索引: "main" → role=main; 否则按 data-<id>.img 匹配
+    /// 在 config.disks 里按 id 找索引. 兼容老 .img 与新 .qcow2 数据盘.
     static func findDiskIndex(id: String, in config: VMConfig) -> Int? {
         if id == "main" {
             return config.disks.firstIndex { $0.role == .main }
         }
+        let prefixImg   = "\(BundleLayout.disksDirName)/data-\(id).img"
+        let prefixQcow2 = "\(BundleLayout.disksDirName)/data-\(id).qcow2"
         return config.disks.firstIndex {
-            $0.role == .data && $0.path == "\(BundleLayout.disksDirName)/data-\(id).img"
+            $0.role == .data && ($0.path == prefixImg || $0.path == prefixQcow2)
         }
     }
 
-    /// data disk 的 id (uuid8 部分): "disks/data-abcd1234.img" → "abcd1234"
+    /// data disk 的 id (uuid8 部分). 同时识别 .img / .qcow2.
     static func dataDiskID(path: String) -> String? {
         let prefix = "\(BundleLayout.disksDirName)/data-"
-        let suffix = ".img"
-        guard path.hasPrefix(prefix), path.hasSuffix(suffix) else { return nil }
-        return String(path.dropFirst(prefix.count).dropLast(suffix.count))
+        guard path.hasPrefix(prefix) else { return nil }
+        let stem = (path as NSString).deletingPathExtension
+        guard stem.hasPrefix(prefix) else { return nil }
+        return String(stem.dropFirst(prefix.count))
     }
 }
 
@@ -125,9 +129,12 @@ struct DiskAddCommand: AsyncParsableCommand {
             }
             var config = try BundleIO.load(from: bundleURL)
             let uuid8 = DiskFactory.newDataDiskUUID8()
-            let relPath = "\(BundleLayout.disksDirName)/data-\(uuid8).img"
+            // 数据盘格式跟随 VM engine: VZ → .img (raw), QEMU → .qcow2
+            let fileName = BundleLayout.dataDiskFileName(uuid8: uuid8, engine: config.engine)
+            let relPath = "\(BundleLayout.disksDirName)/\(fileName)"
             let absURL = bundleURL.appendingPathComponent(relPath)
-            try DiskFactory.create(at: absURL, sizeGiB: size)
+            let qemuImg = config.engine == .qemu ? (try? QemuPaths.qemuImgBinary()) : nil
+            try DiskFactory.create(at: absURL, sizeGiB: size, qemuImg: qemuImg)
             config.disks.append(DiskSpec(role: .data, path: relPath, sizeGiB: size))
             try BundleIO.save(config: config, to: bundleURL)
             switch format {

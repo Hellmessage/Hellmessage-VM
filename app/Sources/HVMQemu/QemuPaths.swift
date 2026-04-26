@@ -56,6 +56,16 @@ public enum QemuPaths {
         return bin
     }
 
+    /// qemu-img 绝对路径. QEMU 后端创建 / 扩容 qcow2 必经.
+    /// 已经随 QEMU 一起打包进 .app/Contents/Resources/QEMU/bin/.
+    public static func qemuImgBinary() throws -> URL {
+        let bin = try resolveRoot().appendingPathComponent("bin/qemu-img")
+        guard FileManager.default.isExecutableFile(atPath: bin.path) else {
+            throw NotFoundError.fileMissing(path: bin.path)
+        }
+        return bin
+    }
+
     /// EDK2 aarch64 UEFI firmware (Linux + Windows arm64 启动必需)
     public static func edk2Firmware() throws -> URL {
         let fw = try resolveRoot().appendingPathComponent("share/qemu/edk2-aarch64-code.fd")

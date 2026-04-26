@@ -32,14 +32,15 @@ struct StartCommand: AsyncParsableCommand {
             }
 
             // 简单载入校验 (能读出 config, 主盘存在)
-            _ = try BundleIO.load(from: bundleURL)
+            let config = try BundleIO.load(from: bundleURL)
 
             let pid = try HostLauncher.launch(bundleURL: bundleURL)
+            let logDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id).path
 
             switch format {
             case .human:
                 print("✔ 已启动 VMHost (pid=\(pid))")
-                print("  日志: \(bundleURL.appendingPathComponent("logs").path)")
+                print("  日志: \(logDir)")
                 print("  查看状态: hvm-cli status \(vm)")
             case .json:
                 printJSON([

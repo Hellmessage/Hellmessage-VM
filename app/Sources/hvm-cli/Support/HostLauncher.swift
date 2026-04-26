@@ -9,6 +9,7 @@
 // 不再 fallback 到 build/HVM.app — dev 期 hvm-cli start 前需先 make install.
 
 import Foundation
+import HVMBundle
 import HVMCore
 
 public enum HostLauncher {
@@ -32,7 +33,8 @@ public enum HostLauncher {
         return nil
     }
 
-    /// 拉起 VMHost 子进程并立即返回. stdout/stderr 重定向到 bundle/logs/host-<date>.log
+    /// 拉起 VMHost 子进程并立即返回. stdout/stderr 重定向到全局
+    /// `~/Library/Application Support/HVM/logs/<displayName>-<uuid8>/host-<date>.log`.
     /// 返回子进程 pid
     @discardableResult
     public static func launch(bundleURL: URL) throws -> Int32 {
@@ -43,16 +45,9 @@ public enum HostLauncher {
         }
 
         let resolved = bundleURL.resolvingSymlinksInPath().standardizedFileURL
-        // 日志目标: bundle/logs/host-YYYY-MM-DD.log
-        let fm = FileManager.default
-        let logsDir = resolved.appendingPathComponent("logs", isDirectory: true)
-        try? fm.createDirectory(at: logsDir, withIntermediateDirectories: true)
-        let df = DateFormatter()
-        df.dateFormat = "yyyy-MM-dd"
-        let logURL = logsDir.appendingPathComponent("host-\(df.string(from: Date())).log")
-        if !fm.fileExists(atPath: logURL.path) {
-            fm.createFile(atPath: logURL.path, contents: nil)
-        }
+        // 取 config 拿 displayName + id 用于全局 log 子目录命名
+        let config = try BundleIO.load(from: resolved)
+        let logURL = try makeHostLogURL(displayName: config.displayName, id: config.id)
         let logHandle = try FileHandle(forWritingTo: logURL)
         try logHandle.seekToEnd()
 
@@ -66,5 +61,19 @@ public enum HostLauncher {
 
         try proc.run()
         return proc.processIdentifier
+    }
+
+    /// 计算并准备 host-<date>.log 路径 (全局 logs 子目录, 不在 bundle 内).
+    /// 公开给 GUI 侧 (AppModel.spawnExternalHost) 共用, 保两边路径完全一致.
+    public static func makeHostLogURL(displayName: String, id: UUID) throws -> URL {
+        let dir = HVMPaths.vmLogsDir(displayName: displayName, id: id)
+        try HVMPaths.ensure(dir)
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        let url = dir.appendingPathComponent("host-\(df.string(from: Date())).log")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        return url
     }
 }

@@ -6,6 +6,7 @@ import Foundation
 import HVMBundle
 import HVMCore
 import HVMNet
+import HVMQemu
 import HVMStorage
 
 struct CreateCommand: AsyncParsableCommand {
@@ -95,13 +96,15 @@ struct CreateCommand: AsyncParsableCommand {
                 requiredBytes: UInt64(disk) * (1 << 30)
             )
 
+            // engine-aware 主盘: VZ → main.img (raw), QEMU → main.qcow2
+            let mainDiskFile = "\(BundleLayout.disksDirName)/\(BundleLayout.mainDiskFileName(for: engineValue))"
             let config = VMConfig(
                 displayName: name,
                 guestOS: os,
                 engine: engineValue,
                 cpuCount: cpu,
                 memoryMiB: memory * 1024,
-                disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: disk)],
+                disks: [DiskSpec(role: .main, path: mainDiskFile, sizeGiB: disk)],
                 networks: [NetworkSpec(mode: network, macAddress: macAddr)],
                 installerISO: isoPath,
                 bootFromDiskOnly: false,
@@ -111,9 +114,12 @@ struct CreateCommand: AsyncParsableCommand {
             )
 
             try BundleIO.create(at: bundleURL, config: config)
+            // qcow2 主盘需要 qemu-img; raw 时 qemuImg=nil 走 ftruncate
+            let qemuImg = engineValue == .qemu ? (try? QemuPaths.qemuImgBinary()) : nil
             try DiskFactory.create(
-                at: BundleLayout.mainDiskURL(bundleURL),
-                sizeGiB: disk
+                at: BundleLayout.mainDiskURL(bundleURL, engine: engineValue),
+                sizeGiB: disk,
+                qemuImg: qemuImg
             )
 
             switch format {

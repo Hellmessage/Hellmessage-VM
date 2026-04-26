@@ -1,13 +1,11 @@
 // DiskResizeDialog.swift
-// stopped 视图 Disks section 行内 "RESIZE" 按钮弹出的扩容面板.
-// 严格按 docs/GUI.md 弹窗约束: X 关 / 禁止遮罩 / 禁止 Esc / 禁止 NSAlert.
-//
-// 必须 VM stopped (BundleLock.isBusy 检测; 等价 hvm-cli disk resize).
-// host 侧只改文件大小; guest 内还要 resize2fs / 分区工具.
+// stopped 视图 Disks section 行内 "Resize" 弹出的扩容面板. 套 HVMModal.
+// 必须 VM stopped; host 侧只改文件大小; guest 内还要 resize2fs / 分区工具.
 
 import SwiftUI
 import HVMBundle
 import HVMCore
+import HVMQemu
 import HVMStorage
 
 struct DiskResizeDialog: View {
@@ -25,89 +23,52 @@ struct DiskResizeDialog: View {
     }
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.65)
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
+        HVMModal(
+            title: "Resize Disk",
+            icon: .info,
+            width: 460,
+            closeAction: { close() }
+        ) {
+            VStack(alignment: .leading, spacing: HVMSpace.lg) {
+                Text("扩容 \(request.item.displayName) 的磁盘 \(request.diskID). host 侧只改文件大小; guest 内还要 resize2fs / 分区工具.")
+                    .font(HVMFont.caption)
+                    .foregroundStyle(HVMColor.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            VStack(spacing: 0) {
-                HStack(spacing: HVMSpace.md) {
-                    Text("●")
-                        .font(HVMFont.caption)
-                        .foregroundStyle(HVMColor.accent)
-                    Text("扩容磁盘".uppercased())
-                        .font(HVMFont.label)
-                        .tracking(1.6)
-                        .foregroundStyle(HVMColor.textPrimary)
-                    Spacer()
-                    Button { close() } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .bold))
-                    }
-                    .buttonStyle(IconButtonStyle())
-                    .help("关闭 (Cmd+W)")
-                    .keyboardShortcut("w", modifiers: [.command])
-                }
-                .padding(.horizontal, HVMSpace.lg)
-                .padding(.vertical, HVMSpace.md)
-
-                Divider().background(HVMColor.border)
-
-                VStack(alignment: .leading, spacing: HVMSpace.lg) {
-                    Text("扩容 \(request.item.displayName) 的磁盘 \(request.diskID). host 侧只改文件大小; guest 内还要 resize2fs / 分区工具.")
-                        .font(HVMFont.caption)
-                        .foregroundStyle(HVMColor.textSecondary)
-
-                    HStack(spacing: HVMSpace.md) {
-                        Text("CURRENT")
-                            .font(HVMFont.label)
-                            .tracking(1.5)
-                            .foregroundStyle(HVMColor.textTertiary)
-                            .frame(width: 80, alignment: .leading)
-                        Text("\(request.currentSizeGiB) gb")
+                HStack(spacing: HVMSpace.lg) {
+                    VStack(alignment: .leading, spacing: HVMSpace.xs) {
+                        LabelText("Current")
+                        Text("\(request.currentSizeGiB) GB")
                             .font(HVMFont.body)
                             .foregroundStyle(HVMColor.textPrimary)
-                        Spacer()
+                            .padding(.horizontal, HVMSpace.md)
+                            .padding(.vertical, 7)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
+                                    .fill(HVMColor.bgCard)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
+                                    .stroke(HVMColor.border, lineWidth: 1)
+                            )
                     }
-
-                    HStack(spacing: HVMSpace.md) {
-                        Text("NEW")
-                            .font(HVMFont.label)
-                            .tracking(1.5)
-                            .foregroundStyle(HVMColor.textTertiary)
-                            .frame(width: 80, alignment: .leading)
-                        TextField("\(request.currentSizeGiB + 1)", text: $newSizeText)
-                            .textFieldStyle(.roundedBorder)
-                            .font(HVMFont.body)
-                            .frame(maxWidth: .infinity)
-                        Text("gb")
-                            .font(HVMFont.caption)
-                            .foregroundStyle(HVMColor.textTertiary)
-                            .frame(width: 40, alignment: .leading)
-                    }
-
-                    HStack(spacing: HVMSpace.md) {
-                        Spacer()
-                        Button("取消") { close() }
-                            .buttonStyle(GhostButtonStyle())
-                        Button("扩容") { resize() }
-                            .buttonStyle(PrimaryButtonStyle())
-                            .keyboardShortcut(.return, modifiers: [.command])
-                            .disabled((UInt64(newSizeText) ?? 0) <= request.currentSizeGiB)
+                    VStack(alignment: .leading, spacing: HVMSpace.xs) {
+                        LabelText("New")
+                        HVMTextField("\(request.currentSizeGiB + 1)", text: $newSizeText, suffix: "GB")
                     }
                 }
-                .padding(HVMSpace.lg)
             }
-            .frame(width: 460)
-            .background(HVMColor.bgCard)
-            .overlay(
-                RoundedRectangle(cornerRadius: HVMRadius.lg, style: .continuous)
-                    .stroke(HVMColor.borderStrong, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: HVMRadius.lg, style: .continuous))
-            .shadow(color: .black.opacity(0.6), radius: 24, x: 0, y: 10)
+        } footer: {
+            HVMModalFooter {
+                Button("取消") { close() }
+                    .buttonStyle(GhostButtonStyle())
+                Button("扩容") { resize() }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .keyboardShortcut(.return, modifiers: [.command])
+                    .disabled((UInt64(newSizeText) ?? 0) <= request.currentSizeGiB)
+            }
         }
-        .transition(.opacity)
     }
 
     private func close() {
@@ -138,7 +99,9 @@ struct DiskResizeDialog: View {
                 throw HVMError.config(.missingField(name: "disk id=\(request.diskID) 未找到"))
             }
             let absURL = request.item.bundleURL.appendingPathComponent(config.disks[i].path)
-            try DiskFactory.grow(at: absURL, toGiB: toGiB)
+            // qcow2 走 qemu-img resize; raw 走 ftruncate. 入口按 absURL 扩展名分发.
+            let qemuImg = (try? QemuPaths.qemuImgBinary())
+            try DiskFactory.grow(at: absURL, toGiB: toGiB, qemuImg: qemuImg)
             config.disks[i].sizeGiB = toGiB
             try BundleIO.save(config: config, to: request.item.bundleURL)
             model.refreshList()

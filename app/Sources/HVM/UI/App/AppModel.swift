@@ -186,7 +186,7 @@ public final class AppModel {
         if item.config.engine == .qemu {
             // 与子进程 argv 使用同一套路径, 避免 symlink / 简写 导致 .lock 与 isBusy 判在不同 inode 上
             let bundleURL = item.bundleURL.resolvingSymlinksInPath().standardizedFileURL
-            try spawnExternalHost(bundleURL: bundleURL)
+            try spawnExternalHost(bundleURL: bundleURL, config: item.config)
             // 轮询子进程是否成功拿到 BundleLock (子进程在 HVMHostEntry 入口即抢锁; 冷启动 dyld/首次签名偶发 >5s)
             // 与 QMP 超时同一量级, 留足 bridged + socket_vmnet 起 sidecar 前的余量 (HVMTimeout.hostStartupLockPoll)
             let waitSeconds = HVMTimeout.hostStartupLockPoll
@@ -198,7 +198,7 @@ public final class AppModel {
             }
             refreshList()
             if !locked {
-                let logDir = bundleURL.appendingPathComponent(BundleLayout.logsDirName, isDirectory: true).path
+                let logDir = HVMPaths.vmLogsDir(displayName: item.config.displayName, id: item.config.id).path
                 throw HVMError.backend(.qemuHostStartupTimeout(waitedSeconds: waitSeconds, logPath: logDir))
             }
             return
@@ -223,19 +223,13 @@ public final class AppModel {
 
     /// QEMU 后端 (外部进程) 启动. 派生 self binary 走 --host-mode-bundle,
     /// 子进程进 main.swift if 分支 → HVMHostEntry.run → QemuHostEntry.run.
-    /// stdout/stderr 落 bundle/logs/host-YYYY-MM-DD.log (与 hvm-cli StartCommand 一致).
-    private func spawnExternalHost(bundleURL: URL) throws {
+    /// stdout/stderr 落全局 ~/Library/Application Support/HVM/logs/<displayName>-<uuid8>/host-<date>.log
+    /// (与 hvm-cli StartCommand 一致).
+    private func spawnExternalHost(bundleURL: URL, config: VMConfig) throws {
         guard let exec = Bundle.main.executableURL else {
             throw HVMError.backend(.vzInternal(description: "无法定位 HVM.app 二进制"))
         }
-        let logsDir = bundleURL.appendingPathComponent(BundleLayout.logsDirName, isDirectory: true)
-        try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
-        let df = DateFormatter()
-        df.dateFormat = "yyyy-MM-dd"
-        let logURL = logsDir.appendingPathComponent("host-\(df.string(from: Date())).log")
-        if !FileManager.default.fileExists(atPath: logURL.path) {
-            FileManager.default.createFile(atPath: logURL.path, contents: nil)
-        }
+        let logURL = try makeHostLogURL(displayName: config.displayName, id: config.id)
         let handle = try FileHandle(forWritingTo: logURL)
         try handle.seekToEnd()
         let proc = Process()
@@ -244,6 +238,20 @@ public final class AppModel {
         proc.standardOutput = handle
         proc.standardError = handle
         try proc.run()
+    }
+
+    /// host-<date>.log 路径准备. 与 HostLauncher.makeHostLogURL 等价 (二者属不同模块,
+     /// 各自实现避免 UI ↔ hvm-cli 互相依赖).
+    private func makeHostLogURL(displayName: String, id: UUID) throws -> URL {
+        let dir = HVMPaths.vmLogsDir(displayName: displayName, id: id)
+        try HVMPaths.ensure(dir)
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        let url = dir.appendingPathComponent("host-\(df.string(from: Date())).log")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        return url
     }
 
     public func stop(_ id: UUID) throws {

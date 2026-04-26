@@ -122,9 +122,11 @@ public enum QemuHostEntry {
         }
         QemuHostState.shared.consoleSocketURL = consoleSocketURL
 
-        // 3. stderr 落 bundle/logs/qemu-stderr.log (truncate, 不累积老错误)
-        let stderrLog = BundleLayout.logsDir(bundleURL)
-            .appendingPathComponent("qemu-stderr.log")
+        // 3. stderr 落全局 ~/Library/.../HVM/logs/<displayName>-<uuid8>/qemu-stderr.log
+        // (truncate, 不累积老错误)
+        let qemuLogsDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id)
+        _ = try? HVMPaths.ensure(qemuLogsDir)
+        let stderrLog = qemuLogsDir.appendingPathComponent("qemu-stderr.log")
         try? FileManager.default.removeItem(at: stderrLog)
 
         // 4. 启动 QEMU 子进程
@@ -275,12 +277,15 @@ public enum QemuHostEntry {
             exit(30)
         }
 
-        // 2. 路径准备: state dir 持久 / socket+log+pid 运行时
+        // 2. 路径准备: state dir 持久 (留 bundle, TPM NVRAM 表征属 VM 自身) /
+        //    socket+pid 运行时 (HVM/run) / log 全局 (HVM/logs/<displayName>-<uuid8>/)
         let stateDir = BundleLayout.tpmStateDir(bundleURL)
         try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         let sockPath = HVMPaths.swtpmSocketPath(for: config.id).path
         let pidPath = HVMPaths.swtpmPidPath(for: config.id)
-        let logFile = BundleLayout.logsDir(bundleURL).appendingPathComponent("swtpm.log")
+        let swtpmLogsDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id)
+        _ = try? HVMPaths.ensure(swtpmLogsDir)
+        let logFile = swtpmLogsDir.appendingPathComponent("swtpm.log")
         // 清残留 socket / pid (上次崩溃留的会让 swtpm bind 失败 / 误以为已在跑)
         try? FileManager.default.removeItem(atPath: sockPath)
         try? FileManager.default.removeItem(at: pidPath)
@@ -292,7 +297,7 @@ public enum QemuHostEntry {
             logFile: logFile,
             pidFile: pidPath
         ))
-        let stderrLog = BundleLayout.logsDir(bundleURL).appendingPathComponent("swtpm-stderr.log")
+        let stderrLog = swtpmLogsDir.appendingPathComponent("swtpm-stderr.log")
         try? FileManager.default.removeItem(at: stderrLog)
         let runner = SwtpmRunner(binary: swtpmBin, args: swtpmArgs,
                                  ctrlSocketPath: sockPath, stderrLog: stderrLog)

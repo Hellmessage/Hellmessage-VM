@@ -95,9 +95,11 @@ struct QemuLaunchCommand: AsyncParsableCommand {
             return
         }
 
-        // stderr 落 bundle/logs/qemu-stderr.log; 每次 truncate 避免累积老错误干扰判断
-        let stderrLog = BundleLayout.logsDir(bundleURL)
-            .appendingPathComponent("qemu-stderr.log")
+        // stderr 落全局 ~/Library/.../HVM/logs/<displayName>-<uuid8>/qemu-stderr.log;
+        // 每次 truncate 避免累积老错误干扰判断
+        let qemuLogsDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id)
+        try? HVMPaths.ensure(qemuLogsDir)
+        let stderrLog = qemuLogsDir.appendingPathComponent("qemu-stderr.log")
         try? FileManager.default.removeItem(at: stderrLog)
 
         let runner = QemuProcessRunner(binary: qemuBin, args: args, stderrLog: stderrLog)
@@ -249,7 +251,9 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         try HVMPaths.ensure(HVMPaths.runDir)
         let sockPath = HVMPaths.swtpmSocketPath(for: config.id).path
         let pidPath = HVMPaths.swtpmPidPath(for: config.id)
-        let logFile = BundleLayout.logsDir(bundleURL).appendingPathComponent("swtpm.log")
+        let swtpmLogsDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id)
+        try HVMPaths.ensure(swtpmLogsDir)
+        let logFile = swtpmLogsDir.appendingPathComponent("swtpm.log")
         try? FileManager.default.removeItem(atPath: sockPath)
         try? FileManager.default.removeItem(at: pidPath)
 
@@ -257,7 +261,7 @@ struct QemuLaunchCommand: AsyncParsableCommand {
             stateDir: stateDir, ctrlSocketPath: sockPath,
             logFile: logFile, pidFile: pidPath
         ))
-        let stderrLog = BundleLayout.logsDir(bundleURL).appendingPathComponent("swtpm-stderr.log")
+        let stderrLog = swtpmLogsDir.appendingPathComponent("swtpm-stderr.log")
         try? FileManager.default.removeItem(at: stderrLog)
         let runner = SwtpmRunner(binary: swtpmBin, args: argsList,
                                  ctrlSocketPath: sockPath, stderrLog: stderrLog)

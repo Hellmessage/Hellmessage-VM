@@ -1,45 +1,61 @@
 // Theme.swift
-// Terminal / Hacker 风格统一 token.
-// 纯黑三层底 + 青绿单色 accent + SF Mono 主导 + 1px 细边
+// 风格 token 统一入口. 当前主题: VMware / Parallels 专业工具风
+//   - 中性深灰底 (非纯黑), 减疲劳
+//   - SF Pro 主导, mono 仅用于 ID / MAC / 路径 / 命令值
+//   - 单一蓝 accent #4D9DFF, 无 glow / 无大幅 tracking
+//   - 圆角 8/10/12, 1px 细边 + 黑色低 alpha 阴影
+//
+// 关键约束: 所有 HVMColor / HVMFont / HVMSpace / HVMRadius API 名不变,
+// 仅改取值; 旧业务代码引用 HVMColor.accent 等仍可继续用, 视觉自动跟随.
 
 import SwiftUI
 
 public enum HVMColor {
-    // 背景: 纯黑三层 (从外到内)
-    public static let bgBase       = Color(red: 0.000, green: 0.000, blue: 0.000)     // #000
-    public static let bgSidebar    = Color(red: 0.027, green: 0.027, blue: 0.031)     // #070708
-    public static let bgCard       = Color(red: 0.043, green: 0.047, blue: 0.055)     // #0B0C0E
-    public static let bgCardHi     = Color(red: 0.063, green: 0.067, blue: 0.078)
-    public static let bgElevated   = Color(red: 0.082, green: 0.086, blue: 0.098)
-    public static let bgHover      = Color.white.opacity(0.04)
-    public static let bgSelected   = Color(red: 0.000, green: 0.898, blue: 0.800).opacity(0.10)
+    // MARK: - 背景三层 (从外到内)
+    /// 主底 — 偏冷的中性深灰, 不刺眼
+    public static let bgBase       = Color(red: 0.094, green: 0.094, blue: 0.106)   // #18181B
+    /// 侧栏 / 二级容器
+    public static let bgSidebar    = Color(red: 0.122, green: 0.125, blue: 0.141)   // #1F2024
+    /// 卡片底
+    public static let bgCard       = Color(red: 0.149, green: 0.153, blue: 0.169)   // #26272B
+    /// 卡片次高 (输入框 / 嵌入元素)
+    public static let bgCardHi     = Color(red: 0.176, green: 0.180, blue: 0.196)   // #2D2E32
+    /// 浮起容器 (modal / popover)
+    public static let bgElevated   = Color(red: 0.200, green: 0.204, blue: 0.220)   // #333438
+    /// hover 半透明
+    public static let bgHover      = Color.white.opacity(0.05)
+    /// 选中态半透明 (蓝色低 alpha)
+    public static let bgSelected   = Color(red: 0.302, green: 0.616, blue: 1.000).opacity(0.12)
 
-    public static let border       = Color.white.opacity(0.08)
-    public static let borderStrong = Color.white.opacity(0.16)
-    public static let borderAccent = Color(red: 0.000, green: 0.898, blue: 0.800).opacity(0.55)
+    // MARK: - 边框
+    public static let border       = Color.white.opacity(0.10)
+    public static let borderStrong = Color.white.opacity(0.18)
+    public static let borderAccent = Color(red: 0.302, green: 0.616, blue: 1.000).opacity(0.65)
 
-    public static let textPrimary   = Color(red: 0.92, green: 0.93, blue: 0.94)
-    public static let textSecondary = Color(red: 0.54, green: 0.56, blue: 0.60)
-    public static let textTertiary  = Color(red: 0.32, green: 0.34, blue: 0.38)
-    public static let textOnAccent  = Color.black
+    // MARK: - 文字
+    public static let textPrimary   = Color(red: 0.93, green: 0.94, blue: 0.95)
+    public static let textSecondary = Color(red: 0.63, green: 0.65, blue: 0.69)
+    public static let textTertiary  = Color(red: 0.43, green: 0.45, blue: 0.49)
+    public static let textOnAccent  = Color.white
 
-    // 单色 accent: 青绿 #00E5CC, hacker / terminal 感
-    public static let accent       = Color(red: 0.000, green: 0.898, blue: 0.800)
-    public static let accentHover  = Color(red: 0.180, green: 0.960, blue: 0.870)
-    public static let accentMuted  = Color(red: 0.000, green: 0.898, blue: 0.800).opacity(0.15)
+    // MARK: - Accent (专业蓝)
+    public static let accent       = Color(red: 0.302, green: 0.616, blue: 1.000)   // #4D9DFF
+    public static let accentHover  = Color(red: 0.420, green: 0.690, blue: 1.000)
+    public static let accentMuted  = Color(red: 0.302, green: 0.616, blue: 1.000).opacity(0.18)
 
-    public static let statusRunning = Color(red: 0.22, green: 0.94, blue: 0.56)     // #39F08E
-    public static let statusStopped = Color(red: 0.40, green: 0.43, blue: 0.47)
-    public static let statusPaused  = Color(red: 1.00, green: 0.78, blue: 0.20)
-    public static let statusError   = Color(red: 1.00, green: 0.33, blue: 0.33)
+    // MARK: - 状态色 (苹果系统风)
+    public static let statusRunning = Color(red: 0.204, green: 0.780, blue: 0.349)  // #34C759
+    public static let statusStopped = Color(red: 0.55, green: 0.57, blue: 0.61)
+    public static let statusPaused  = Color(red: 1.00, green: 0.745, blue: 0.176)   // #FFBE2D
+    public static let statusError   = Color(red: 1.00, green: 0.271, blue: 0.227)   // #FF453A
 
-    public static let danger       = Color(red: 1.00, green: 0.33, blue: 0.33)
+    public static let danger       = Color(red: 1.00, green: 0.271, blue: 0.227)   // #FF453A
 
-    // 系列 accent (用于 stat icon tint, 全部冷色避免破坏 hacker 风)
-    public static let statCPU     = Color(red: 0.00, green: 0.90, blue: 0.80)      // 青绿
-    public static let statMemory  = Color(red: 0.70, green: 0.80, blue: 1.00)      // 冷蓝
-    public static let statDisk    = Color(red: 1.00, green: 0.78, blue: 0.20)      // 琥珀
-    public static let statNetwork = Color(red: 0.35, green: 0.90, blue: 0.55)      // 绿
+    // MARK: - 资源系列 tint (stat icon)
+    public static let statCPU     = Color(red: 0.302, green: 0.616, blue: 1.000)    // 蓝
+    public static let statMemory  = Color(red: 0.690, green: 0.510, blue: 1.000)    // 紫
+    public static let statDisk    = Color(red: 1.000, green: 0.745, blue: 0.176)    // 琥珀
+    public static let statNetwork = Color(red: 0.204, green: 0.780, blue: 0.349)    // 绿
 }
 
 public enum HVMSpace {
@@ -54,57 +70,58 @@ public enum HVMSpace {
 public enum HVMRadius {
     public static let sm: CGFloat = 6
     public static let md: CGFloat = 8
-    public static let lg: CGFloat = 10
+    public static let lg: CGFloat = 12
     public static let pill: CGFloat = 999
 }
 
 public enum HVMBar {
-    public static let toolbarHeight: CGFloat  = 42
-    public static let statusBarHeight: CGFloat = 26
+    public static let toolbarHeight: CGFloat   = 48
+    public static let statusBarHeight: CGFloat = 28
 }
 
 /// 主窗口尺寸. 用户日常想调主窗口大小直接改这里.
 public enum HVMWindow {
-    /// 创建窗口时的 contentRect 尺寸 (打开时的默认大小)
     public static let mainDefault   = CGSize(width: 1200, height: 1090)
-    /// 窗口最小尺寸 (用户拖拽缩放下限)
     public static let mainMin       = CGSize(width: 1020, height: 640)
-    /// VM 退出后切回 stopped 视图时把窗口拉回的"舒适"尺寸 (避免 running 时撑大的窗口尺寸继续占屏)
     public static let mainStopped   = CGSize(width: 1080, height: 720)
 }
 
+/// 字体. 主语言 SF Pro, mono 限定值 (路径 / ID / MAC / 命令)
 public enum HVMFont {
-    // proportional (标题 / 名字 / 大数字)
+    // proportional (主导)
     public static let hero    = Font.system(size: 22, weight: .semibold)
     public static let title   = Font.system(size: 16, weight: .semibold)
-    public static let heading = Font.system(size: 13, weight: .semibold)
+    public static let heading = Font.system(size: 14, weight: .semibold)
+    public static let body       = Font.system(size: 13)
+    public static let bodyBold   = Font.system(size: 13, weight: .semibold)
+    public static let caption    = Font.system(size: 12)
+    public static let small      = Font.system(size: 11)
+    public static let label      = Font.system(size: 10, weight: .semibold)
+    public static let statValue  = Font.system(size: 22, weight: .semibold)
 
-    // mono (正文 / 详情 / 状态 / label)
-    public static let body       = Font.system(size: 12, design: .monospaced)
-    public static let bodyBold   = Font.system(size: 12, weight: .semibold, design: .monospaced)
-    public static let caption    = Font.system(size: 11, design: .monospaced)
-    public static let small      = Font.system(size: 10, design: .monospaced)
-    public static let label      = Font.system(size: 10, weight: .bold, design: .monospaced)
-    public static let statValue  = Font.system(size: 22, weight: .semibold, design: .monospaced)
+    // mono (仅用于 ID / 路径 / MAC / 命令值)
+    public static let mono       = Font.system(size: 12, design: .monospaced)
+    public static let monoSmall  = Font.system(size: 11, design: .monospaced)
 }
 
-/// 大写 + tracking 的标签文字, 用于 section header
+/// 小型 section 标签 (例: "Resources" / "General").
+/// 不再大写 + tracking, 普通句首大写.
 public struct LabelText: View {
     let text: String
     let color: Color
-    public init(_ text: String, color: Color = HVMColor.textTertiary) {
+    public init(_ text: String, color: Color = HVMColor.textSecondary) {
         self.text = text
         self.color = color
     }
     public var body: some View {
-        Text(text.uppercased())
+        Text(text)
             .font(HVMFont.label)
-            .tracking(1.6)
             .foregroundStyle(color)
     }
 }
 
-/// 网络模式等横向分段: 选中用 `bgSelected` + 青绿描边与字色, 避免整块高亮 contrast 过硬
+/// 网络模式分段控件 (NAT / Bridged / Shared 这类水平 segmented).
+/// 选中: 蓝色描边 + 蓝色字; 未选中: 中灰边 + 次级文字.
 public struct HVMNetModeSegment: View {
     public let label: String
     public let selected: Bool
@@ -128,7 +145,7 @@ public struct HVMNetModeSegment: View {
                 : (selected ? HVMColor.accent : HVMColor.textSecondary))
             .background(
                 RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
-                    .fill(selected ? HVMColor.bgSelected : HVMColor.bgBase)
+                    .fill(selected ? HVMColor.bgSelected : HVMColor.bgCardHi)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
@@ -138,7 +155,8 @@ public struct HVMNetModeSegment: View {
     }
 }
 
-/// 与 `TextField(roundedBorder)` 同宽的 menu 形 Picker 外框, 右缘与整表对齐
+/// 与 HVMTextField 同视觉的 menu 形 picker 外框, 给 SwiftUI 原生 Picker 套皮用.
+/// 注意: 业务代码应优先使用 HVMFormSelect, 这里只为兼容少数无法替换的场景保留.
 public struct HVMFormMenuField<Content: View>: View {
     private let content: () -> Content
 
@@ -152,19 +170,25 @@ public struct HVMFormMenuField<Content: View>: View {
             .tint(HVMColor.textPrimary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, HVMSpace.md)
-            .padding(.vertical, 5)
+            .padding(.vertical, 7)
             .background(
-                RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
+                RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
                     .fill(HVMColor.bgCardHi)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
+                RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
                     .stroke(HVMColor.border, lineWidth: 1)
             )
     }
 }
 
-/// 自绘下拉: 与 `HVMFormMenuField` 同字色/边距, 在槽位下方**内联**展开列表 (无 popover 气球/尖角), 与 `HVMNetModeSegment` 的选中/描边语汇一致
+/// 自绘下拉框. 触发后选项列表挂到 NSPanel attached child window 浮起,
+/// 紧贴 trigger 下边缘. 不在 SwiftUI 视图树, 因此不撑大父容器、不被 ScrollView/clipShape 裁掉.
+/// 视觉与 HVMTextField / HVMFormMenuField 同源 (圆角 8 / bgCardHi / border).
+///
+/// 定位策略: 通过 .background 挂一个 1×1 不可见 NSView 作为 anchor, popup 时直接拿
+/// anchor 的 window/screen frame, 不依赖 SwiftUI .frame(in: .global) (在嵌套 NSHostingView
+/// 场景下偏移).
 public struct HVMFormSelect: View {
     public let options: [(value: String, label: String)]
     @Binding public var selection: String
@@ -172,7 +196,10 @@ public struct HVMFormSelect: View {
     public var accessibilityLabel: String
 
     @State private var isOpen: Bool = false
-    @State private var hoveredValue: String?
+    /// anchor NSView 的引用持有者 (HVMAnchorView 在 makeNSView 时填入)
+    @StateObject private var anchorRef = AnchorRef()
+    /// NSPanel controller 用引用类型 wrapper 持久化, 避免 SwiftUI value-state 重置丢实例
+    @StateObject private var holder = PopupHolder()
 
     public init(
         options: [(value: String, label: String)],
@@ -192,116 +219,135 @@ public struct HVMFormSelect: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                isOpen.toggle()
-            } label: {
-                HStack(spacing: HVMSpace.sm) {
-                    Text(currentLabel)
-                        .font(HVMFont.body)
-                        .foregroundStyle(HVMColor.textPrimary)
-                        .lineLimit(1)
-                        .multilineTextAlignment(.leading)
-                    Spacer(minLength: 0)
-                    Image(systemName: isOpen ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(HVMColor.textTertiary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+        Button {
+            if isOpen { dismissPopup() } else { presentPopup() }
+        } label: {
+            HStack(spacing: HVMSpace.sm) {
+                Text(currentLabel)
+                    .font(HVMFont.body)
+                    .foregroundStyle(HVMColor.textPrimary)
+                    .lineLimit(1)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+                Image(systemName: isOpen ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(HVMColor.textTertiary)
             }
-            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
             .padding(.horizontal, HVMSpace.md)
-            .padding(.vertical, 5)
-            .background(HVMColor.bgCardHi)
-
-            if isOpen {
-                Rectangle()
-                    .fill(HVMColor.border)
-                    .frame(height: 1)
-                listBody
-            }
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
+                    .fill(HVMColor.bgCardHi)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
+                    .stroke(isOpen ? HVMColor.borderAccent : HVMColor.border,
+                            lineWidth: isOpen ? 1.5 : 1)
+            )
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(
-            RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
-                .stroke(isOpen ? HVMColor.borderAccent : HVMColor.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous))
-        .animation(.snappy(duration: 0.18), value: isOpen)
+        .buttonStyle(.plain)
+        .background(HVMAnchorView(ref: anchorRef.holder))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue(currentLabel)
-        .focusable()
-        .onKeyPress(.escape) {
-            guard isOpen else { return .ignored }
+        .onDisappear { dismissPopup() }
+    }
+
+    private func presentPopup() {
+        guard let anchor = anchorRef.holder.view else { return }
+        isOpen = true
+        holder.panel.present(
+            anchor: anchor,
+            maxHeight: 240,
+            content: { popupBody }
+        ) {
             isOpen = false
-            return .handled
-        }
-        .onChange(of: isOpen) { _, new in
-            if !new { hoveredValue = nil }
         }
     }
 
+    private func dismissPopup() {
+        holder.panel.dismiss()
+    }
+
+    /// popup 内容. 行高紧凑 (vertical 4), 选中态仅蓝字 + checkmark, 无大块底色.
     @ViewBuilder
-    private var listBody: some View {
-        let selectBlock: (String) -> Void = { v in
-            selection = v
-            isOpen = false
-        }
+    private var popupBody: some View {
+        let chosen = selection
         ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(spacing: 1) {
                 ForEach(options, id: \.value) { opt in
-                    let isSel = (selection == opt.value)
-                    Button {
-                        selectBlock(opt.value)
-                    } label: {
-                        HStack(spacing: HVMSpace.sm) {
-                            Text(opt.label)
-                                .font(HVMFont.body)
-                                .foregroundStyle(isSel ? HVMColor.accent : HVMColor.textPrimary)
-                                .multilineTextAlignment(.leading)
-                                .lineLimit(2)
-                            Spacer(minLength: 0)
-                            if isSel {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundStyle(HVMColor.accent)
-                            }
+                    PopupRow(
+                        label: opt.label,
+                        isSelected: chosen == opt.value,
+                        onTap: {
+                            selection = opt.value
+                            holder.panel.dismiss()
                         }
-                        .padding(.horizontal, HVMSpace.md)
-                        .padding(.vertical, 6)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .background(
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(rowFill(isSelected: isSel, value: opt.value))
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .onHover { inside in
-                        if inside {
-                            hoveredValue = opt.value
-                        } else if hoveredValue == opt.value {
-                            hoveredValue = nil
-                        }
-                    }
+                    )
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(4)
         }
-        .frame(maxWidth: .infinity, maxHeight: 220, alignment: .topLeading)
-        .background(HVMColor.bgBase)
-    }
-
-    private func rowFill(isSelected: Bool, value: String) -> Color {
-        if isSelected { return HVMColor.bgSelected }
-        if hoveredValue == value { return HVMColor.bgHover }
-        return .clear
+        .frame(maxHeight: 240)
+        .background(HVMColor.bgElevated)
+        .overlay(
+            RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
+                .stroke(HVMColor.borderStrong, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous))
     }
 }
 
-/// 脉冲 running 点
+/// HVMFormSelect 内部 row, 拆出来是为了独立持有 hover state, 不污染外层 @State.
+private struct PopupRow: View {
+    let label: String
+    let isSelected: Bool
+    let onTap: () -> Void
+    @State private var hover: Bool = false
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: HVMSpace.sm) {
+                Text(label)
+                    .font(HVMFont.caption)
+                    .foregroundStyle(isSelected ? HVMColor.accent : HVMColor.textPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(HVMColor.accent)
+                }
+            }
+            .padding(.horizontal, HVMSpace.md)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
+                    .fill(hover ? HVMColor.bgHover : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+    }
+}
+
+/// NSPanel controller 引用 holder, 保 SwiftUI 重新计算 body 时 panel 实例不丢
+@MainActor
+private final class PopupHolder: ObservableObject {
+    let panel = HVMPopupPanel()
+}
+
+/// HVMAnchorView 的 weak ref 持有者. SwiftUI @StateObject 持有, view 销毁时一起销.
+@MainActor
+private final class AnchorRef: ObservableObject {
+    let holder = HVMAnchorView.Holder()
+}
+
+/// running 状态脉冲点 (绿色, 不带 glow).
 public struct PulseDot: View {
     let color: Color
     let size: CGFloat
@@ -315,9 +361,9 @@ public struct PulseDot: View {
     public var body: some View {
         ZStack {
             Circle()
-                .fill(color.opacity(0.35))
-                .frame(width: size * 2.6, height: size * 2.6)
-                .scaleEffect(animating ? 1.2 : 0.8)
+                .fill(color.opacity(0.30))
+                .frame(width: size * 2.4, height: size * 2.4)
+                .scaleEffect(animating ? 1.15 : 0.85)
                 .opacity(animating ? 0 : 1)
                 .animation(
                     .easeOut(duration: 1.6).repeatForever(autoreverses: false),
@@ -326,41 +372,46 @@ public struct PulseDot: View {
             Circle()
                 .fill(color)
                 .frame(width: size, height: size)
-                .shadow(color: color.opacity(0.6), radius: size * 0.8)
         }
-        .frame(width: size * 3, height: size * 3)
+        .frame(width: size * 2.6, height: size * 2.6)
         .onAppear { animating = true }
     }
 }
 
-/// terminal 风 section container: 顶部 `┌─ TITLE ──` 边角, 内容包在细边框里
+/// 通用分组卡片 (取代旧的 TerminalSection ┌─ ──┐ 终端框).
+/// 标题左对齐, 字号 13/semibold, 内容包在卡片里 (圆角 + 1px 边).
+/// 名字保留 TerminalSection 是为兼容现有 callsite, 视觉已重做.
 public struct TerminalSection<Content: View>: View {
     let title: String
+    let trailing: AnyView?
     let content: () -> Content
 
     public init(_ title: String, @ViewBuilder content: @escaping () -> Content) {
         self.title = title
+        self.trailing = nil
+        self.content = content
+    }
+
+    public init<Trailing: View>(
+        _ title: String,
+        @ViewBuilder trailing: () -> Trailing,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.title = title
+        self.trailing = AnyView(trailing())
         self.content = content
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: HVMSpace.sm) {
-            HStack(spacing: 6) {
-                Text("┌─")
-                    .font(HVMFont.small)
-                    .foregroundStyle(HVMColor.border)
-                Text(title.uppercased())
-                    .font(HVMFont.label)
-                    .tracking(1.6)
-                    .foregroundStyle(HVMColor.textSecondary)
-                Text(String(repeating: "─", count: 64))
-                    .font(HVMFont.small)
-                    .foregroundStyle(HVMColor.border)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+            HStack(spacing: HVMSpace.sm) {
+                Text(title)
+                    .font(HVMFont.heading)
+                    .foregroundStyle(HVMColor.textPrimary)
+                Spacer(minLength: 0)
+                if let trailing = trailing { trailing }
             }
             content()
-                .padding(.leading, HVMSpace.sm)
         }
     }
 }

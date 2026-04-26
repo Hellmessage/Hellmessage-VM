@@ -1,5 +1,5 @@
 // Toolbar.swift
-// 全宽顶部 toolbar. 跨左右栏, 保证主窗口视觉上"从上到下贯通"
+// 全宽顶部工具栏. 左侧 brand + 当前 VM 名; 右侧刷新 / 新建.
 
 import SwiftUI
 import HVMCore
@@ -10,22 +10,20 @@ struct HVMToolbar: View {
 
     var body: some View {
         HStack(spacing: HVMSpace.md) {
-            // 左: 应用品牌 + breadcrumb
+            // 左: 品牌 + breadcrumb
             HStack(spacing: HVMSpace.sm) {
-                Circle()
-                    .fill(HVMColor.accent)
-                    .frame(width: 7, height: 7)
-                    .shadow(color: HVMColor.accent.opacity(0.6), radius: 4)
+                Image(systemName: "cube.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(HVMColor.accent)
                 Text("HVM")
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .tracking(1.2)
+                    .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(HVMColor.textPrimary)
                 if let item = model.selectedItem {
-                    Text("/")
-                        .font(HVMFont.caption)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(HVMColor.textTertiary)
                     Text(item.displayName)
-                        .font(HVMFont.caption)
+                        .font(HVMFont.body)
                         .foregroundStyle(HVMColor.textSecondary)
                         .lineLimit(1)
                 }
@@ -33,7 +31,6 @@ struct HVMToolbar: View {
 
             Spacer()
 
-            // 右: 全局操作
             Button(action: { model.refreshList() }) {
                 Image(systemName: "arrow.clockwise")
             }
@@ -42,7 +39,11 @@ struct HVMToolbar: View {
             .keyboardShortcut("r", modifiers: [.command])
 
             Button(action: { model.showCreateWizard = true }) {
-                Text("+ NEW")
+                HStack(spacing: 4) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .bold))
+                    Text("New VM")
+                }
             }
             .buttonStyle(PillAccentButtonStyle())
             .help("新建 VM (Cmd+N)")
@@ -50,12 +51,6 @@ struct HVMToolbar: View {
         }
         .padding(.horizontal, HVMSpace.lg)
         .frame(height: HVMBar.toolbarHeight)
-        .background(HVMColor.bgBase)
-        .overlay(
-            Rectangle()
-                .fill(HVMColor.border)
-                .frame(height: 1)
-                .frame(maxHeight: .infinity, alignment: .bottom)
-        )
+        .background(HVMColor.bgSidebar)
     }
 }

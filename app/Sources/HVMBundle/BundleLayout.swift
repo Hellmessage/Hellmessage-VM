@@ -14,7 +14,10 @@ public enum BundleLayout {
     public static let metaDirName       = "meta"
     public static let snapshotsDirName  = "snapshots"
 
-    public static let mainDiskName      = "main.img"
+    /// 老的常量, 仅 VZ raw 主盘文件名. 新代码请用 mainDiskName(for:).
+    public static let mainDiskName      = "os.img"
+    /// QEMU 后端的主盘文件名 (qcow2)
+    public static let mainDiskNameQcow2 = "os.qcow2"
     public static let nvramFileName     = "efi-vars.fd"
     public static let auxStorageName    = "aux-storage"
     public static let machineIdentifier = "machine-identifier"
@@ -33,12 +36,40 @@ public enum BundleLayout {
         bundle.appendingPathComponent(disksDirName, isDirectory: true)
     }
 
+    /// 老 API: 仅适用 VZ raw 主盘. 新代码请用 mainDiskURL(_:engine:).
     public static func mainDiskURL(_ bundle: URL) -> URL {
         disksDir(bundle).appendingPathComponent(mainDiskName)
     }
 
+    /// 按 engine 选择主盘文件名:
+    ///   - .vz   → main.img    (raw, VZ 必需)
+    ///   - .qemu → main.qcow2  (qcow2)
+    public static func mainDiskFileName(for engine: Engine) -> String {
+        switch engine {
+        case .vz:   return mainDiskName
+        case .qemu: return mainDiskNameQcow2
+        }
+    }
+
+    public static func mainDiskURL(_ bundle: URL, engine: Engine) -> URL {
+        disksDir(bundle).appendingPathComponent(mainDiskFileName(for: engine))
+    }
+
+    /// 数据盘文件名按 engine 走相同格式; 老 .img 数据盘运行时仍按扩展名走 raw.
+    public static func dataDiskFileName(uuid8: String, engine: Engine) -> String {
+        switch engine {
+        case .vz:   return "data-\(uuid8).img"
+        case .qemu: return "data-\(uuid8).qcow2"
+        }
+    }
+
+    /// 老 API: VZ raw 数据盘. 新代码请用 dataDiskURL(_:uuid8:engine:).
     public static func dataDiskURL(_ bundle: URL, uuid8: String) -> URL {
         disksDir(bundle).appendingPathComponent("data-\(uuid8).img")
+    }
+
+    public static func dataDiskURL(_ bundle: URL, uuid8: String, engine: Engine) -> URL {
+        disksDir(bundle).appendingPathComponent(dataDiskFileName(uuid8: uuid8, engine: engine))
     }
 
     public static func auxiliaryDir(_ bundle: URL) -> URL {

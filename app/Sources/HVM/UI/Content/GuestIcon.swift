@@ -1,17 +1,17 @@
 // GuestIcon.swift
-// 单色 terminal 风 guest 标识. 不再用彩色渐变, 与 hacker 主题统一
+// Guest OS 视觉标识. 专业工具风: 圆角方形 + SF Symbol + 单色 tint, 不再 ASCII 缩写.
 
 import SwiftUI
 import HVMBundle
 
 public struct GuestStyle {
     public let label: String
-    public let shortSymbol: String    // ASCII 单字符缩写, 如 "λ" "⌘"
+    public let symbol: String     // SF Symbol name
     public let accent: Color
 
-    public init(label: String, shortSymbol: String, accent: Color) {
+    public init(label: String, symbol: String, accent: Color) {
         self.label = label
-        self.shortSymbol = shortSymbol
+        self.symbol = symbol
         self.accent = accent
     }
 }
@@ -20,22 +20,28 @@ public enum GuestVisual {
     public static func style(for os: GuestOSType) -> GuestStyle {
         switch os {
         case .linux:
-            return GuestStyle(label: "linux",
-                              shortSymbol: ">_",
-                              accent: HVMColor.accent)
+            return GuestStyle(
+                label: "Linux",
+                symbol: "terminal.fill",
+                accent: Color(red: 0.95, green: 0.65, blue: 0.20)   // 暖橙
+            )
         case .macOS:
-            return GuestStyle(label: "macOS",
-                              shortSymbol: "⌘",
-                              accent: Color(red: 0.85, green: 0.90, blue: 1.00))
+            return GuestStyle(
+                label: "macOS",
+                symbol: "apple.logo",
+                accent: Color(red: 0.85, green: 0.88, blue: 0.94)   // 银白
+            )
         case .windows:
-            return GuestStyle(label: "windows",
-                              shortSymbol: "▦",
-                              accent: Color(red: 0.45, green: 0.75, blue: 1.00))
+            return GuestStyle(
+                label: "Windows",
+                symbol: "macwindow",
+                accent: Color(red: 0.302, green: 0.616, blue: 1.00) // 蓝
+            )
         }
     }
 }
 
-/// 方形 badge, 单色边框 + 中心 ASCII 缩写. 取代之前的彩色渐变 emoji badge.
+/// Guest 标识方块. 卡片底 + accent tint icon + 圆角.
 public struct GuestBadge: View {
     let os: GuestOSType
     let size: CGFloat
@@ -48,12 +54,10 @@ public struct GuestBadge: View {
     public var body: some View {
         let style = GuestVisual.style(for: os)
         ZStack {
-            RoundedRectangle(cornerRadius: size * 0.2, style: .continuous)
-                .fill(HVMColor.bgCard)
-            RoundedRectangle(cornerRadius: size * 0.2, style: .continuous)
-                .stroke(style.accent.opacity(0.6), lineWidth: 1)
-            Text(style.shortSymbol)
-                .font(.system(size: size * 0.38, weight: .bold, design: .monospaced))
+            RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+                .fill(style.accent.opacity(0.15))
+            Image(systemName: style.symbol)
+                .font(.system(size: size * 0.50, weight: .semibold))
                 .foregroundStyle(style.accent)
         }
         .frame(width: size, height: size)

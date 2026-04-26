@@ -1,10 +1,11 @@
 // DetailBars.swift
-// 从原 DetailPanel 拆出的 SwiftUI view, 供 AppKit DetailContainerView 通过 NSHostingView 嵌入.
-//   - StoppedContentView: VM 停止时的整片详情 (title / resources / metadata / Start 按钮)
-//   - DetailTopBar:       running 时的顶部栏 (GuestBadge + 名字 + 状态徽章)
-//   - DetailBottomBar:    running 时的底部栏 (resource summary + Stop/Kill)
-//   - StatusBadge:        状态胶囊 (圆点 + 文字), 在 dark 背景与彩色 banner 都用
-// 保持与之前 DetailPanel 的视觉一致.
+// 右栏详情区的 SwiftUI views, 给 AppKit DetailContainerView 通过 NSHostingView 嵌入.
+//   - DetailEmptyState:   未选中 VM 的占位
+//   - StoppedContentView: 选中 stopped VM 的整片详情
+//   - DetailTopBar:       running 顶栏
+//   - DetailBottomBar:    running 底栏
+//   - StatusBadge:        通用状态徽章
+// 视觉: 专业工具风, 卡片化分组, 蓝 accent.
 
 import AppKit
 import SwiftUI
@@ -14,7 +15,7 @@ import HVMBundle
 import HVMCore
 import HVMStorage
 
-// MARK: - 状态徽章 (公共)
+// MARK: - 状态徽章
 
 struct StatusBadge: View {
     let state: RunState
@@ -24,15 +25,16 @@ struct StatusBadge: View {
         let (label, color) = labelColor
         HStack(spacing: 5) {
             if case .running = state {
-                PulseDot(color: onDark ? Color.white.opacity(0.9) : color, size: 5)
+                Circle()
+                    .fill(onDark ? Color.white.opacity(0.95) : color)
+                    .frame(width: 6, height: 6)
             } else {
-                Text("●")
-                    .font(.system(size: 8))
-                    .foregroundStyle(onDark ? Color.white.opacity(0.85) : color)
+                Circle()
+                    .fill(onDark ? Color.white.opacity(0.85) : color)
+                    .frame(width: 6, height: 6)
             }
-            Text(label.uppercased())
-                .font(HVMFont.label)
-                .tracking(0.8)
+            Text(label)
+                .font(HVMFont.small.weight(.semibold))
                 .foregroundStyle(onDark ? Color.white : color)
         }
         .padding(.horizontal, onDark ? 10 : 0)
@@ -40,7 +42,7 @@ struct StatusBadge: View {
         .background(
             Group {
                 if onDark {
-                    Capsule().fill(Color.black.opacity(0.28))
+                    Capsule().fill(Color.black.opacity(0.30))
                         .overlay(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 1))
                 }
             }
@@ -49,12 +51,12 @@ struct StatusBadge: View {
 
     private var labelColor: (String, Color) {
         switch state {
-        case .stopped: return ("stopped", HVMColor.statusStopped)
-        case .starting: return ("starting", HVMColor.statusPaused)
-        case .running: return ("running", HVMColor.statusRunning)
-        case .paused: return ("paused", HVMColor.statusPaused)
-        case .stopping: return ("stopping", HVMColor.statusPaused)
-        case .error: return ("error", HVMColor.statusError)
+        case .stopped:  return ("Stopped", HVMColor.statusStopped)
+        case .starting: return ("Starting", HVMColor.statusPaused)
+        case .running:  return ("Running", HVMColor.statusRunning)
+        case .paused:   return ("Paused", HVMColor.statusPaused)
+        case .stopping: return ("Stopping", HVMColor.statusPaused)
+        case .error:    return ("Error", HVMColor.statusError)
         }
     }
 }
@@ -68,10 +70,10 @@ struct DetailTopBar: View {
     var body: some View {
         let session = model.sessions[item.id]
         HStack(spacing: HVMSpace.md) {
-            GuestBadge(os: item.guestOS, size: 26)
-            VStack(alignment: .leading, spacing: 1) {
+            GuestBadge(os: item.guestOS, size: 32)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(item.displayName)
-                    .font(HVMFont.heading)
+                    .font(HVMFont.title)
                     .foregroundStyle(HVMColor.textPrimary)
                 StatusBadge(state: session?.state ?? .starting)
             }
@@ -91,45 +93,37 @@ struct DetailBottomBar: View {
     @Bindable var errors: ErrorPresenter
     let item: AppModel.VMListItem
 
-    /// 当前 session 的实时 state, 决定 PAUSE/RESUME 按钮显哪个
     private var sessionState: RunState {
         model.sessions[item.id]?.state ?? .stopped
     }
 
     var body: some View {
         HStack(spacing: HVMSpace.md) {
-            Text("\(item.config.cpuCount)cpu · \(item.config.memoryMiB / 1024)gb · \(networkMode(item.config))")
+            Text("\(item.config.cpuCount) cores · \(item.config.memoryMiB / 1024) GB · \(networkMode(item.config))")
                 .font(HVMFont.small)
                 .foregroundStyle(HVMColor.textTertiary)
             Spacer()
 
-            // PAUSE / RESUME 按 state 切换标签 (按钮排版: 动作破坏性递增)
             if case .paused = sessionState {
-                Button("RESUME") {
-                    Task {
-                        do { try await model.resume(item.id) } catch { errors.present(error) }
-                    }
+                Button("Resume") {
+                    Task { do { try await model.resume(item.id) } catch { errors.present(error) } }
                 }
                 .buttonStyle(GhostButtonStyle())
             } else {
-                Button("PAUSE") {
-                    Task {
-                        do { try await model.pause(item.id) } catch { errors.present(error) }
-                    }
+                Button("Pause") {
+                    Task { do { try await model.pause(item.id) } catch { errors.present(error) } }
                 }
                 .buttonStyle(GhostButtonStyle())
                 .disabled(sessionState != .running)
             }
 
-            Button("STOP") {
+            Button("Stop") {
                 do { try model.stop(item.id) } catch { errors.present(error) }
             }
             .buttonStyle(GhostButtonStyle())
 
-            Button("KILL") {
-                Task {
-                    do { try await model.kill(item.id) } catch { errors.present(error) }
-                }
+            Button("Kill") {
+                Task { do { try await model.kill(item.id) } catch { errors.present(error) } }
             }
             .buttonStyle(GhostButtonStyle(destructive: true))
         }
@@ -142,9 +136,9 @@ struct DetailBottomBar: View {
     private func networkMode(_ config: VMConfig) -> String {
         guard let net = config.networks.first else { return "—" }
         switch net.mode {
-        case .nat: return "nat"
-        case .bridged: return "bridged"
-        case .shared: return "shared"
+        case .nat:     return "NAT"
+        case .bridged: return "Bridged"
+        case .shared:  return "Shared"
         }
     }
 }
@@ -157,8 +151,6 @@ struct StoppedContentView: View {
     @Bindable var confirms: ConfirmPresenter
     let item: AppModel.VMListItem
 
-    /// 当前 bundle 的 snapshot 列表. view init / 操作完成 / dialog 关闭后 reload.
-    /// 不放 AppModel: snapshot 仅 stopped view 关心, 且无法跨进程通知 (文件级状态).
     @State private var snapshots: [SnapshotManager.Info] = []
 
     var body: some View {
@@ -176,18 +168,19 @@ struct StoppedContentView: View {
         }
         .background(HVMColor.bgBase)
         .onAppear { reloadSnapshots() }
-        // 创建弹窗关闭后 reload (snapshotCreateItem nil 触发)
         .onChange(of: model.snapshotCreateItem?.id) { _, _ in
             reloadSnapshots()
         }
     }
 
+    // MARK: title
+
     private var titleBlock: some View {
-        HStack(alignment: .center, spacing: HVMSpace.lg) {
-            GuestBadge(os: item.guestOS, size: 48)
-            VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .center, spacing: HVMSpace.md) {
+            GuestBadge(os: item.guestOS, size: 44)
+            VStack(alignment: .leading, spacing: 4) {
                 Text(item.displayName)
-                    .font(HVMFont.hero)
+                    .font(HVMFont.title)
                     .foregroundStyle(HVMColor.textPrimary)
                 HStack(spacing: HVMSpace.sm) {
                     StatusBadge(state: .stopped)
@@ -202,37 +195,38 @@ struct StoppedContentView: View {
             Button {
                 NSWorkspace.shared.activateFileViewerSelecting([item.bundleURL])
             } label: {
-                Text("REVEAL")
+                Text("Reveal")
             }
             .buttonStyle(GhostButtonStyle())
             .help("Show in Finder")
 
             Button(role: .destructive) { deleteAction() } label: {
-                Text("DELETE")
+                Text("Delete")
             }
             .buttonStyle(GhostButtonStyle(destructive: true))
             .help("Move to Trash")
         }
     }
 
+    // MARK: resources
+
     private var resourcesSection: some View {
         TerminalSection("Resources") {
             HStack(spacing: HVMSpace.md) {
-                // cpu / memory 可点 → 弹 EditConfigDialog (等价 hvm-cli config set)
                 Button { model.editConfigItem = item } label: {
-                    statCard(label: "cpu", value: "\(item.config.cpuCount)", unit: "cores", tint: HVMColor.statCPU)
+                    statCard(label: "CPU", value: "\(item.config.cpuCount)", unit: "cores", tint: HVMColor.statCPU)
                 }
                 .buttonStyle(.plain)
                 .help("点击编辑 CPU 核数")
 
                 Button { model.editConfigItem = item } label: {
-                    statCard(label: "memory", value: "\(item.config.memoryMiB / 1024)", unit: "gb", tint: HVMColor.statMemory)
+                    statCard(label: "Memory", value: "\(item.config.memoryMiB / 1024)", unit: "GB", tint: HVMColor.statMemory)
                 }
                 .buttonStyle(.plain)
                 .help("点击编辑内存")
 
-                statCard(label: "disk", value: "\(item.config.disks.first?.sizeGiB ?? 0)", unit: "gb", tint: HVMColor.statDisk)
-                statCard(label: "network", value: networkMode(item.config).lowercased(), unit: nil, tint: HVMColor.statNetwork)
+                statCard(label: "Disk", value: "\(item.config.disks.first?.sizeGiB ?? 0)", unit: "GB", tint: HVMColor.statDisk)
+                statCard(label: "Network", value: networkMode(item.config), unit: nil, tint: HVMColor.statNetwork)
             }
         }
     }
@@ -240,10 +234,9 @@ struct StoppedContentView: View {
     @ViewBuilder
     private func statCard(label: String, value: String, unit: String?, tint: Color) -> some View {
         VStack(alignment: .leading, spacing: HVMSpace.sm) {
-            Text(label.uppercased())
+            Text(label)
                 .font(HVMFont.label)
-                .tracking(1.5)
-                .foregroundStyle(tint.opacity(0.85))
+                .foregroundStyle(tint)
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(value)
                     .font(HVMFont.statValue)
@@ -261,29 +254,29 @@ struct StoppedContentView: View {
         .overlay(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).stroke(HVMColor.border, lineWidth: 1))
     }
 
+    // MARK: metadata
+
     private var metadataSection: some View {
-        TerminalSection("Metadata") {
+        TerminalSection("General") {
             VStack(spacing: 0) {
-                kvRow("id",     item.config.id.uuidString.lowercased(), truncating: true, first: true)
-                kvRow("mac",    item.config.networks.first?.macAddress ?? "—")
+                kvRow("ID",     item.config.id.uuidString.lowercased(), truncating: true, mono: true, first: true)
+                kvRow("MAC",    item.config.networks.first?.macAddress ?? "—", mono: true)
                 if item.guestOS == .macOS {
-                    kvRow("ipsw",      item.config.macOS?.ipsw ?? "—", truncating: true)
-                    kvRow("installed", item.config.macOS?.autoInstalled == true ? "yes (auto)" : "no — run install")
+                    kvRow("IPSW",      item.config.macOS?.ipsw ?? "—", truncating: true, mono: true)
+                    kvRow("Installed", item.config.macOS?.autoInstalled == true ? "Yes (auto)" : "No — run install")
                 } else {
-                    kvRow("iso", item.config.installerISO ?? "—", truncating: true)
+                    kvRow("ISO", item.config.installerISO ?? "—", truncating: true, mono: true)
                 }
-                kvRow("boot",   bootModeLabel)
-                kvRow("bundle", item.bundleURL.path, truncating: true, last: true)
+                kvRow("Boot",   bootModeLabel)
+                kvRow("Bundle", item.bundleURL.path, truncating: true, mono: true, last: true)
             }
             .background(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).fill(HVMColor.bgCard))
             .overlay(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).stroke(HVMColor.border, lineWidth: 1))
         }
     }
 
-    // MARK: - Disks section
+    // MARK: disks
 
-    /// 磁盘列表 + add/resize/delete (M-2). 与 hvm-cli disk 等价, 都要求 VM stopped.
-    /// 主盘 (role=main) 不可删, 仅可 RESIZE; 数据盘 (role=data) 可 RESIZE / DELETE.
     private var disksSection: some View {
         TerminalSection("Disks") {
             VStack(spacing: 0) {
@@ -304,7 +297,11 @@ struct StoppedContentView: View {
             Button {
                 model.diskAddItem = item
             } label: {
-                Text("+ ADD")
+                HStack(spacing: 4) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("Add Disk")
+                }
             }
             .buttonStyle(GhostButtonStyle())
             .help("加一块数据盘 (raw sparse)")
@@ -328,21 +325,24 @@ struct StoppedContentView: View {
         let absURL = item.bundleURL.appendingPathComponent(disk.path)
         let actualBytes = (try? DiskFactory.actualBytes(at: absURL)) ?? 0
         HStack(spacing: HVMSpace.md) {
+            Circle()
+                .fill(disk.role == .main ? HVMColor.accent : HVMColor.statNetwork)
+                .frame(width: 6, height: 6)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: HVMSpace.sm) {
                     Text(id)
-                        .font(HVMFont.body)
+                        .font(HVMFont.mono)
                         .foregroundStyle(HVMColor.textPrimary)
                     Text(disk.role == .main ? "main" : "data")
                         .font(HVMFont.small)
                         .foregroundStyle(HVMColor.textTertiary)
                 }
-                Text("\(disk.sizeGiB) gb · 实占 \(formatMB(actualBytes))")
+                Text("\(disk.sizeGiB) GB · 实占 \(formatMB(actualBytes))")
                     .font(HVMFont.small)
                     .foregroundStyle(HVMColor.textTertiary)
             }
             Spacer()
-            Button("RESIZE") {
+            Button("Resize") {
                 model.diskResizeRequest = AppModel.DiskResizeRequest(
                     item: item, diskID: id, currentSizeGiB: disk.sizeGiB
                 )
@@ -350,7 +350,7 @@ struct StoppedContentView: View {
             .buttonStyle(GhostButtonStyle())
             .help("扩容磁盘 (只能增大)")
             if disk.role == .data {
-                Button("DELETE") { deleteDataDisk(id: id) }
+                Button("Delete") { deleteDataDisk(id: id) }
                     .buttonStyle(GhostButtonStyle(destructive: true))
                     .help("删除此数据盘")
             }
@@ -359,7 +359,6 @@ struct StoppedContentView: View {
         .padding(.vertical, 9)
     }
 
-    /// 主盘 → "main"; 数据盘 → 文件名里的 uuid8
     private func diskID(for disk: DiskSpec) -> String {
         if disk.role == .main { return "main" }
         let prefix = "\(BundleLayout.disksDirName)/data-"
@@ -370,8 +369,8 @@ struct StoppedContentView: View {
 
     private func formatMB(_ bytes: UInt64) -> String {
         let mb = Double(bytes) / 1024 / 1024
-        if mb < 1024 { return String(format: "%.1f mb", mb) }
-        return String(format: "%.2f gb", mb / 1024)
+        if mb < 1024 { return String(format: "%.1f MB", mb) }
+        return String(format: "%.2f GB", mb / 1024)
     }
 
     private func deleteDataDisk(id: String) {
@@ -403,11 +402,8 @@ struct StoppedContentView: View {
         }
     }
 
-    // MARK: - Snapshots section
+    // MARK: snapshots
 
-    /// VM 整体快照 (磁盘 + config), 基于 APFS clonefile.
-    /// 入口: 顶部 + NEW 按钮; 行内 RESTORE / DELETE.
-    /// 跟 hvm-cli snapshot 子命令完全等价, 都要求 VM stopped (BundleLock.isBusy 检测).
     private var snapshotsSection: some View {
         TerminalSection("Snapshots") {
             VStack(spacing: 0) {
@@ -432,7 +428,11 @@ struct StoppedContentView: View {
             Button {
                 model.snapshotCreateItem = item
             } label: {
-                Text("+ NEW")
+                HStack(spacing: 4) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("New Snapshot")
+                }
             }
             .buttonStyle(GhostButtonStyle())
             .help("创建新快照 (clonefile, 几乎零空间)")
@@ -445,7 +445,7 @@ struct StoppedContentView: View {
         VStack(spacing: 0) {
             Rectangle().fill(HVMColor.border).frame(height: 1)
             HStack {
-                Text("(无快照)")
+                Text("No snapshots yet")
                     .font(HVMFont.caption)
                     .foregroundStyle(HVMColor.textTertiary)
                 Spacer()
@@ -471,10 +471,10 @@ struct StoppedContentView: View {
                             .foregroundStyle(HVMColor.textTertiary)
                     }
                     Spacer()
-                    Button("RESTORE") { restoreSnapshot(info.name) }
+                    Button("Restore") { restoreSnapshot(info.name) }
                         .buttonStyle(GhostButtonStyle())
-                        .help("将磁盘和 config 还原到此快照 (覆盖当前)")
-                    Button("DELETE") { deleteSnapshot(info.name) }
+                        .help("将磁盘和 config 还原到此快照")
+                    Button("Delete") { deleteSnapshot(info.name) }
                         .buttonStyle(GhostButtonStyle(destructive: true))
                         .help("删除此快照")
                 }
@@ -534,18 +534,18 @@ struct StoppedContentView: View {
         }
     }
 
-    /// boot 字段文案: macOS guest 装机阶段不挂 ISO 而是 IPSW + VZMacOSInstaller, 文案与 Linux 区分
     private var bootModeLabel: String {
-        if item.config.bootFromDiskOnly { return "from disk" }
+        if item.config.bootFromDiskOnly { return "From disk" }
         switch item.guestOS {
-        case .linux, .windows: return "from iso (installer mode)"
-        case .macOS:           return "from ipsw (installer mode)"
+        case .linux, .windows: return "From ISO (installer mode)"
+        case .macOS:           return "From IPSW (installer mode)"
         }
     }
 
     @ViewBuilder
     private func kvRow(_ key: String, _ value: String,
                        truncating: Bool = false,
+                       mono: Bool = false,
                        first: Bool = false, last: Bool = false) -> some View {
         VStack(spacing: 0) {
             if !first {
@@ -555,13 +555,10 @@ struct StoppedContentView: View {
                 Text(key)
                     .font(HVMFont.small)
                     .foregroundStyle(HVMColor.textTertiary)
-                    .frame(width: 64, alignment: .leading)
-                Text("=")
-                    .font(HVMFont.small)
-                    .foregroundStyle(HVMColor.textTertiary)
+                    .frame(width: 80, alignment: .leading)
                 if truncating {
                     Text(value)
-                        .font(HVMFont.caption)
+                        .font(mono ? HVMFont.monoSmall : HVMFont.caption)
                         .foregroundStyle(HVMColor.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -570,7 +567,7 @@ struct StoppedContentView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     Text(value)
-                        .font(HVMFont.caption)
+                        .font(mono ? HVMFont.monoSmall : HVMFont.caption)
                         .foregroundStyle(HVMColor.textPrimary)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -581,59 +578,59 @@ struct StoppedContentView: View {
         }
     }
 
+    // MARK: action row
+
     private var actionRow: some View {
         HStack(spacing: HVMSpace.md) {
-            if needsInstall {
-                // macOS guest 未装机: 主按钮换成 INSTALL, 跑 VZMacOSInstaller
-                Button(action: installAction) {
-                    HStack(spacing: 6) {
-                        Text("⏬").font(.system(size: 10))
-                        Text("INSTALL")
-                    }
-                }
-                .buttonStyle(PrimaryButtonStyle())
-                .disabled(item.config.macOS?.ipsw == nil)
-                .keyboardShortcut(.return, modifiers: [.command])
-                .help("跑 VZMacOSInstaller 装 macOS 到主盘. 装完 autoInstalled=true 后此按钮变为 START")
-            } else {
-                Button(action: startAction) {
-                    HStack(spacing: 6) {
-                        Text("▶").font(.system(size: 10))
-                        Text("START")
-                    }
-                }
-                .buttonStyle(PrimaryButtonStyle())
-                .keyboardShortcut(.return, modifiers: [.command])
-
-                // 装机模式 (Linux 有 ISO 且 bootFromDiskOnly=false) 才显示. 切完按钮隐藏.
-                // 等价 hvm-cli boot-from-disk 子命令 (Sources/hvm-cli/Commands/BootFromDiskCommand.swift)
-                if item.config.installerISO != nil && !item.config.bootFromDiskOnly {
-                    Button(action: bootFromDiskAction) {
-                        Text("BOOT FROM DISK")
-                    }
-                    .buttonStyle(GhostButtonStyle())
-                    .help("装完 OS 后切到只从硬盘启动, 下次开机不挂 ISO")
-                }
-            }
-
+            Spacer()
             // ISO 切换 (仅 Linux). 等价 hvm-cli iso select / eject
             if item.guestOS == .linux {
-                Button(item.config.installerISO != nil ? "CHANGE ISO" : "SELECT ISO") {
+                Button(item.config.installerISO != nil ? "Change ISO" : "Select ISO") {
                     selectIsoAction()
                 }
                 .buttonStyle(GhostButtonStyle())
                 .help("挂载 / 替换安装 ISO (会自动取消 bootFromDiskOnly)")
 
                 if item.config.installerISO != nil {
-                    Button("EJECT ISO") { ejectIsoAction() }
+                    Button("Eject ISO") { ejectIsoAction() }
                         .buttonStyle(GhostButtonStyle())
                         .help("弹出 ISO 并切到仅硬盘启动")
                 }
             }
+
+            if needsInstall {
+                Button(action: installAction) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 12))
+                        Text("Install")
+                    }
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(item.config.macOS?.ipsw == nil)
+                .keyboardShortcut(.return, modifiers: [.command])
+                .help("跑 VZMacOSInstaller 装 macOS 到主盘. 装完此按钮变为 Start")
+            } else {
+                if item.config.installerISO != nil && !item.config.bootFromDiskOnly {
+                    Button(action: bootFromDiskAction) {
+                        Text("Boot From Disk")
+                    }
+                    .buttonStyle(GhostButtonStyle())
+                    .help("装完 OS 后切到只从硬盘启动")
+                }
+                Button(action: startAction) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 11))
+                        Text("Start")
+                    }
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .keyboardShortcut(.return, modifiers: [.command])
+            }
         }
     }
 
-    /// macOS guest 未装机才需要 INSTALL 按钮. Linux 走 start + boot-from-disk 链.
     private var needsInstall: Bool {
         item.guestOS == .macOS && item.config.macOS?.autoInstalled != true
     }
@@ -723,37 +720,56 @@ struct StoppedContentView: View {
     private func networkMode(_ config: VMConfig) -> String {
         guard let net = config.networks.first else { return "—" }
         switch net.mode {
-        case .nat: return "NAT"
+        case .nat:     return "NAT"
         case .bridged: return "Bridged"
-        case .shared: return "Shared"
+        case .shared:  return "Shared"
         }
     }
 }
 
 // MARK: - 空状态 (未选中 VM)
-// 终端启动屏: ASCII banner + boot log (host 能力探测) + 大号 CTA
-// 同时覆盖两种语义: ① VM 列表为空 → 引导新建 ② 列表非空但没选 → 引导左侧选择
+// 干净的 welcome 屏: VM stack icon + 标题 + 描述 + CTA. 无 ASCII banner / 无 boot log.
 
 struct DetailEmptyState: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: HVMSpace.lg) {
             Spacer(minLength: HVMSpace.xl)
 
-            asciiBanner
+            ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(HVMColor.bgCard)
+                    .frame(width: 88, height: 88)
+                Image(systemName: "rectangle.stack.fill")
+                    .font(.system(size: 38, weight: .light))
+                    .foregroundStyle(HVMColor.accent)
+            }
 
-            Text("// virtualization terminal")
-                .font(HVMFont.caption)
-                .tracking(2.4)
-                .foregroundStyle(HVMColor.textTertiary)
-                .padding(.top, HVMSpace.md)
+            VStack(spacing: HVMSpace.sm) {
+                Text(headlineText)
+                    .font(HVMFont.title)
+                    .foregroundStyle(HVMColor.textPrimary)
+                Text(subText)
+                    .font(HVMFont.body)
+                    .foregroundStyle(HVMColor.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+            }
 
-            bootLog
-                .padding(.top, HVMSpace.xl)
-
-            cta
-                .padding(.top, HVMSpace.xl)
+            if model.list.isEmpty {
+                Button(action: { model.showCreateWizard = true }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 12, weight: .bold))
+                        Text("Create VM")
+                    }
+                }
+                .buttonStyle(HeroCTAStyle())
+                Text("⌘N")
+                    .font(HVMFont.small)
+                    .foregroundStyle(HVMColor.textTertiary)
+            }
 
             Spacer(minLength: HVMSpace.xl)
         }
@@ -761,106 +777,15 @@ struct DetailEmptyState: View {
         .background(HVMColor.bgBase)
     }
 
-    // MARK: banner
-
-    private var asciiBanner: some View {
-        Text(Self.banner)
-            .font(.system(size: 13, weight: .bold, design: .monospaced))
-            .foregroundStyle(HVMColor.accent)
-            .shadow(color: HVMColor.accent.opacity(0.45), radius: 10)
-            .lineSpacing(0)
-            .fixedSize()
+    private var headlineText: String {
+        model.list.isEmpty ? "Welcome to HVM" : "No VM selected"
     }
 
-    // MARK: boot log
-
-    private var bootLog: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            bootLine(label: "vz",     value: "ready",                ok: true)
-            bootLine(label: "host",   value: HostProbe.cpuBrand,     ok: true)
-            bootLine(label: "cores",  value: "\(HostProbe.cpuCount)", ok: true)
-            bootLine(label: "memory", value: HostProbe.memoryString, ok: true)
-            bootLine(label: "guests", value: "macos · linux",        ok: true)
-        }
-        .padding(HVMSpace.lg)
-        .background(
-            RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
-                .stroke(HVMColor.border, lineWidth: 1)
-        )
-    }
-
-    private func bootLine(label: String, value: String, ok: Bool) -> some View {
-        HStack(spacing: HVMSpace.sm) {
-            Text(ok ? "[ ok ]" : "[ -- ]")
-                .font(HVMFont.caption)
-                .foregroundStyle(ok ? HVMColor.statusRunning : HVMColor.textTertiary)
-            Text(label.padding(toLength: 7, withPad: " ", startingAt: 0))
-                .font(HVMFont.caption)
-                .foregroundStyle(HVMColor.textSecondary)
-            Text(value)
-                .font(HVMFont.caption)
-                .foregroundStyle(HVMColor.textPrimary)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-        }
-        .frame(width: 360, alignment: .leading)
-    }
-
-    // MARK: CTA
-
-    @ViewBuilder
-    private var cta: some View {
+    private var subText: String {
         if model.list.isEmpty {
-            VStack(spacing: HVMSpace.sm) {
-                Button(action: { model.showCreateWizard = true }) {
-                    Text("[ + NEW VM ]")
-                }
-                .buttonStyle(HeroCTAStyle())
-
-                Text("press ⌘N or click + NEW above")
-                    .font(HVMFont.small)
-                    .foregroundStyle(HVMColor.textTertiary)
-            }
+            return "Create your first virtual machine. Supports macOS, Linux (VZ / QEMU), and Windows arm64 (QEMU)."
         } else {
-            VStack(spacing: HVMSpace.xs) {
-                Text("// \(model.list.count) vm\(model.list.count == 1 ? "" : "s") in registry")
-                    .font(HVMFont.caption)
-                    .foregroundStyle(HVMColor.textSecondary)
-                Text("← select one on the left")
-                    .font(HVMFont.caption)
-                    .foregroundStyle(HVMColor.textTertiary)
-            }
+            return "Pick a VM from the list on the left to view details, manage disks and snapshots, or start it."
         }
     }
-
-    // 28 列宽 ANSI block banner
-    private static let banner = """
-    ██╗  ██╗██╗   ██╗███╗   ███╗
-    ██║  ██║██║   ██║████╗ ████║
-    ███████║██║   ██║██╔████╔██║
-    ██╔══██║╚██╗ ██╔╝██║╚██╔╝██║
-    ██║  ██║ ╚████╔╝ ██║ ╚═╝ ██║
-    ╚═╝  ╚═╝  ╚═══╝  ╚═╝     ╚═╝
-    """
-}
-
-// MARK: - host 能力探测 (只读, 无 entitlement)
-
-private enum HostProbe {
-    static let cpuBrand: String = {
-        var size = 0
-        sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
-        guard size > 0 else { return "unknown" }
-        var bytes = [UInt8](repeating: 0, count: size)
-        sysctlbyname("machdep.cpu.brand_string", &bytes, &size, nil, 0)
-        let payload = bytes.firstIndex(of: 0).map { bytes.prefix($0) } ?? bytes.prefix(bytes.count)
-        return String(decoding: payload, as: UTF8.self)
-    }()
-
-    static let cpuCount: Int = ProcessInfo.processInfo.processorCount
-
-    static let memoryString: String = {
-        let gb = Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824.0
-        return String(format: "%.0f gb", gb)
-    }()
 }
