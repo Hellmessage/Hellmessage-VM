@@ -17,6 +17,7 @@ import Foundation
 import HVMBackend
 import HVMBundle
 import HVMCore
+import HVMDisplay
 import HVMInstall
 import HVMIPC
 import HVMQemu
@@ -456,6 +457,8 @@ final class QemuHostState {
     /// socket_vmnet sidecar (任一 networks[i].mode == .bridged 时). nil 表示纯 NAT
     var socketVmnetRunner: SocketVmnetRunner?
     var socketVmnetSocketPath: String?
+    /// dbg.status 用: 最近一次截图的 sha256 (用于客户端做"画面变没变"轮询)
+    var lastFrameSha256: String?
 
     var statusItem: NSStatusItem?
     var statusMenu: QemuStatusMenuController?
@@ -552,14 +555,157 @@ final class QemuHostState {
                 return .failure(id: req.id, code: "backend.qmp_error", message: "\(error)")
             }
 
+        case IPCOp.dbgScreenshot.rawValue: return await handleDbgScreenshot(req: req)
+        case IPCOp.dbgStatus.rawValue:     return handleDbgStatus(req: req)
+        case IPCOp.dbgOcr.rawValue:        return await handleDbgOcr(req: req)
+        case IPCOp.dbgFindText.rawValue:   return await handleDbgFindText(req: req)
+
         default:
-            // dbg.* 一期不支持: VZ 的 DbgOps 依赖 VZ frame buffer / VZ key injection,
-            // QEMU 端等价物 (screendump / human-monitor-command) 留给后续 commit
+            // 剩余 dbg.* (key/mouse/boot_progress/console.*) 留给 E4b / 后续:
+            //   - key/mouse: QMP send-key + input-send-event 包装 (E4b)
+            //   - console.read/write + boot_progress: 需先接 -chardev pty/socket 给 serial,
+            //     然后跟 ConsoleBridge 等价路径接入
             if req.op.hasPrefix("dbg.") {
                 return .failure(id: req.id, code: "backend.qemu_dbg_unsupported",
-                                message: "QEMU 后端暂未实现 dbg.* 命令; 用 hvm-dbg qemu-launch 直跑可看 cocoa 窗口")
+                                message: "QEMU 后端尚未实现 \(req.op); screenshot/status/ocr/find_text 已支持")
             }
             return .failure(id: req.id, code: "ipc.unknown_op", message: "未知 op: \(req.op)")
+        }
+    }
+
+    // MARK: - dbg.* 处理 (E4a)
+
+    private func handleDbgScreenshot(req: IPCRequest) async -> IPCResponse {
+        guard let client = qmpClient else {
+            return .failure(id: req.id, code: "backend.qmp_unavailable", message: "QMP 未就绪")
+        }
+        do {
+            // maxEdge=1568 与 VZ 路径一致 (Anthropic many-image 上限)
+            let shot = try await QemuScreenshot.capture(
+                via: client,
+                tempDir: HVMPaths.runDir,
+                maxEdge: 1568
+            )
+            lastFrameSha256 = shot.sha256
+            let payload = IPCDbgScreenshotPayload(
+                pngBase64: shot.pngData.base64EncodedString(),
+                widthPx: shot.widthPx,
+                heightPx: shot.heightPx,
+                sha256: shot.sha256
+            )
+            guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
+                return .failure(id: req.id, code: "ipc.encode_failed", message: "screenshot payload 编码失败")
+            }
+            return .success(id: req.id, data: ["payload": json])
+        } catch {
+            return .failure(id: req.id, code: "dbg.frame_unavailable", message: "\(error)")
+        }
+    }
+
+    private func handleDbgStatus(req: IPCRequest) -> IPCResponse {
+        // QEMU 端 framebuffer 尺寸: 当前 cocoa 自带窗口, 没有简单 API 取实时尺寸;
+        // 用 guestOS 估算 (跟 DbgOps.guestFramebufferSize 等价).
+        let (gw, gh): (Int, Int)
+        switch config?.guestOS {
+        case .linux, .windows: (gw, gh) = (1024, 768)
+        case .macOS:           (gw, gh) = (1920, 1080)
+        case .none:            (gw, gh) = (0, 0)
+        }
+        let stateString: String
+        if case .running = runner?.state { stateString = "running" } else { stateString = "starting" }
+        let payload = IPCDbgStatusPayload(
+            state: stateString,
+            guestWidthPx: gw,
+            guestHeightPx: gh,
+            lastFrameSha256: lastFrameSha256,
+            consoleAgentOnline: false  // QEMU console 通道一期未接入
+        )
+        guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
+            return .failure(id: req.id, code: "ipc.encode_failed", message: "dbg status payload 编码失败")
+        }
+        return .success(id: req.id, data: ["payload": json])
+    }
+
+    private func handleDbgOcr(req: IPCRequest) async -> IPCResponse {
+        guard let client = qmpClient else {
+            return .failure(id: req.id, code: "backend.qmp_unavailable", message: "QMP 未就绪")
+        }
+        // OCR 不缩放, 保留原分辨率以维持识别精度 (与 VZ DbgOps.handleOcr 一致)
+        let shot: QemuScreenshot.Result
+        do {
+            shot = try await QemuScreenshot.capture(via: client, tempDir: HVMPaths.runDir, maxEdge: nil)
+        } catch {
+            return .failure(id: req.id, code: "dbg.frame_unavailable", message: "\(error)")
+        }
+        lastFrameSha256 = shot.sha256
+
+        var region: CGRect? = nil
+        if let xs = req.args["x"], let ys = req.args["y"],
+           let ws = req.args["w"], let hs = req.args["h"],
+           let x = Double(xs), let y = Double(ys),
+           let w = Double(ws), let h = Double(hs) {
+            region = CGRect(x: x, y: y, width: w, height: h)
+        }
+        do {
+            let items = try OCREngine.recognize(pngData: shot.pngData, region: region)
+            let payload = IPCDbgOcrPayload(
+                widthPx: shot.widthPx,
+                heightPx: shot.heightPx,
+                texts: items.map { IPCDbgOcrPayload.Item(
+                    x: $0.x, y: $0.y, width: $0.width, height: $0.height,
+                    text: $0.text, confidence: $0.confidence
+                ) }
+            )
+            guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
+                return .failure(id: req.id, code: "ipc.encode_failed", message: "ocr payload 编码失败")
+            }
+            return .success(id: req.id, data: ["payload": json])
+        } catch let e as HVMError {
+            let uf = e.userFacing
+            return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)
+        } catch {
+            return .failure(id: req.id, code: "backend.qmp_error", message: "\(error)")
+        }
+    }
+
+    private func handleDbgFindText(req: IPCRequest) async -> IPCResponse {
+        guard let query = req.args["query"], !query.isEmpty else {
+            return .failure(id: req.id, code: "config.missing_field", message: "需要 args.query")
+        }
+        guard let client = qmpClient else {
+            return .failure(id: req.id, code: "backend.qmp_unavailable", message: "QMP 未就绪")
+        }
+        let shot: QemuScreenshot.Result
+        do {
+            shot = try await QemuScreenshot.capture(via: client, tempDir: HVMPaths.runDir, maxEdge: nil)
+        } catch {
+            return .failure(id: req.id, code: "dbg.frame_unavailable", message: "\(error)")
+        }
+        lastFrameSha256 = shot.sha256
+        do {
+            let items = try OCREngine.recognize(pngData: shot.pngData, region: nil)
+            let needle = query.lowercased()
+            let hit = items.first { $0.text.lowercased().contains(needle) }
+            let payload: IPCDbgFindTextPayload
+            if let it = hit {
+                payload = IPCDbgFindTextPayload(
+                    match: true,
+                    x: it.x, y: it.y, width: it.width, height: it.height,
+                    centerX: it.x + it.width / 2, centerY: it.y + it.height / 2,
+                    text: it.text, confidence: it.confidence
+                )
+            } else {
+                payload = IPCDbgFindTextPayload(match: false)
+            }
+            guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else {
+                return .failure(id: req.id, code: "ipc.encode_failed", message: "find_text payload 编码失败")
+            }
+            return .success(id: req.id, data: ["payload": json])
+        } catch let e as HVMError {
+            let uf = e.userFacing
+            return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)
+        } catch {
+            return .failure(id: req.id, code: "backend.qmp_error", message: "\(error)")
         }
     }
 

@@ -139,6 +139,30 @@ public final class QmpClient: @unchecked Sendable {
         _ = try await executeRaw("quit", argumentsObject: nil)
     }
 
+    /// screendump: 把当前 guest framebuffer 写到 host 文件 (PPM P6 format, 默认).
+    /// QEMU 同步写完才返回 return; 调用方安全立即读取 filename.
+    /// device: nil 走主显示设备 (我们配置只有一个 virtio-gpu), 多显示场景需指定.
+    public func screendump(filename: String, device: String? = nil) async throws {
+        var args: [String: Any] = ["filename": filename]
+        if let device { args["device"] = device }
+        // QEMU 默认 format=ppm; 显式带上更稳, 防上游改默认
+        args["format"] = "ppm"
+        _ = try await executeRaw("screendump", argumentsObject: args)
+    }
+
+    /// human-monitor-command: 包装 QMP HMP 桥接, 让我们能跑老 monitor 命令
+    /// (sendkey / mouse_move / mouse_button 等; QMP 原生命令 send-key + input-send-event 也可,
+    /// 但 sendkey HMP 形式更短). 返 monitor stdout 字符串.
+    public func humanMonitorCommand(_ command: String) async throws -> String {
+        let args: [String: Any] = ["command-line": command]
+        let returnData = try await executeRaw("human-monitor-command", argumentsObject: args)
+        // human-monitor-command 的 return 是字符串 (JSON encoded), 不是 dict
+        if let s = try? JSONDecoder().decode(String.self, from: returnData) {
+            return s
+        }
+        return String(data: returnData, encoding: .utf8) ?? ""
+    }
+
     // MARK: - 内部: 通用命令执行
 
     /// 通用命令执行. 返回 "return" 字段的原始 JSON Data; QEMU error 抛 QmpError.qemu.
