@@ -60,20 +60,34 @@ public enum QemuHostEntry {
             }
         }
 
-        // 3. 构造 argv
+        // 3. swtpm sidecar (windows + tpmEnabled). 必须在 QEMU 启动前 listen, 否则 QEMU 连不上.
+        // helper 失败路径直接 exit() (内部已 release lock); 成功返非 nil tuple.
+        var swtpmSockPath: String? = nil
+        var swtpmRunner: SwtpmRunner? = nil
+        if config.guestOS == .windows, config.windows?.tpmEnabled == true {
+            let (path, runner) = startSwtpmSidecar(config: config, bundleURL: bundleURL, lock: lock)
+            swtpmSockPath = path
+            swtpmRunner = runner
+        }
+
+        // 4. 构造 argv
         let args: [String]
         do {
             let inputs = QemuArgsBuilder.Inputs(
                 config: config, bundleURL: bundleURL,
                 qemuRoot: qemuRoot, qmpSocketPath: qmpSocketURL.path,
-                virtioWinISOPath: virtioWinPath
+                virtioWinISOPath: virtioWinPath,
+                swtpmSocketPath: swtpmSockPath
             )
             args = try QemuArgsBuilder.build(inputs)
         } catch {
             fputs("HVMHost(qemu): argv 构造失败: \(error)\n", stderr)
+            swtpmRunner?.terminate()
             lock.release()
             exit(21)
         }
+        QemuHostState.shared.swtpmRunner = swtpmRunner
+        QemuHostState.shared.swtpmSocketPath = swtpmSockPath
 
         // 3. stderr 落 bundle/logs/qemu-stderr.log (truncate, 不累积老错误)
         let stderrLog = BundleLayout.logsDir(bundleURL)
@@ -184,6 +198,88 @@ public enum QemuHostEntry {
         exit(0)
     }
 
+    /// 启动 swtpm sidecar (Win11 TPM 2.0 必需). 失败路径自身 cleanup + exit (Never).
+    /// 成功返 (socket path, runner) 供 QemuArgsBuilder + tearDown 使用.
+    @MainActor
+    private static func startSwtpmSidecar(
+        config: VMConfig,
+        bundleURL: URL,
+        lock: BundleLock
+    ) -> (String, SwtpmRunner) {
+        // 1. 定位 swtpm 二进制
+        let swtpmBin: URL
+        do {
+            swtpmBin = try SwtpmPaths.locate()
+        } catch {
+            fputs("HVMHost(qemu): ✗ swtpm 未找到: \(error)\n", stderr)
+            fputs("  Win11 装机需要 TPM 2.0 模拟. 解决方案:\n", stderr)
+            fputs("    a) 重新 make qemu (会从 Homebrew 复制 swtpm 入包)\n", stderr)
+            fputs("    b) brew install swtpm (临时降级方案)\n", stderr)
+            lock.release()
+            exit(30)
+        }
+
+        // 2. 路径准备: state dir 持久 / socket+log+pid 运行时
+        let stateDir = BundleLayout.tpmStateDir(bundleURL)
+        try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        let sockPath = HVMPaths.runDir
+            .appendingPathComponent("\(config.id.uuidString.lowercased()).swtpm.sock").path
+        let pidPath = HVMPaths.runDir
+            .appendingPathComponent("\(config.id.uuidString.lowercased()).swtpm.pid")
+        let logFile = BundleLayout.logsDir(bundleURL).appendingPathComponent("swtpm.log")
+        // 清残留 socket / pid (上次崩溃留的会让 swtpm bind 失败 / 误以为已在跑)
+        try? FileManager.default.removeItem(atPath: sockPath)
+        try? FileManager.default.removeItem(at: pidPath)
+
+        // 3. 构造 argv + 启动
+        let swtpmArgs = SwtpmArgsBuilder.build(SwtpmArgsBuilder.Inputs(
+            stateDir: stateDir,
+            ctrlSocketPath: sockPath,
+            logFile: logFile,
+            pidFile: pidPath
+        ))
+        let stderrLog = BundleLayout.logsDir(bundleURL).appendingPathComponent("swtpm-stderr.log")
+        try? FileManager.default.removeItem(at: stderrLog)
+        let runner = SwtpmRunner(binary: swtpmBin, args: swtpmArgs,
+                                 ctrlSocketPath: sockPath, stderrLog: stderrLog)
+        do {
+            try runner.start()
+        } catch {
+            fputs("HVMHost(qemu): ✗ swtpm 启动失败: \(error)\n", stderr)
+            lock.release()
+            exit(31)
+        }
+
+        // 4. 阻塞等 socket 文件就绪 (swtpm 通常 <500ms; QEMU 比 swtpm 早连会 ECONNREFUSED).
+        //    主动 poll, 最多 5s; 若 swtpm 早退也立即报错.
+        let deadline = Date().addingTimeInterval(5)
+        var ready = false
+        while Date() < deadline {
+            switch runner.state {
+            case .exited, .crashed:
+                fputs("HVMHost(qemu): ✗ swtpm 启动后立即退出 state=\(runner.state)\n", stderr)
+                fputs("  详见 \(stderrLog.path) 与 \(logFile.path)\n", stderr)
+                lock.release()
+                exit(32)
+            default: break
+            }
+            if FileManager.default.fileExists(atPath: sockPath) {
+                ready = true
+                break
+            }
+            usleep(100_000)
+        }
+        if !ready {
+            fputs("HVMHost(qemu): ✗ swtpm socket 5s 未就绪\n", stderr)
+            runner.forceKill()
+            runner.waitUntilExit()
+            lock.release()
+            exit(33)
+        }
+        fputs("HVMHost(qemu): swtpm 已就绪 sock=\(sockPath)\n", stderr)
+        return (sockPath, runner)
+    }
+
     /// QMP 连接重试: bind 与 listen 之间有窗口, 200ms 间隔 backoff;
     /// 若 QEMU 进程提前 exit/crashed (如配置错误立即崩) 不再重试.
     @MainActor
@@ -230,6 +326,9 @@ final class QemuHostState {
     var lock: BundleLock?
     var ipcServer: SocketServer?
     var startedAt: Date?
+    /// swtpm sidecar (仅 windows + tpmEnabled). nil 表示无 TPM
+    var swtpmRunner: SwtpmRunner?
+    var swtpmSocketPath: String?
 
     var statusItem: NSStatusItem?
     var statusMenu: QemuStatusMenuController?
@@ -387,8 +486,16 @@ final class QemuHostState {
         ipcServer?.stop()
         qmpClient?.close()
         runner?.waitUntilExit()
+        // swtpm 因 --terminate 通常已自动退; 保险再终止 + 等
+        if let s = swtpmRunner {
+            s.terminate()
+            s.waitUntilExit()
+        }
         if let qmpSocketURL {
             try? FileManager.default.removeItem(at: qmpSocketURL)
+        }
+        if let p = swtpmSocketPath {
+            try? FileManager.default.removeItem(atPath: p)
         }
         lock?.release()
         exit(exitCode)

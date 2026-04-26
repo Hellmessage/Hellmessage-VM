@@ -74,6 +74,11 @@ public enum BundleLayout {
         bundle.appendingPathComponent("run", isDirectory: true).appendingPathComponent("console.sock")
     }
 
+    /// swtpm 持久化 TPM 状态目录 (Win11 NVRAM 表征, 跨重启保留 SecureBoot 信任根)
+    public static func tpmStateDir(_ bundle: URL) -> URL {
+        bundle.appendingPathComponent("tpm", isDirectory: true)
+    }
+
     /// 判断路径是否落在 disks/ 下 (防越界). path 为 config.json 里的相对路径
     public static func isDiskPathInSandbox(_ path: String) -> Bool {
         // 规范化后必须以 "disks/" 开头且不含 ".." 回跳

@@ -28,19 +28,24 @@ public enum QemuArgsBuilder {
         /// virtio-win.iso 全局缓存绝对路径 (仅 windows guest 用; 由 VirtioWinCache 提供).
         /// 非 windows 或路径 nil 时不挂第二 cdrom.
         public let virtioWinISOPath: String?
+        /// swtpm 控制 socket 绝对路径 (仅 windows + tpmEnabled 时用).
+        /// nil 时即便 windows.tpmEnabled=true 也不注入 TPM args (调用方负责事先启动 swtpm).
+        public let swtpmSocketPath: String?
 
         public init(
             config: VMConfig,
             bundleURL: URL,
             qemuRoot: URL,
             qmpSocketPath: String,
-            virtioWinISOPath: String? = nil
+            virtioWinISOPath: String? = nil,
+            swtpmSocketPath: String? = nil
         ) {
             self.config = config
             self.bundleURL = bundleURL
             self.qemuRoot = qemuRoot
             self.qmpSocketPath = qmpSocketPath
             self.virtioWinISOPath = virtioWinISOPath
+            self.swtpmSocketPath = swtpmSocketPath
         }
     }
 
@@ -141,10 +146,13 @@ public enum QemuArgsBuilder {
         // server=on: QEMU 监听 socket; wait=off: 不阻塞 QEMU 启动等客户端
         args += ["-qmp", "unix:\(inputs.qmpSocketPath),server=on,wait=off"]
 
-        // ---- Win11 TPM 2.0 (仅 windows + tpmEnabled 时) ----
-        // swtpm daemon 需另进程启动 (ProcessRunner 之外的事), 这里只生成 QEMU 端 args
-        if cfg.guestOS == .windows, cfg.windows?.tpmEnabled == true {
-            let tpmSock = inputs.bundleURL.appendingPathComponent("run/swtpm.sock").path
+        // ---- Win11 TPM 2.0 (仅 windows + tpmEnabled + 调用方已启 swtpm) ----
+        // swtpm daemon 由 SwtpmRunner 在外部先启起, socket 路径由调用方注入 (避免硬编码 bug).
+        // 没传 swtpmSocketPath 即便 windows.tpmEnabled=true 也不挂 TPM device — Win11 装机会
+        // 在 TPM 检查处失败, 调用方负责检测并报错.
+        if cfg.guestOS == .windows,
+           cfg.windows?.tpmEnabled == true,
+           let tpmSock = inputs.swtpmSocketPath {
             args += ["-chardev", "socket,id=chartpm,path=\(tpmSock)"]
             args += ["-tpmdev", "emulator,id=tpm0,chardev=chartpm"]
             args += ["-device", "tpm-tis-device,tpmdev=tpm0"]

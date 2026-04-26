@@ -15,14 +15,16 @@ final class QemuArgsBuilderTests: XCTestCase {
         bundlePath: String = "/tmp/hvm-test/foo.hvmz",
         qemuRoot: String = "/opt/test/qemu",
         qmpPath: String = "/tmp/hvm-test/run/foo.qmp",
-        virtioWinISOPath: String? = nil
+        virtioWinISOPath: String? = nil,
+        swtpmSocketPath: String? = nil
     ) -> QemuArgsBuilder.Inputs {
         QemuArgsBuilder.Inputs(
             config: config,
             bundleURL: URL(fileURLWithPath: bundlePath, isDirectory: true),
             qemuRoot: URL(fileURLWithPath: qemuRoot, isDirectory: true),
             qmpSocketPath: qmpPath,
-            virtioWinISOPath: virtioWinISOPath
+            virtioWinISOPath: virtioWinISOPath,
+            swtpmSocketPath: swtpmSocketPath
         )
     }
 
@@ -165,7 +167,9 @@ final class QemuArgsBuilderTests: XCTestCase {
             bootFromDiskOnly: false,
             windows: WindowsSpec(secureBoot: true, tpmEnabled: true)
         )
-        let args = try QemuArgsBuilder.build(makeInputs(config: cfg))
+        let args = try QemuArgsBuilder.build(makeInputs(
+            config: cfg, swtpmSocketPath: "/tmp/run/abc.swtpm.sock"
+        ))
 
         // pflash 双 drive: RO code + RW vars
         let pflash = args.allFlagValues("-drive").filter { $0.contains("if=pflash") }
@@ -196,9 +200,28 @@ final class QemuArgsBuilderTests: XCTestCase {
             disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 32)],
             windows: WindowsSpec(secureBoot: false, tpmEnabled: false)
         )
+        let args = try QemuArgsBuilder.build(makeInputs(
+            config: cfg, swtpmSocketPath: "/tmp/abc.swtpm.sock"
+        ))
+        XCTAssertFalse(args.contains("-tpmdev"),
+                       "tpmEnabled=false 时即便给了 swtpm socket 也不注入 -tpmdev")
+    }
+
+    func testWindowsTPMSkippedWhenSocketPathMissing() throws {
+        // tpmEnabled=true 但调用方没启 swtpm (没传 socket): 不注入 TPM device
+        // (Win11 装机会失败, 但起码 QEMU 不会因连接不存在的 socket 而崩)
+        let cfg = VMConfig(
+            displayName: "win-tpm-no-sock",
+            guestOS: .windows,
+            engine: .qemu,
+            cpuCount: 2, memoryMiB: 4096,
+            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 32)],
+            windows: WindowsSpec(secureBoot: true, tpmEnabled: true)
+        )
+        // 注意: swtpmSocketPath 未传 (默认 nil)
         let args = try QemuArgsBuilder.build(makeInputs(config: cfg))
         XCTAssertFalse(args.contains("-tpmdev"),
-                       "tpmEnabled=false 时不应注入 -tpmdev")
+                       "swtpmSocketPath=nil 时不注入 TPM device, 避免 QEMU 连不存在的 socket")
     }
 
     // MARK: - virtio-win 第二 cdrom (Win11 装机驱动)

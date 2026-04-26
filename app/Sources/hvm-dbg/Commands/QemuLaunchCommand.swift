@@ -70,12 +70,20 @@ struct QemuLaunchCommand: AsyncParsableCommand {
             FileHandle.standardError.write("⚠ virtio-win.iso 未缓存, Win 装机看不到 virtio-blk 盘\n".data(using: .utf8)!)
         }
 
+        // swtpm sidecar (windows + tpmEnabled). 未启或路径找不到会让 Win11 在 TPM 检查处失败.
+        var swtpmRunner: SwtpmRunner? = nil
+        var swtpmSockPath: String? = nil
+        if config.guestOS == .windows, config.windows?.tpmEnabled == true {
+            (swtpmRunner, swtpmSockPath) = try await launchSwtpmSidecar(config: config, bundleURL: bundleURL)
+        }
+
         let inputs = QemuArgsBuilder.Inputs(
             config: config,
             bundleURL: bundleURL,
             qemuRoot: qemuRoot,
             qmpSocketPath: qmpSocket.path,
-            virtioWinISOPath: virtioWinPath
+            virtioWinISOPath: virtioWinPath,
+            swtpmSocketPath: swtpmSockPath
         )
         let args = try QemuArgsBuilder.build(inputs)
 
@@ -187,6 +195,15 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         runner.waitUntilExit()
         client.close()
 
+        // swtpm: --terminate 通常已让它自退; 保险再 SIGTERM
+        if let s = swtpmRunner {
+            s.terminate()
+            s.waitUntilExit()
+            if let p = swtpmSockPath {
+                try? FileManager.default.removeItem(atPath: p)
+            }
+        }
+
         // 清 socket 残留
         try? FileManager.default.removeItem(at: qmpSocket)
 
@@ -210,6 +227,54 @@ struct QemuLaunchCommand: AsyncParsableCommand {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         return false
+    }
+
+    /// 启动 swtpm sidecar 并等 socket 就绪. 失败 throw ExitCode (调试命令直接退).
+    private func launchSwtpmSidecar(config: VMConfig, bundleURL: URL) async throws -> (SwtpmRunner, String) {
+        let swtpmBin: URL
+        do {
+            swtpmBin = try SwtpmPaths.locate()
+        } catch {
+            FileHandle.standardError.write("✗ swtpm 未找到: \(error)\n".data(using: .utf8)!)
+            FileHandle.standardError.write("  brew install swtpm 或 make qemu (打包后含)\n".data(using: .utf8)!)
+            throw ExitCode(30)
+        }
+
+        let stateDir = BundleLayout.tpmStateDir(bundleURL)
+        try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        try HVMPaths.ensure(HVMPaths.runDir)
+        let sockPath = HVMPaths.runDir
+            .appendingPathComponent("\(config.id.uuidString.lowercased()).swtpm.sock").path
+        let pidPath = HVMPaths.runDir
+            .appendingPathComponent("\(config.id.uuidString.lowercased()).swtpm.pid")
+        let logFile = BundleLayout.logsDir(bundleURL).appendingPathComponent("swtpm.log")
+        try? FileManager.default.removeItem(atPath: sockPath)
+        try? FileManager.default.removeItem(at: pidPath)
+
+        let argsList = SwtpmArgsBuilder.build(SwtpmArgsBuilder.Inputs(
+            stateDir: stateDir, ctrlSocketPath: sockPath,
+            logFile: logFile, pidFile: pidPath
+        ))
+        let stderrLog = BundleLayout.logsDir(bundleURL).appendingPathComponent("swtpm-stderr.log")
+        try? FileManager.default.removeItem(at: stderrLog)
+        let runner = SwtpmRunner(binary: swtpmBin, args: argsList,
+                                 ctrlSocketPath: sockPath, stderrLog: stderrLog)
+        do {
+            try runner.start()
+        } catch {
+            FileHandle.standardError.write("✗ swtpm 启动失败: \(error)\n".data(using: .utf8)!)
+            throw ExitCode(31)
+        }
+        let ready = await runner.waitForSocketReady(timeoutSec: 5)
+        guard ready else {
+            FileHandle.standardError.write("✗ swtpm socket 5s 未就绪 (state=\(runner.state))\n".data(using: .utf8)!)
+            FileHandle.standardError.write("  详见 \(stderrLog.path) 与 \(logFile.path)\n".data(using: .utf8)!)
+            runner.forceKill()
+            runner.waitUntilExit()
+            throw ExitCode(32)
+        }
+        print("✔ swtpm 已启动 sock=\(sockPath)")
+        return (runner, sockPath)
     }
 }
 
