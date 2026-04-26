@@ -6,6 +6,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import HVMBundle
 import HVMCore
+import HVMInstall
 import HVMNet
 import HVMStorage
 
@@ -21,6 +22,8 @@ struct CreateVMDialog: View {
     @State private var isoPath: String = ""
     @State private var ipswPath: String = ""
     @State private var creating: Bool = false
+    /// IPSW cache 列表; 切到 macOS 分支时刷新, Use Latest / fetch 完成后刷新
+    @State private var ipswCache: [IPSWCacheItem] = []
 
     /// 装机字段是否合法 (按 OS 分支)
     private var installerPathValid: Bool {
@@ -50,6 +53,10 @@ struct CreateVMDialog: View {
             .clipShape(RoundedRectangle(cornerRadius: HVMRadius.lg))
             .shadow(color: .black.opacity(0.6), radius: 24, x: 0, y: 10)
         }
+        .onAppear { reloadCache() }
+        .onChange(of: guestOS) { _, _ in reloadCache() }
+        // banner 完成态消失也意味着 cache 可能新增, 跟着刷
+        .onChange(of: model.ipswFetchState == nil) { _, _ in reloadCache() }
     }
 
     private var header: some View {
@@ -129,6 +136,10 @@ struct CreateVMDialog: View {
                                 .buttonStyle(GhostButtonStyle())
                                 .disabled(creating || model.ipswFetchState != nil)
                                 .help("调 VZMacOSRestoreImage.fetchLatestSupported 拉 Apple 推荐的最新 IPSW 到 cache")
+                        }
+                        // 已缓存 IPSW 一键填入. cache 为空时不显示, 不堆积视觉噪音.
+                        if !ipswCache.isEmpty {
+                            cachePicker
                         }
                         Text("// 大约 10-15 GiB. 已缓存的 build 不会重复下载.")
                             .font(HVMFont.caption)
@@ -230,12 +241,68 @@ struct CreateVMDialog: View {
         }
     }
 
-    /// 走 IPSWFetcher 拉 Apple 最新 IPSW. 期间 model.ipswFetchState 非 nil →
-    /// DialogOverlay 显示 IpswFetchDialog 模态 (盖在向导之上). 完成后回填 ipswPath.
+    /// 走 IPSWFetcher 拉 Apple 最新 IPSW. 期间 IpswFetchBanner 在主窗口顶部显示进度
+    /// (非 modal, 用户可正常浏览). 完成后回填 ipswPath, 同时刷新 cache 列表.
     private func fetchLatestIPSW() {
         model.startIpswFetch(errors: errors) { localURL in
             self.ipswPath = localURL.path
+            self.reloadCache()
         }
+    }
+
+    private func reloadCache() {
+        ipswCache = IPSWFetcher.listCache()
+    }
+
+    /// 已缓存 IPSW 一键填入. 一行一个 build, 显示大小; 点击即把 ipswPath 设为该路径.
+    @ViewBuilder
+    private var cachePicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            LabelText("Cached IPSW", color: HVMColor.textTertiary)
+            VStack(spacing: 0) {
+                ForEach(Array(ipswCache.enumerated()), id: \.element.buildVersion) { idx, item in
+                    if idx > 0 { Rectangle().fill(HVMColor.border).frame(height: 1) }
+                    Button {
+                        ipswPath = item.path
+                    } label: {
+                        HStack(spacing: HVMSpace.sm) {
+                            Image(systemName: ipswPath == item.path ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 11))
+                                .foregroundStyle(ipswPath == item.path ? HVMColor.accent : HVMColor.textTertiary)
+                            Text(item.buildVersion)
+                                .font(HVMFont.bodyBold)
+                                .foregroundStyle(HVMColor.textPrimary)
+                            Text(formatCacheSize(item.sizeBytes))
+                                .font(HVMFont.caption)
+                                .foregroundStyle(HVMColor.textTertiary)
+                                .monospacedDigit()
+                            Spacer()
+                            Text(item.path)
+                                .font(HVMFont.caption)
+                                .foregroundStyle(HVMColor.textTertiary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        .padding(.horizontal, HVMSpace.sm)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .background(RoundedRectangle(cornerRadius: HVMRadius.sm).fill(HVMColor.bgBase))
+            .overlay(RoundedRectangle(cornerRadius: HVMRadius.sm).stroke(HVMColor.border, lineWidth: 1))
+        }
+    }
+
+    private func formatCacheSize(_ n: Int64) -> String {
+        let gb = 1024.0 * 1024 * 1024
+        let mb = 1024.0 * 1024
+        let v = Double(n)
+        if v >= gb { return String(format: "%.1f GiB", v / gb) }
+        if v >= mb { return String(format: "%.0f MiB", v / mb) }
+        return "\(n) B"
     }
 
     private func pickIPSW() {

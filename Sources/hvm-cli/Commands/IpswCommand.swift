@@ -173,16 +173,26 @@ struct IpswFetchCommand: AsyncParsableCommand {
                 let pct = total > 0 ? String(format: "%.1f%%", f * 100) : "?"
                 let recv = formatBytes(p.receivedBytes)
                 let totalS = total > 0 ? formatBytes(total) : "?"
-                print("\rdownloading: \(pct)  \(recv) / \(totalS)", terminator: "")
+                let rateS = p.bytesPerSecond.map { formatRate($0) } ?? "    --   "
+                let etaS  = p.etaSeconds.map { formatETA($0) } ?? "  --  "
+                // \r 单行刷新; 末尾留空格盖掉上一帧可能留下的字符
+                print("\rdownloading: \(pct)  \(recv) / \(totalS)  \(rateS)  ETA \(etaS)   ", terminator: "")
                 fflush(stdout)
             case .json:
                 if follow || total <= 0 || tracker.shouldEmit(f, threshold: 0.01) {
-                    printJSON([
+                    var payload = [
                         "phase": "downloading",
                         "receivedBytes": "\(p.receivedBytes)",
                         "totalBytes": "\(total)",
                         "fraction": String(format: "%.4f", f),
-                    ])
+                    ]
+                    if let bps = p.bytesPerSecond {
+                        payload["bytesPerSecond"] = String(format: "%.0f", bps)
+                    }
+                    if let eta = p.etaSeconds {
+                        payload["etaSeconds"] = String(format: "%.0f", eta)
+                    }
+                    printJSON(payload)
                 }
             }
         case .completed:
@@ -213,6 +223,33 @@ fileprivate func formatBytesS(_ n: Int64) -> String {
     if v >= mb { return String(format: "%.1f MiB", v / mb) }
     if v >= kb { return String(format: "%.1f KiB", v / kb) }
     return "\(n) B"
+}
+
+/// 速率 (bytes/s) → "12.4 MiB/s" 等. 固定宽度便于 \r 刷新对齐.
+fileprivate func formatRate(_ bps: Double) -> String {
+    let kb: Double = 1024
+    let mb = kb * 1024
+    let gb = mb * 1024
+    if bps >= gb { return String(format: "%6.2f GiB/s", bps / gb) }
+    if bps >= mb { return String(format: "%6.2f MiB/s", bps / mb) }
+    if bps >= kb { return String(format: "%6.1f KiB/s", bps / kb) }
+    return String(format: "%6.0f B/s  ", bps)
+}
+
+/// 秒数 → "6 min" / "1h12m" / "12s". 固定宽度便于 \r 刷新对齐.
+fileprivate func formatETA(_ seconds: Double) -> String {
+    if !seconds.isFinite || seconds < 0 { return "  --  " }
+    let s = Int(seconds)
+    if s >= 3600 {
+        let h = s / 3600
+        let m = (s % 3600) / 60
+        return String(format: "%2dh%02dm", h, m)
+    }
+    if s >= 60 {
+        let m = s / 60
+        return String(format: "%4d min", m)
+    }
+    return String(format: "%5d s", s)
 }
 
 /// JSON 模式步进过滤器 (CLI 自用). onProgress 闭包跨线程, 用 NSLock 保护 lastFraction.

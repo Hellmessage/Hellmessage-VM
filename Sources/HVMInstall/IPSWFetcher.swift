@@ -74,11 +74,23 @@ public struct IPSWFetchProgress: Sendable, Equatable {
     public let receivedBytes: Int64
     /// 期望总字节; nil 表示服务器没给 Content-Length
     public let totalBytes: Int64?
+    /// 当前下载速率 (bytes/sec). nil = 样本不够 (起步阶段或非下载阶段)
+    public let bytesPerSecond: Double?
+    /// 预计还需秒数. nil = 速率或 totalBytes 未知
+    public let etaSeconds: Double?
 
-    public init(phase: IPSWFetchPhase, receivedBytes: Int64 = 0, totalBytes: Int64? = nil) {
+    public init(
+        phase: IPSWFetchPhase,
+        receivedBytes: Int64 = 0,
+        totalBytes: Int64? = nil,
+        bytesPerSecond: Double? = nil,
+        etaSeconds: Double? = nil
+    ) {
         self.phase = phase
         self.receivedBytes = receivedBytes
         self.totalBytes = totalBytes
+        self.bytesPerSecond = bytesPerSecond
+        self.etaSeconds = etaSeconds
     }
 }
 
@@ -386,6 +398,10 @@ private final class _IPSWDownloadDelegate: NSObject, URLSessionDataDelegate, @un
     private var receivedBytes: Int64
     /// 完整文件大小 (从 Content-Range / Content-Length 解析); 0 表示未知
     private var totalBytes: Int64 = 0
+    /// 速率计算用滑动窗口: (timestamp_ms, totalReceivedBytes) 样本, 保留最近 5 秒.
+    /// 用 totalReceivedBytes (含 resumeFrom) 而不是增量, 避免 resume 起步时把"瞬时跳变"算进速率.
+    private var rateSamples: [(Int64, Int64)] = []
+    private static let rateWindowMs: Int64 = 5_000
 
     init(
         dest: URL,
@@ -556,7 +572,7 @@ private final class _IPSWDownloadDelegate: NSObject, URLSessionDataDelegate, @un
     // MARK: URLSessionDataDelegate — 数据 + 完成
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        // 写文件 + 推进度 (节流 100ms)
+        // 写文件 + 推进度 (节流 100ms) + 速率/ETA 计算 (5s 滑动窗口)
         do {
             lock.lock()
             // delegate 失败后可能仍有少量回调残留, fileHandle=nil 时 silent drop
@@ -567,13 +583,37 @@ private final class _IPSWDownloadDelegate: NSObject, URLSessionDataDelegate, @un
             let t = totalBytes
             let now = Int64(Date().timeIntervalSince1970 * 1000)
             let shouldFire = now - lastFireMs >= 100
-            if shouldFire { lastFireMs = now }
+            // 速率计算: 总在更新 (即使不 fire), 保证样本密度; fire 时算
+            var rate: Double? = nil
+            var eta: Double? = nil
+            if shouldFire {
+                lastFireMs = now
+                // 把当前样本压入, drop 5s 之前的
+                rateSamples.append((now, r))
+                while let first = rateSamples.first, now - first.0 > Self.rateWindowMs {
+                    rateSamples.removeFirst()
+                }
+                // 至少 2 个样本 + 时间跨度 ≥ 0.5s 才算, 避免起步抖动
+                if let oldest = rateSamples.first,
+                   rateSamples.count >= 2 {
+                    let dt = Double(now - oldest.0) / 1000.0
+                    let db = Double(r - oldest.1)
+                    if dt >= 0.5, db > 0 {
+                        rate = db / dt
+                        if let rate, t > 0, r < t {
+                            eta = Double(t - r) / rate
+                        }
+                    }
+                }
+            }
             lock.unlock()
             if shouldFire {
                 onProgress(IPSWFetchProgress(
                     phase: .downloading,
                     receivedBytes: r,
-                    totalBytes: t > 0 ? t : nil
+                    totalBytes: t > 0 ? t : nil,
+                    bytesPerSecond: rate,
+                    etaSeconds: eta
                 ))
             }
         } catch {

@@ -34,6 +34,9 @@ public final class AppModel {
     public var selectedID: UUID?
     /// 当前 GUI 进程内运行中的 VM, 按 config.id 索引
     public var sessions: [UUID: VMSession] = [:]
+    /// refreshList 的 mtime 缓存: bundlePath → (config.json mtime, item).
+    /// mtime 没变直接复用 item, 避免每次 popover/tab 切换都全量 BundleIO.load + flock 探测.
+    private var refreshCache: [String: (mtime: Date, item: VMListItem)] = [:]
     /// 当前嵌入主窗口右栏展示的 VM (同时只有一个)
     public var embeddedID: UUID?
     /// 创建向导显隐
@@ -58,13 +61,17 @@ public final class AppModel {
         }
     }
 
-    /// IPSW 下载进度. 由 startIpswFetch 维护, IpswFetchDialog 读.
+    /// IPSW 下载进度. 由 startIpswFetch 维护, IpswFetchBanner 读.
     public struct IpswFetchState: Sendable, Equatable {
         public var phase: Phase
         /// 例 "macOS 15.0.1 (24A335)"; resolving 阶段为 "querying Apple…"
         public var info: String
         public var receivedBytes: Int64
         public var totalBytes: Int64?
+        /// 下载速率 (bytes/sec). nil = 起步阶段还没足够样本
+        public var bytesPerSecond: Double?
+        /// 预计剩余秒数. nil = 速率或 totalBytes 未知
+        public var etaSeconds: Double?
 
         public enum Phase: String, Sendable, Equatable {
             case resolving, downloading, alreadyCached, completed
@@ -75,16 +82,37 @@ public final class AppModel {
 
     // MARK: - 列表管理
 
+    /// 增量刷新列表. mtime 没变就复用缓存项 (省 BundleIO.load), 但 runState (busy 探测)
+    /// 始终重读 — flock 状态独立于 config.json mtime, 必须每次实测.
     public func refreshList() {
         let root = HVMPaths.vmsRoot
         let urls = (try? BundleDiscovery.list(in: root)) ?? []
         var items: [VMListItem] = []
+        var newCache: [String: (mtime: Date, item: VMListItem)] = [:]
+
         for u in urls {
-            guard let cfg = try? BundleIO.load(from: u) else { continue }
+            let configURL = BundleLayout.configURL(u)
+            let mtime = (try? FileManager.default.attributesOfItem(atPath: configURL.path)[.modificationDate] as? Date) ?? Date.distantPast
             let busy = BundleLock.isBusy(bundleURL: u)
-            items.append(VMListItem(bundleURL: u, config: cfg,
-                                    runState: busy ? "running" : "stopped"))
+            let runState = busy ? "running" : "stopped"
+
+            // 命中: mtime 一致 → 复用 config + bundleURL, 仅刷新 runState
+            if let cached = refreshCache[u.path], cached.mtime == mtime {
+                var item = cached.item
+                item.runState = runState
+                items.append(item)
+                newCache[u.path] = (mtime, item)
+                continue
+            }
+
+            // 未命中: load config 重建
+            guard let cfg = try? BundleIO.load(from: u) else { continue }
+            let item = VMListItem(bundleURL: u, config: cfg, runState: runState)
+            items.append(item)
+            newCache[u.path] = (mtime, item)
         }
+
+        self.refreshCache = newCache
         self.list = items.sorted { $0.displayName.lowercased() < $1.displayName.lowercased() }
 
         // 选中项若已不存在, 清选
@@ -216,7 +244,9 @@ public final class AppModel {
             phase: .resolving,
             info: "querying Apple…",
             receivedBytes: 0,
-            totalBytes: nil
+            totalBytes: nil,
+            bytesPerSecond: nil,
+            etaSeconds: nil
         )
         Task { @MainActor in
             do {
@@ -225,7 +255,9 @@ public final class AppModel {
                     phase: .downloading,
                     info: "macOS \(entry.osVersion) (\(entry.buildVersion))",
                     receivedBytes: 0,
-                    totalBytes: nil
+                    totalBytes: nil,
+                    bytesPerSecond: nil,
+                    etaSeconds: nil
                 )
                 let local = try await IPSWFetcher.downloadIfNeeded(entry: entry) { p in
                     Task { @MainActor [self] in
@@ -249,17 +281,15 @@ public final class AppModel {
             s.phase = .resolving
         case .alreadyCached:
             s.phase = .alreadyCached
-            s.receivedBytes = p.receivedBytes
-            s.totalBytes = p.totalBytes
         case .downloading:
             s.phase = .downloading
-            s.receivedBytes = p.receivedBytes
-            s.totalBytes = p.totalBytes
         case .completed:
             s.phase = .completed
-            s.receivedBytes = p.receivedBytes
-            s.totalBytes = p.totalBytes
         }
+        s.receivedBytes = p.receivedBytes
+        s.totalBytes = p.totalBytes
+        s.bytesPerSecond = p.bytesPerSecond
+        s.etaSeconds = p.etaSeconds
         ipswFetchState = s
     }
 

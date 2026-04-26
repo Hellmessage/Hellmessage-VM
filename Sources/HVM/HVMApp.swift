@@ -223,13 +223,13 @@ final class HVMAppDelegate: NSObject, NSApplicationDelegate {
         return IPResolver.ipForMAC(mac)
     }
 
-    /// 读 bundle/meta/thumbnail.png. 不存在返回 nil → SwiftUI 用 SF Symbol 占位
+    /// 读 bundle/meta/thumbnail.png. 走 ThumbnailCache (LRU + mtime 失效),
+    /// 多 VM 时 popover 弹出零 IO 抖动.
     private func thumbnailForVM(_ item: AppModel.VMListItem) -> NSImage? {
         let url = item.bundleURL
             .appendingPathComponent(BundleLayout.metaDirName)
             .appendingPathComponent(BundleLayout.thumbnailName)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return NSImage(contentsOf: url)
+        return ThumbnailCache.shared.image(for: url)
     }
 
     private func openVM(id: UUID) {
