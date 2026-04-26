@@ -128,6 +128,11 @@ public enum QemuArgsBuilder {
         // -L: QEMU 找 keymap / firmware descriptor 等辅助资源
         args += ["-L", inputs.qemuRoot.appendingPathComponent("share/qemu").path]
 
+        // ---- USB 控制器 (xhci) ----
+        // 必须在所有 usb-* 设备之前定义, 否则 -device usb-storage,bus=xhci.0 找不到 bus.
+        // Windows ISO 走 usb-storage cdrom (Win11 EFI bootloader 必需), Linux 也保留 (键鼠 USB).
+        args += ["-device", "qemu-xhci,id=xhci"]
+
         // ---- 磁盘 (virtio-blk, 顺序与 cfg.disks 一致). format 直接读 disk.format 字段, 不推断: ----
         //   DiskFormat.qcow2 → qcow2 (新建 QEMU VM 默认)
         //   DiskFormat.raw   → raw   (VZ 后端格式; 老 raw QEMU VM 仍可跑)
@@ -140,24 +145,32 @@ public enum QemuArgsBuilder {
             args += ["-drive", spec]
         }
 
-        // ---- 安装 ISO (仅 bootFromDiskOnly=false 时挂) ----
-        // virtio-blk media=cdrom: 性能比 IDE-cdrom 好, Linux/Windows installer 都认
-        if !cfg.bootFromDiskOnly, let iso = cfg.installerISO {
-            args += ["-drive", "file=\(iso),if=virtio,media=cdrom,readonly=on"]
-        }
-
-        // ---- AutoUnattend ISO (仅 windows + bypassInstallChecks 时, 第二 cdrom) ----
-        // Windows Setup 启动后自动扫所有移动介质找 Autounattend.xml, 跳过硬件检查 +
-        // OOBE 首登录跑 pnputil 装 virtio-win 驱动. 由 WindowsUnattend.ensureISO 启动前生成.
-        if cfg.guestOS == .windows, let unattendPath = inputs.unattendISOPath {
-            args += ["-drive", "file=\(unattendPath),if=virtio,media=cdrom,readonly=on"]
-        }
-
-        // ---- virtio-win 驱动 ISO (仅 windows guest, 第三 cdrom) ----
-        // Win11 装机看不到 virtio-blk 主盘, 必须从 virtio-win.iso 加载 viostor.sys
-        // 非 windows guest 即便传了 path 也不挂 (省得 Linux 装机界面多个空 cdrom 干扰)
-        if cfg.guestOS == .windows, let virtioWinPath = inputs.virtioWinISOPath {
-            args += ["-drive", "file=\(virtioWinPath),if=virtio,media=cdrom,readonly=on"]
+        // ---- 安装 ISO + 周边 cdrom ----
+        // Linux: virtio-cdrom (Ubuntu installer 已验证能 boot)
+        // Windows: usb-storage cdrom + bootindex=0 (Win11 EFI bootloader 实测要 USB 路径,
+        //          virtio-cdrom 在 BdsDxe loading Boot0002 后 hang 不进 wpe.wim).
+        //          挂法跟 hell-vm graphical 模式一致.
+        if cfg.guestOS == .windows {
+            // Windows 装机 ISO: usb-storage cdrom (bootindex=0)
+            if !cfg.bootFromDiskOnly, let iso = cfg.installerISO {
+                args += ["-drive", "if=none,id=cdrom_inst,media=cdrom,file=\(iso),readonly=on"]
+                args += ["-device", "usb-storage,drive=cdrom_inst,id=cdrom_inst_dev,removable=true,bootindex=0,bus=xhci.0"]
+            }
+            // unattend ISO: usb-storage 第二 cdrom (Win Setup 自动扫所有移动介质找 Autounattend.xml)
+            if let unattendPath = inputs.unattendISOPath {
+                args += ["-drive", "if=none,id=cdrom_unat,media=cdrom,file=\(unattendPath),readonly=on"]
+                args += ["-device", "usb-storage,drive=cdrom_unat,id=cdrom_unat_dev,removable=true,bus=xhci.0"]
+            }
+            // virtio-win 驱动 ISO: usb-storage 第三 cdrom (装机看不到 virtio-blk 主盘必经)
+            if let virtioWinPath = inputs.virtioWinISOPath {
+                args += ["-drive", "if=none,id=cdrom_vio,media=cdrom,file=\(virtioWinPath),readonly=on"]
+                args += ["-device", "usb-storage,drive=cdrom_vio,id=cdrom_vio_dev,removable=true,bus=xhci.0"]
+            }
+        } else {
+            // Linux/macOS: virtio-cdrom 维持原状 (Ubuntu 24.04 已验证)
+            if !cfg.bootFromDiskOnly, let iso = cfg.installerISO {
+                args += ["-drive", "file=\(iso),if=virtio,media=cdrom,readonly=on"]
+            }
         }
 
         // ---- 网络 ----
@@ -200,8 +213,8 @@ public enum QemuArgsBuilder {
         // virtio-gpu-pci: 现代 virtio GPU, Linux 内核自带 driver; Windows arm64 装机界面要从 ISO 加载
         // virtio GPU driver (virtio-win.iso 提供) 才能跳出 1080p, 装机阶段会先以 EDK2 GOP 出图.
         args += ["-device", "virtio-gpu-pci"]
-        // USB xHCI 控制器 + USB 键盘 + USB tablet (绝对坐标鼠标; hvm-dbg mouse abs 注入也走它)
-        args += ["-device", "qemu-xhci,id=xhci"]
+        // USB 键盘 + USB tablet (xhci controller 已在 ISO 之前定义, 避免 bus=xhci.0 forward ref).
+        // tablet 给绝对坐标鼠标 (hvm-dbg mouse abs 注入也走它).
         args += ["-device", "usb-kbd,bus=xhci.0"]
         args += ["-device", "usb-tablet,bus=xhci.0"]
         // cocoa: QEMU 自开 NSWindow. 与 HVMDisplay 嵌入主窗口的集成留给后续 commit
