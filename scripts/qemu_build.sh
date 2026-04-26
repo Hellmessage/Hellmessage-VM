@@ -280,6 +280,108 @@ install_to_vendor() {
     ok "拷贝完成 + xattr 清理"
 }
 
+# ---- 9.5 嵌入 swtpm + 依赖 dylib (Win11 TPM 2.0 必需; 最终用户机零依赖) ----
+# 从 brew 装的 swtpm + libtpms 复制到 third_party/qemu/{bin,lib}, 用 install_name_tool
+# 把所有 /opt/homebrew/* 引用改成 @executable_path/../lib/*. 递归处理传递依赖.
+# 调用方: bundle.sh 后续 codesign 会签 bin/* 与 lib/*.dylib, 路径已重定向所以 AMFI 接受.
+bundle_swtpm() {
+    step "嵌入 swtpm + 依赖 dylib (Win11 TPM)"
+
+    local swtpm_src
+    if command -v swtpm >/dev/null 2>&1; then
+        swtpm_src="$(command -v swtpm)"
+    elif [[ -x /opt/homebrew/bin/swtpm ]]; then
+        swtpm_src=/opt/homebrew/bin/swtpm
+    elif [[ -x /usr/local/bin/swtpm ]]; then
+        swtpm_src=/usr/local/bin/swtpm
+    else
+        warn "找不到 swtpm 二进制 (brew install swtpm 已在 ensure_brew_packages 装过, 不应到这)"
+        return
+    fi
+
+    local bin_dir="$VENDOR_DIR/bin"
+    local lib_dir="$VENDOR_DIR/lib"
+    mkdir -p "$bin_dir" "$lib_dir"
+
+    local bin_dst="$bin_dir/swtpm"
+    cp "$swtpm_src" "$bin_dst"
+    chmod u+w "$bin_dst"
+    # 去掉 brew 的 ad-hoc 签名, 让 install_name_tool 不被 codesign integrity 拦
+    codesign --remove-signature "$bin_dst" 2>/dev/null || true
+
+    # BFS dylib 依赖, 用 tmpfile 当 "已处理" set (避免 cycle / 重复)
+    local processed
+    processed="$(mktemp -t hvm-bundle-deps)"
+    : > "$processed"
+
+    bundle_dylib_deps "$bin_dst" "$lib_dir" "$processed"
+
+    rm -f "$processed"
+
+    # 校验: swtpm 不应再含 /opt/homebrew 路径 (那意味着遗漏)
+    local leftover
+    leftover="$(otool -L "$bin_dst" 2>/dev/null | grep -E '(/opt/homebrew|/usr/local)' || true)"
+    if [[ -n "$leftover" ]]; then
+        warn "swtpm 仍引用 brew 路径 (打包不完整):"
+        echo "$leftover"
+    fi
+
+    ok "swtpm 嵌入完成 ($(otool -L "$bin_dst" 2>/dev/null | wc -l | tr -d ' ') 个 dylib 引用)"
+}
+
+# bundle_dylib_deps <target_macho> <lib_out_dir> <processed_set_file>
+# 递归: 把 target 所有非系统 dylib 引用复制到 lib_out_dir, 改 install name + 改引用,
+# 然后对每个新拷的 dylib 重复. processed_set_file 防重复处理.
+#
+# 实现细节: 用 process substitution + 数组, 不走 "cmd | while read" pipeline,
+# 因为后者最后阶段在 subshell, 嵌套递归时 install_name_tool 调用看似执行实际没生效
+# (实测踩坑: libswtpm_libtpms 引用没改, 直到改用此方案).
+bundle_dylib_deps() {
+    local target="$1"
+    local lib_dir="$2"
+    local processed="$3"
+
+    # 收集 deps 到数组 (process substitution 让 while 不在 subshell)
+    local -a deps_arr=()
+    local line
+    while IFS= read -r line; do
+        deps_arr+=("$line")
+    done < <(otool -L "$target" 2>/dev/null | tail -n +2 | awk '{print $1}')
+
+    local dep base lib_dst
+    for dep in "${deps_arr[@]}"; do
+        [[ -z "$dep" ]] && continue
+        # 跳过系统 lib (macOS dyld_shared_cache; 不存在文件也无需 bundle)
+        case "$dep" in
+            /usr/lib/*|/System/*)                              continue ;;
+            @executable_path/*|@rpath/*|@loader_path/*)        continue ;;
+        esac
+        [[ "$dep" == "$target" ]] && continue
+
+        base="$(basename "$dep")"
+
+        if ! grep -qFx "$base" "$processed"; then
+            echo "$base" >> "$processed"
+            lib_dst="$lib_dir/$base"
+            if [[ ! -f "$dep" ]]; then
+                warn "  依赖 $dep 不存在, 跳过"
+                continue
+            fi
+            cp "$dep" "$lib_dst"
+            chmod u+w "$lib_dst"
+            codesign --remove-signature "$lib_dst" 2>/dev/null || true
+            install_name_tool -id "@executable_path/../lib/$base" "$lib_dst" 2>/dev/null \
+                || warn "  install_name_tool -id 失败: $base"
+            # 递归: 这个 dylib 自己也可能依赖别的 brew dylib
+            bundle_dylib_deps "$lib_dst" "$lib_dir" "$processed"
+        fi
+
+        # 改 target 对此 dep 的引用
+        install_name_tool -change "$dep" "@executable_path/../lib/$base" "$target" 2>/dev/null \
+            || warn "  install_name_tool -change 失败: $target → $base"
+    done
+}
+
 # ---- 10. 写 LICENSE + MANIFEST (GPL 合规) ----
 write_manifest() {
     step "写 MANIFEST.json + LICENSE (GPL 合规闭环)"
@@ -337,6 +439,7 @@ main() {
     fetch_edk2_firmware
     prune_share
     install_to_vendor
+    bundle_swtpm
     write_manifest
     echo
     c_green "════════════════════════════════════════"
