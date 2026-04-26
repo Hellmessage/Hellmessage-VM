@@ -20,6 +20,7 @@ struct IpswCommand: AsyncParsableCommand {
         abstract: "IPSW 下载与缓存管理 (~/Library/Application Support/HVM/cache/ipsw)",
         subcommands: [
             IpswLatestCommand.self,
+            IpswCatalogCommand.self,
             IpswFetchCommand.self,
             IpswListCommand.self,
             IpswRmCommand.self,
@@ -47,23 +48,24 @@ struct IpswLatestCommand: AsyncParsableCommand {
                 print("最新 macOS guest IPSW:")
                 print("  build:       \(entry.buildVersion)")
                 print("  os version:  \(entry.osVersion)")
-                print("  min cpu:     \(entry.minCPU)")
-                print("  min memory:  \(entry.minMemoryMiB / 1024) GiB")
+                if let mc = entry.minCPU { print("  min cpu:     \(mc)") }
+                if let mm = entry.minMemoryMiB { print("  min memory:  \(mm / 1024) GiB") }
                 print("  url:         \(entry.url.absoluteString)")
                 print("  cached:      \(cached ? "yes (\(IPSWFetcher.cachedPath(for: entry).path))" : "no")")
                 if !cached {
                     print("\n下一步: hvm-cli ipsw fetch")
                 }
             case .json:
-                printJSON([
+                var payload = [
                     "buildVersion": entry.buildVersion,
                     "osVersion": entry.osVersion,
                     "url": entry.url.absoluteString,
-                    "minCPU": "\(entry.minCPU)",
-                    "minMemoryMiB": "\(entry.minMemoryMiB)",
                     "cached": cached ? "true" : "false",
                     "cachedPath": cached ? IPSWFetcher.cachedPath(for: entry).path : "",
-                ])
+                ]
+                if let mc = entry.minCPU { payload["minCPU"] = "\(mc)" }
+                if let mm = entry.minMemoryMiB { payload["minMemoryMiB"] = "\(mm)" }
+                printJSON(payload)
             }
         } catch {
             format == .json ? bailJSON(error) : bail(error)
@@ -71,13 +73,76 @@ struct IpswLatestCommand: AsyncParsableCommand {
     }
 }
 
+// MARK: - catalog
+
+struct IpswCatalogCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "catalog",
+        abstract: "列出 Apple catalog 里所有 VZ 可用的 macOS IPSW (从 mesu.apple.com)"
+    )
+
+    @Option(name: .long, help: "输出格式: human | json")
+    var format: OutputFormat = .human
+
+    func run() async throws {
+        do {
+            let entries = try await IPSWFetcher.fetchCatalog()
+            switch format {
+            case .human:
+                if entries.isEmpty {
+                    print("(catalog 里没有 VZ 可用的 IPSW — 可能 Apple 端点格式变了)")
+                    return
+                }
+                print("OS_VERSION    BUILD       POSTED       CACHED  URL")
+                for e in entries {
+                    let osPad   = e.osVersion.padding(toLength: 13, withPad: " ", startingAt: 0)
+                    let buildPad = e.buildVersion.padding(toLength: 11, withPad: " ", startingAt: 0)
+                    let dateStr = e.postingDate.map { Self.dateFmt.string(from: $0) } ?? "—"
+                    let datePad = dateStr.padding(toLength: 12, withPad: " ", startingAt: 0)
+                    let cached  = IPSWFetcher.isCached(buildVersion: e.buildVersion) ? "yes   " : "no    "
+                    print("\(osPad) \(buildPad) \(datePad) \(cached) \(e.url.absoluteString)")
+                }
+                print("")
+                print("下一步: hvm-cli ipsw fetch --build <BUILD>")
+            case .json:
+                printJSON(entries.map { e -> [String: String] in
+                    var d: [String: String] = [
+                        "buildVersion": e.buildVersion,
+                        "osVersion": e.osVersion,
+                        "url": e.url.absoluteString,
+                        "cached": IPSWFetcher.isCached(buildVersion: e.buildVersion) ? "true" : "false",
+                    ]
+                    if let pd = e.postingDate {
+                        d["postingDate"] = ISO8601DateFormatter().string(from: pd)
+                    }
+                    return d
+                })
+            }
+        } catch {
+            format == .json ? bailJSON(error) : bail(error)
+        }
+    }
+
+    private static let dateFmt: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+}
+
 // MARK: - fetch
 
 struct IpswFetchCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "fetch",
-        abstract: "下载 macOS guest IPSW 到 cache 目录 (默认取 Apple 最新)"
+        abstract: "下载 macOS guest IPSW 到 cache (默认取 Apple 推荐最新; --build / --url 选指定版本)"
     )
+
+    @Option(name: .long, help: "指定 buildVersion (如 24A335). 走 Apple catalog 解析. 与 --url 互斥")
+    var build: String?
+
+    @Option(name: .long, help: "指定 IPSW 远程 URL. 跳过 catalog, 直接拉. 与 --build 互斥")
+    var url: String?
 
     @Option(name: .long, help: "输出格式: human | json")
     var format: OutputFormat = .human
@@ -90,11 +155,30 @@ struct IpswFetchCommand: AsyncParsableCommand {
 
     func run() async throws {
         do {
+            // 三选一: --url > --build > 默认 latest
+            if build != nil, url != nil {
+                throw HVMError.config(.invalidEnum(field: "ipsw fetch", raw: "--build + --url 同时给", allowed: ["--build", "--url", "default(latest)"]))
+            }
+
+            let entry: IPSWCatalogEntry
             switch format {
-            case .human: print("[resolving] 查询 Apple 推荐的最新 IPSW…")
+            case .human:
+                if let url { print("[resolving] 使用 --url: \(url)") }
+                else if let build { print("[resolving] 解析 catalog 找 build=\(build)…") }
+                else              { print("[resolving] 查询 Apple 推荐最新…") }
             case .json:  printJSON(["phase": "resolving"])
             }
-            let entry = try await IPSWFetcher.resolveLatest()
+
+            if let urlStr = url {
+                guard let u = URL(string: urlStr) else {
+                    throw HVMError.config(.invalidEnum(field: "ipsw fetch --url", raw: urlStr, allowed: ["http(s)://..."]))
+                }
+                entry = IPSWFetcher.resolveURL(u)
+            } else if let build {
+                entry = try await IPSWFetcher.resolveBuild(build)
+            } else {
+                entry = try await IPSWFetcher.resolveLatest()
+            }
 
             // 续传提示: 有 .partial 时告诉用户从哪续 (好让用户感知)
             let resumeFrom = force ? 0 : IPSWFetcher.partialSize(buildVersion: entry.buildVersion)

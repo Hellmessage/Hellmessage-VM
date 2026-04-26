@@ -45,6 +45,18 @@ public final class AppModel {
     public var installState: InstallProgressState? = nil
     /// 正在拉 IPSW 时的进度. 非 nil → DialogOverlay 显示 IpswFetchDialog 模态
     public var ipswFetchState: IpswFetchState? = nil
+    /// IPSW 版本选择器是否打开. 非 nil → DialogOverlay 显示 IpswCatalogPicker 模态.
+    /// 选完后通过 onSelect 回调把 entry 交回上层 (向导)
+    public var ipswCatalogPicker: IpswCatalogPickerState? = nil
+
+    /// IPSW catalog picker 状态, 含选完的回调.
+    /// 用 @MainActor 闭包让 picker 直接通过 model 触发 startIpswFetch.
+    public struct IpswCatalogPickerState {
+        public let onSelect: @MainActor (IPSWCatalogEntry) -> Void
+        public init(onSelect: @escaping @MainActor (IPSWCatalogEntry) -> Void) {
+            self.onSelect = onSelect
+        }
+    }
     /// 编辑 cpu/memory 弹窗的当前 VM. 非 nil → DialogOverlay 显示 EditConfigDialog 模态
     public var editConfigItem: VMListItem? = nil
     /// 新建 snapshot 弹窗的当前 VM. 非 nil → DialogOverlay 显示 SnapshotCreateDialog 模态
@@ -230,19 +242,22 @@ public final class AppModel {
 
     // MARK: - IPSW 下载
 
-    /// 异步下载 Apple 推荐的最新 IPSW 到 cache 目录, 完成后回调 onComplete 把本地路径回填上层 (向导).
+    /// 异步下载指定 IPSW (entry=nil 时走 resolveLatest 取 Apple 推荐最新) 到 cache,
+    /// 完成后回调 onComplete 把本地路径回填上层 (向导).
     /// 失败走 errors.present 标准错误弹窗, 不调 onComplete.
     /// 进度通过 ipswFetchState 更新, IpswFetchDialog 读.
     ///
     /// AppModel 是 App 生命周期内的根对象, 不用 [weak self] (单例语义).
     /// IPSWFetcher 的 onProgress 闭包是 @Sendable (在 URLSession 后台 queue 调), 这里跨 actor 调度回 MainActor.
     public func startIpswFetch(
+        entry: IPSWCatalogEntry? = nil,
         errors: ErrorPresenter,
         onComplete: @escaping @MainActor (URL) -> Void
     ) {
+        let initialInfo = entry.map { "macOS \($0.osVersion) (\($0.buildVersion))" } ?? "querying Apple…"
         ipswFetchState = IpswFetchState(
             phase: .resolving,
-            info: "querying Apple…",
+            info: initialInfo,
             receivedBytes: 0,
             totalBytes: nil,
             bytesPerSecond: nil,
@@ -250,16 +265,19 @@ public final class AppModel {
         )
         Task { @MainActor in
             do {
-                let entry = try await IPSWFetcher.resolveLatest()
+                let resolved: IPSWCatalogEntry = try await {
+                    if let entry { return entry }
+                    return try await IPSWFetcher.resolveLatest()
+                }()
                 self.ipswFetchState = IpswFetchState(
                     phase: .downloading,
-                    info: "macOS \(entry.osVersion) (\(entry.buildVersion))",
+                    info: "macOS \(resolved.osVersion) (\(resolved.buildVersion))",
                     receivedBytes: 0,
                     totalBytes: nil,
                     bytesPerSecond: nil,
                     etaSeconds: nil
                 )
-                let local = try await IPSWFetcher.downloadIfNeeded(entry: entry) { p in
+                let local = try await IPSWFetcher.downloadIfNeeded(entry: resolved) { p in
                     Task { @MainActor [self] in
                         self.applyIpswProgress(p)
                     }

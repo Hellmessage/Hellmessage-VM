@@ -132,10 +132,17 @@ struct CreateVMDialog: View {
                                 .font(HVMFont.body)
                             Button("Browse") { pickIPSW() }
                                 .buttonStyle(GhostButtonStyle())
+                        }
+                        HStack(spacing: HVMSpace.sm) {
                             Button("Use Latest") { fetchLatestIPSW() }
                                 .buttonStyle(GhostButtonStyle())
                                 .disabled(creating || model.ipswFetchState != nil)
-                                .help("调 VZMacOSRestoreImage.fetchLatestSupported 拉 Apple 推荐的最新 IPSW 到 cache")
+                                .help("拉 Apple 推荐的最新 IPSW (VZMacOSRestoreImage.fetchLatestSupported)")
+                            Button("Choose Version…") { openCatalogPicker() }
+                                .buttonStyle(GhostButtonStyle())
+                                .disabled(creating || model.ipswFetchState != nil)
+                                .help("打开 Apple catalog, 选择具体的 macOS 版本下载")
+                            Spacer()
                         }
                         // 已缓存 IPSW 一键填入. cache 为空时不显示, 不堆积视觉噪音.
                         if !ipswCache.isEmpty {
@@ -241,12 +248,24 @@ struct CreateVMDialog: View {
         }
     }
 
-    /// 走 IPSWFetcher 拉 Apple 最新 IPSW. 期间 IpswFetchBanner 在主窗口顶部显示进度
-    /// (非 modal, 用户可正常浏览). 完成后回填 ipswPath, 同时刷新 cache 列表.
+    /// 走 IPSWFetcher 拉 Apple 最新 IPSW. 期间 IpswFetchDialog 显示进度模态.
+    /// 完成后回填 ipswPath, 同时刷新 cache 列表.
     private func fetchLatestIPSW() {
         model.startIpswFetch(errors: errors) { localURL in
             self.ipswPath = localURL.path
             self.reloadCache()
+        }
+    }
+
+    /// 弹 IPSW catalog picker, 用户挑一个 build 后走 startIpswFetch(entry:) 下载.
+    /// picker / fetch dialog / 向导是一条链条, 都覆盖在向导之上 (DialogOverlay 顺序).
+    private func openCatalogPicker() {
+        model.ipswCatalogPicker = AppModel.IpswCatalogPickerState { entry in
+            // 选完触发 fetch; fetch 完成回填 ipswPath
+            model.startIpswFetch(entry: entry, errors: errors) { localURL in
+                self.ipswPath = localURL.path
+                self.reloadCache()
+            }
         }
     }
 

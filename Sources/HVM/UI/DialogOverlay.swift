@@ -21,6 +21,9 @@ struct DialogOverlay: View {
             if let fetchState = model.ipswFetchState {
                 IpswFetchDialog(state: fetchState)
             }
+            if let pickerState = model.ipswCatalogPicker {
+                IpswCatalogPicker(model: model, errors: errors, onSelect: pickerState.onSelect)
+            }
             if let editItem = model.editConfigItem {
                 EditConfigDialog(model: model, errors: errors, item: editItem)
             }
@@ -34,6 +37,7 @@ struct DialogOverlay: View {
             model.showCreateWizard ||
             model.installState != nil ||
             model.ipswFetchState != nil ||
+            model.ipswCatalogPicker != nil ||
             model.editConfigItem != nil ||
             model.snapshotCreateItem != nil ||
             errors.current != nil ||

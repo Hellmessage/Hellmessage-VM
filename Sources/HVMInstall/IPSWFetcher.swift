@@ -38,25 +38,38 @@ import HVMCore
 
 // MARK: - 公开类型
 
-/// 远程 IPSW 元信息 (从 VZMacOSRestoreImage 抽 sendable 字段)
+/// 远程 IPSW 元信息.
+/// - resolveLatest 走 VZMacOSRestoreImage 的会含 minCPU/minMemoryMiB (从 mostFeaturefulSupportedConfiguration);
+/// - fetchCatalog 走 mesu plist 的不含 (省一次 IPSW load), 只有 build/version/url/postingDate;
+/// - resolveURL (用户自带 URL) 也只有 url + 占位 build.
 public struct IPSWCatalogEntry: Sendable, Equatable, Codable {
     /// 例 "24A335"
     public let buildVersion: String
     /// 例 "15.0.1"
     public let osVersion: String
-    /// VZ 给的远程下载 URL (https://updates.cdn-apple.com/...)
+    /// 远程下载 URL (https://updates.cdn-apple.com/...)
     public let url: URL
-    /// IPSW 推荐的最低 CPU 数 (来自 mostFeaturefulSupportedConfiguration)
-    public let minCPU: Int
-    /// IPSW 推荐的最低内存 (MiB)
-    public let minMemoryMiB: UInt64
+    /// IPSW 推荐的最低 CPU 数 (仅 resolveLatest 已知)
+    public let minCPU: Int?
+    /// IPSW 推荐的最低内存 (MiB) (仅 resolveLatest 已知)
+    public let minMemoryMiB: UInt64?
+    /// catalog 里的发布日期 (mesu PostingDate); resolveLatest / resolveURL 时为 nil
+    public let postingDate: Date?
 
-    public init(buildVersion: String, osVersion: String, url: URL, minCPU: Int, minMemoryMiB: UInt64) {
+    public init(
+        buildVersion: String,
+        osVersion: String,
+        url: URL,
+        minCPU: Int? = nil,
+        minMemoryMiB: UInt64? = nil,
+        postingDate: Date? = nil
+    ) {
         self.buildVersion = buildVersion
         self.osVersion = osVersion
         self.url = url
         self.minCPU = minCPU
         self.minMemoryMiB = minMemoryMiB
+        self.postingDate = postingDate
     }
 }
 
@@ -112,6 +125,20 @@ public struct IPSWCacheItem: Sendable, Equatable, Codable {
 public enum IPSWFetcher {
     private static let log = HVMLog.logger("install.ipsw")
 
+    /// macOS IPSW catalog 数据源 — 用 ipsw.me 第三方 API.
+    ///
+    /// 为什么不用 Apple 的 mesu (https://mesu.apple.com/assets/macos/com_apple_macOSIPSW/com_apple_macOSIPSW.xml):
+    /// 实测 mesu 只发布"当前最新版"的 IPSW (例如 VirtualMac2,1 下面只有一个 25E253 entry),
+    /// 没有历史版本, "选择版本" UX 价值约等于 0.
+    ///
+    /// ipsw.me 是社区维护的 IPSW 索引 API, 稳定多年, 免认证, 含全量历史版本.
+    /// 端点: https://api.ipsw.me/v4/device/VirtualMac2,1?type=ipsw
+    /// 返回 JSON, 字段含 buildid / version / url / releasedate / filesize / sha256sum / signed.
+    /// signed=false 不影响 VZ guest (VZ 不强制 IPSW 当前签名状态).
+    public static let catalogURL = URL(
+        string: "https://api.ipsw.me/v4/device/VirtualMac2,1?type=ipsw"
+    )!
+
     /// 查询 Apple 当前推荐的最新 macOS guest IPSW. 不下载, 仅返回元信息.
     /// 失败抛 .install(.ipswDownloadFailed)
     public static func resolveLatest() async throws -> IPSWCatalogEntry {
@@ -150,6 +177,104 @@ public enum IPSWFetcher {
         )
         Self.log.info("resolveLatest: build=\(entry.buildVersion, privacy: .public) os=\(entry.osVersion, privacy: .public)")
         return entry
+    }
+
+    /// 拉 ipsw.me 上 VirtualMac2,1 的全量 IPSW 列表. 按 releasedate 倒序排序.
+    /// 失败抛 .install(.ipswDownloadFailed).
+    public static func fetchCatalog() async throws -> [IPSWCatalogEntry] {
+        Self.log.info("fetchCatalog: \(Self.catalogURL.absoluteString, privacy: .public)")
+
+        let cfg = URLSessionConfiguration.default
+        cfg.urlCache = nil
+        cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
+        cfg.timeoutIntervalForRequest = 30
+        let session = URLSession(configuration: cfg)
+        defer { session.finishTasksAndInvalidate() }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(from: Self.catalogURL)
+        } catch {
+            throw HVMError.install(.ipswDownloadFailed(reason: "catalog GET 失败: \(error)"))
+        }
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw HVMError.install(.ipswDownloadFailed(reason: "catalog HTTP \(code)"))
+        }
+
+        let decoder = JSONDecoder()
+        // ipsw.me 用 ISO8601 但带毫秒, 自定义 dateDecodingStrategy 兼容多种格式
+        let iso8601 = ISO8601DateFormatter()
+        iso8601.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let iso8601NoFrac = ISO8601DateFormatter()
+        iso8601NoFrac.formatOptions = [.withInternetDateTime]
+        decoder.dateDecodingStrategy = .custom { d in
+            let c = try d.singleValueContainer()
+            let s = try c.decode(String.self)
+            if let v = iso8601.date(from: s) { return v }
+            if let v = iso8601NoFrac.date(from: s) { return v }
+            throw DecodingError.dataCorruptedError(in: c, debugDescription: "无法解析日期: \(s)")
+        }
+
+        let parsed: _IpswMeResponse
+        do {
+            parsed = try decoder.decode(_IpswMeResponse.self, from: data)
+        } catch {
+            throw HVMError.install(.ipswDownloadFailed(reason: "catalog JSON 解析失败: \(error)"))
+        }
+
+        let entries = parsed.firmwares.compactMap { fw -> IPSWCatalogEntry? in
+            guard let url = URL(string: fw.url) else { return nil }
+            return IPSWCatalogEntry(
+                buildVersion: fw.buildid,
+                osVersion: fw.version,
+                url: url,
+                minCPU: nil,
+                minMemoryMiB: nil,
+                postingDate: fw.releasedate
+            )
+        }
+
+        // 按 releasedate 倒序 (最新在前); 同 build 去重保留较新的
+        var dedup: [String: IPSWCatalogEntry] = [:]
+        for e in entries {
+            if let prev = dedup[e.buildVersion],
+               (prev.postingDate ?? .distantPast) >= (e.postingDate ?? .distantPast) {
+                continue
+            }
+            dedup[e.buildVersion] = e
+        }
+        let sorted = Array(dedup.values).sorted {
+            ($0.postingDate ?? .distantPast) > ($1.postingDate ?? .distantPast)
+        }
+        Self.log.info("fetchCatalog: 解析得 \(sorted.count) 条 VZ-compatible IPSW")
+        return sorted
+    }
+
+    /// 在 catalog 里按 buildVersion 查具体条目 (catalog 已 fetch 过则可走缓存——本实现每次重拉,
+    /// catalog 端点几 KiB, 开销可接受). 找不到抛 .ipswUnsupported.
+    public static func resolveBuild(_ buildVersion: String) async throws -> IPSWCatalogEntry {
+        let catalog = try await fetchCatalog()
+        guard let entry = catalog.first(where: { $0.buildVersion == buildVersion }) else {
+            throw HVMError.install(.ipswUnsupported(
+                reason: "build \(buildVersion) 不在 Apple catalog 里. 试 hvm-cli ipsw catalog 看可用 build"
+            ))
+        }
+        Self.log.info("resolveBuild: build=\(entry.buildVersion, privacy: .public) os=\(entry.osVersion, privacy: .public)")
+        return entry
+    }
+
+    /// 用户自带 URL (例如手工指定 ipsw.me 上的链接). 不校验 URL 内容, 仅构造 entry.
+    /// build 用 URL 文件名兜底 (用于 cache 命名), 真实下载完成后由 RestoreImageHandle.load 校验.
+    public static func resolveURL(_ url: URL) -> IPSWCatalogEntry {
+        let stem = url.deletingPathExtension().lastPathComponent
+        Self.log.info("resolveURL: url=\(url.absoluteString, privacy: .public) build=\(stem, privacy: .public)")
+        return IPSWCatalogEntry(
+            buildVersion: stem.isEmpty ? "custom" : stem,
+            osVersion: "?",
+            url: url
+        )
     }
 
     /// 给定 entry 计算其在 cache 内应有的本地路径 (不保证存在).
@@ -371,6 +496,23 @@ struct _PartialMeta: Codable, Sendable, Equatable {
 /// 内部信号: 416 时表示本地 .partial 与远端大小不符, 已 truncate, 让 downloadIfNeeded 重试一次.
 enum _PartialResetSignal: Error {
     case rangeMismatch
+}
+
+// MARK: - ipsw.me JSON schema
+
+/// ipsw.me /v4/device/<id>?type=ipsw 的 JSON 响应.
+/// 只解析我们需要的字段 (避免上游加新字段就解析失败).
+private struct _IpswMeResponse: Decodable {
+    let firmwares: [_IpswMeFirmware]
+}
+
+private struct _IpswMeFirmware: Decodable {
+    let buildid: String     // 例 "25E253"
+    let version: String     // 例 "26.4.1"
+    let url: String         // IPSW 下载 URL
+    let releasedate: Date?  // ISO8601 字符串, 由 dateDecodingStrategy 解析
+    let filesize: Int64?
+    let signed: Bool?       // VZ guest 不强制 signed, 仅记录
 }
 
 // MARK: - URLSessionDataDelegate

@@ -22,10 +22,17 @@
 
 - 一份与物理 Mac 兼容的 macOS IPSW 文件(restore image)
 - 来源:
-  - **HVM 内建下载器**(推荐): 走 `VZMacOSRestoreImage.fetchLatestSupported()` 取 Apple 当前推荐的 IPSW URL, `URLSession.downloadTask` 流式落到 `~/Library/Application Support/HVM/cache/ipsw/<buildVersion>.ipsw`
-    - GUI: 创建向导 macOS 分支点 `Use Latest`
-    - CLI: `hvm-cli ipsw fetch` (或先 `hvm-cli ipsw latest` 看元信息再决定是否下)
-  - 用户自带 IPSW 文件(任意来源, 例 ipsw.me): 直接在向导 / `--ipsw` 里指定路径
+  - **HVM 内建下载器**(推荐): 三种解析路径,共用同一个流式下载 + 断点续传
+    - **最新版**:`VZMacOSRestoreImage.fetchLatestSupported()` 取 Apple 当前推荐
+      - GUI:创建向导 `Use Latest` 按钮 / CLI:`hvm-cli ipsw fetch`(默认行为)
+    - **指定版本**:从 `ipsw.me` 第三方 API 拉 `VirtualMac2,1` 的全量 IPSW 历史(50+ 个版本),按 build 选
+      - GUI:创建向导 `Choose Version…` 按钮 → `IpswCatalogPicker` 显示完整列表(osVersion / build / postingDate / cached 标记)
+      - CLI:`hvm-cli ipsw catalog` 列表;`hvm-cli ipsw fetch --build <BUILD>` 下载具体版本
+      - 数据源说明:Apple 的 `mesu.apple.com` 只发布"当前最新版"一条,没有历史;ipsw.me 是社区维护的 IPSW 索引,稳定多年,免认证。`signed=false` 的旧 IPSW 仍可用于 VZ guest(VZ 不校验 IPSW 当前签名状态)
+    - **任意 URL**:用户手工指定 IPSW URL(例 ipsw.me 上的链接)
+      - CLI:`hvm-cli ipsw fetch --url <URL>`
+      - GUI:不暴露,GUI 用户走前两条
+  - 用户自带本地 IPSW 文件:直接在向导 `Browse` / `hvm-cli create --ipsw <path>` 指定绝对路径
 
 ### 流程
 
@@ -266,11 +273,12 @@ Apple CDN 静态 IPSW 资源原生支持 Range 请求,该路径稳定。`--force
 ### 接口一览
 
 - CLI:
-  - `hvm-cli ipsw latest` — 查询最新, 不下载
-  - `hvm-cli ipsw fetch [--force] [--format json --follow]` — 下载 (已缓存默认跳过, 有 .partial 自动续传)
+  - `hvm-cli ipsw latest` — 查询 Apple 推荐最新, 不下载
+  - `hvm-cli ipsw catalog` — 列 Apple catalog 全量 VZ 可用 build (按 PostingDate 倒序)
+  - `hvm-cli ipsw fetch [--build <BUILD> | --url <URL>] [--force] [--format json --follow]` — 三选一: 默认 latest / `--build` 走 catalog 找指定版本 / `--url` 用户自定 URL
   - `hvm-cli ipsw list` — 列出本地缓存(完成态 + 半成品分两段输出)
-  - `hvm-cli ipsw rm <build|all>` — 删除单个或全部缓存(含 .partial)
-- GUI 接口: 创建向导 macOS 分支 `Use Latest` 按钮 → 弹 `IpswFetchDialog` 模态进度条 → 完成后回填 ipsw 路径(中途关闭 App 也安全,下次按钮再点继续从断点)
+  - `hvm-cli ipsw rm <build|all>` — 删除单个或全部缓存(含 .partial + .meta)
+- GUI 接口: 创建向导 macOS 分支 `Use Latest` / `Choose Version…` 按钮 → 后者打开 `IpswCatalogPicker` 选具体版本 → `IpswFetchDialog` 模态进度条 → 完成后回填 ipsw 路径(中途关闭 App 也安全,下次按钮再点继续从断点)
 - 不自动清理 cache,以免下次装机重下;空间紧张时用户手动 `hvm-cli ipsw rm all`
 
 ## 不做什么

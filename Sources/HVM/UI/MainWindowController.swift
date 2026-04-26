@@ -116,6 +116,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         overlay.isAnyDialogActive = { [weak model, weak errors, weak confirms] in
             (model?.showCreateWizard ?? false)
                 || (model?.installState != nil)
+                || (model?.ipswFetchState != nil)
+                || (model?.ipswCatalogPicker != nil)
                 || (model?.editConfigItem != nil)
                 || (model?.snapshotCreateItem != nil)
                 || (errors?.current != nil)
@@ -188,6 +190,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         withObservationTracking {
             let active = model.showCreateWizard
                 || model.installState != nil
+                || model.ipswFetchState != nil
+                || model.ipswCatalogPicker != nil
                 || model.editConfigItem != nil
                 || model.snapshotCreateItem != nil
                 || errors.current != nil

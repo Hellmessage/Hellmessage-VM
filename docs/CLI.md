@@ -45,7 +45,7 @@ hvm-cli iso select <vm> <path>      指定安装 ISO
 hvm-cli boot-from-disk <vm>         切 bootFromDiskOnly=true
 hvm-cli logs <vm>                   查看日志
 hvm-cli install <vm>                驱动装机流程 (macOS IPSW / Linux ISO)
-hvm-cli ipsw <op>                   IPSW 下载与缓存管理
+hvm-cli ipsw <op>                   IPSW 下载与缓存管理 (latest/catalog/fetch/list/rm)
 ```
 
 ## 命令详解
@@ -290,23 +290,33 @@ hvm-cli install foo
 IPSW 下载器 + 本地缓存管理. 缓存路径 `~/Library/Application Support/HVM/cache/ipsw/<buildVersion>.ipsw`,文件名按 VZ 报告的 build 派生(同 build 视为同一份)。
 
 ```
-hvm-cli ipsw latest                 查询 Apple 推荐的最新 IPSW (不下载)
-hvm-cli ipsw fetch [--force]        下载最新 IPSW 到 cache (已缓存默认跳过)
-hvm-cli ipsw list                   列出本地已缓存的 IPSW
-hvm-cli ipsw rm <build|all>         删除单个 build 或清空全部缓存
+hvm-cli ipsw latest                                  查询 Apple 推荐最新 (不下载)
+hvm-cli ipsw catalog                                 列 Apple catalog 全量 VZ 可用 build
+hvm-cli ipsw fetch [--build <BUILD> | --url <URL>]   下载 (默认 latest)
+hvm-cli ipsw list                                    列出本地缓存
+hvm-cli ipsw rm <build|all>                          删除单个 build 或清空全部
 ```
 
-`fetch` 选项:
+`fetch` 三个互斥模式:
 
-- `--force` — 即使已缓存也强制重新下载
+- 不带 → `VZMacOSRestoreImage.fetchLatestSupported`,Apple 当前推荐版本
+- `--build <BUILD>` → 走 mesu catalog 找指定 build(如 `--build 24A335`)
+- `--url <URL>` → 用户自带 IPSW URL(例 ipsw.me 上的链接)
+
+其他 flag:
+
+- `--force` — 即使已缓存也强制重新下载(同时清 `.ipsw + .partial + .meta`)
 - `--format json` — JSON 输出
 - `--follow` — JSON 模式下流式推每一帧 progress(默认按 1% 步进)
 
-human 模式下走 `\r` 单行刷新进度;json 模式下每帧一行 `{"phase":"downloading","receivedBytes":...,"totalBytes":...,"fraction":"0.4231"}`。
+human 模式 `\r` 单行刷新:`downloading: 67.3%  9.21 GiB / 13.69 GiB  12.4 MiB/s  ETA 6 min`。
+json 模式每帧一行,含 `bytesPerSecond` / `etaSeconds`(若已知)。
 
-**断点续传**:`fetch` 自带断点续传。下载落 `<build>.ipsw.partial`,完成后原子 rename 成 `<build>.ipsw`。中途断网 / kill / 系统重启都安全,下次再 `fetch` 看到 `.partial` 就发 `Range: bytes=N-` 续传(human 模式会打印 `resume: 4.2 GiB already on disk → 续传`)。`--force` 强制清掉 `.ipsw + .partial` 全新下;`rm <build>` 也同时清两者。
+**catalog 数据源**:`https://api.ipsw.me/v4/device/VirtualMac2,1?type=ipsw`(JSON),社区维护的 IPSW 索引,免认证、稳定多年、含全量历史(目前 50+ 版本)。按 `releasedate` 倒序。Apple 自家的 `mesu.apple.com` 只发当前最新一版没有历史,所以不用。`signed=false` 的旧 IPSW 仍可用于 VZ guest。
 
-实现走 `VZMacOSRestoreImage.fetchLatestSupported` 拿 Apple CDN URL,`URLSessionDataTask` + 自管 `FileHandle` 流式落盘,不解析 SUCatalog。详见 [GUEST_OS_INSTALL.md](GUEST_OS_INSTALL.md#ipsw-缓存管理)。
+**断点续传**:`fetch` 自带。下载落 `<build>.ipsw.partial` + `.meta`(存 ETag/Last-Modified),完成后原子 rename 成 `<build>.ipsw`。中途断网 / kill / 系统重启都安全,下次再 `fetch` 看到 `.partial` 就发 `Range: bytes=N- + If-Range: <validator>` 续传;若服务器换了文件,`If-Range` 不匹配自动 fallback 到全新下载,不会拼出坏字节。416 响应严格校验 `Content-Range: */<total>` 与本地大小一致才 promote,不一致 truncate 重试一次。
+
+详见 [GUEST_OS_INSTALL.md](GUEST_OS_INSTALL.md#ipsw-缓存管理)。
 
 ## 输出格式
 
