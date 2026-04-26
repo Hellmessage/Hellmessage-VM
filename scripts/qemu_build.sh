@@ -13,7 +13,8 @@ QEMU_REPO="https://gitlab.com/qemu-project/qemu.git"
 EDK2_FIRMWARE_URL="https://releases.linaro.org/components/kernel/uefi-linaro/latest/release/qemu64/QEMU_EFI.fd"
 
 # brew 包列表 (锁定; swtpm/libtpms 是 Win11 TPM 2.0 必需)
-BREW_PACKAGES=(meson ninja pkg-config glib pixman libslirp dtc capstone swtpm libtpms)
+# 注: Homebrew 已把 pkg-config 别名到 pkgconf, 直接用新名避免每次 install no-op
+BREW_PACKAGES=(meson ninja pkgconf glib pixman libslirp dtc capstone swtpm libtpms)
 
 # ---- 路径 ----
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -145,6 +146,10 @@ build_qemu() {
     local build_dir="$SRC_DIR/build"
     rm -rf "$build_dir"
     mkdir -p "$build_dir"
+    # --disable-fuse: macFUSE 头文件 (fuse_darwin_attr) 与 QEMU fuse.c 不兼容, 关掉
+    #                 我们不需要把 QEMU 镜像导出成 FUSE 文件系统给 host
+    # 其他 disable: 都是 Win/Linux arm64 guest 用不到的远程块/显示后端,
+    #               关掉可缩短编译时间 + 缩小产物 + 避免环境探测引入的脆弱性
     ( cd "$build_dir" && \
         ../configure \
             --prefix="$STAGING_DIR" \
@@ -158,6 +163,15 @@ build_qemu() {
             --disable-curses \
             --disable-debug-info \
             --disable-werror \
+            --disable-fuse \
+            --disable-spice \
+            --disable-libssh \
+            --disable-curl \
+            --disable-libnfs \
+            --disable-libiscsi \
+            --disable-rbd \
+            --disable-glusterfs \
+            --disable-rdma \
     ) || err "configure 失败"
     step "make -j$NCPU (10-30 分钟, 视 CPU 而定)"
     ( cd "$build_dir" && make -j"$NCPU" ) || err "make 失败"
@@ -179,26 +193,66 @@ fetch_edk2_firmware() {
 }
 
 # ---- 8. 裁剪 share (删非 aarch64 用不上的固件) ----
+# QEMU install 会把所有架构的固件 / ROM / 设备树都装进 share/qemu,
+# 即便 configure --target-list 只有 aarch64-softmmu. 主动删非 aarch64 文件,
+# 实战可把 share/qemu 从 ~250MB 缩到 ~4MB
 prune_share() {
     step "裁剪 share/qemu (仅保留 aarch64 相关固件)"
     local share="$STAGING_DIR/share/qemu"
     [[ -d "$share" ]] || { warn "$share 不存在, 跳过"; return; }
-    # 删 x86 / ppc / sparc / s390 等其他架构相关固件 (即便 configure 已 disable target,
-    # share/ 仍可能含通用 ROM/keymap, 主动删省体积)
+
+    # 1) 删非 aarch64 的 EDK2 固件 (16-64MB 一个, 大头)
+    # 2) 删其他架构 firmware: PowerPC (slof/skiboot/u-boot/vof/pnv/canyonlands/bamboo/pegasos)
+    #    SPARC (QEMU,*) MIPS HPPA RISC-V (opensbi) s390 LoongArch Aspeed-BMC NPCM
+    # 3) 删 x86 启动相关 (vgabios/pxe/efi-*/multiboot/linuxboot/kvmvapic/pvh/sgabios/openbios/bios*)
+    # 4) 删 Microblaze (petalogix-*) 与 Alpha (palcode-clipper)
+    # 5) 删 Windows 安装器素材 (qemu-nsis.bmp)
     find "$share" -maxdepth 1 -type f \( \
-        -name 'pxe-*.rom' -o \
-        -name 'efi-*.rom' -o \
-        -name 'vgabios-*.bin' -o \
-        -name 'sgabios.bin' -o \
-        -name 'palcode-clipper' -o \
-        -name 'openbios-*' -o \
-        -name 'multiboot*.bin' -o \
-        -name 'linuxboot*.bin' -o \
-        -name 'kvmvapic.bin' -o \
-        -name 'pvh.bin' -o \
-        -name 's390-*.img' \
+        -name 'edk2-arm-*'         -o \
+        -name 'edk2-riscv-*'       -o \
+        -name 'edk2-loongarch64-*' -o \
+        -name 'edk2-x86_64-*'      -o \
+        -name 'edk2-i386-*'        -o \
+        -name 'skiboot.lid'        -o \
+        -name 'u-boot-*'           -o \
+        -name 'u-boot.*'           -o \
+        -name 'hppa-*'             -o \
+        -name 'slof.bin'           -o \
+        -name 'pnv-pnor.bin'       -o \
+        -name 'vof*'               -o \
+        -name 'npcm*'              -o \
+        -name 'opensbi-*'          -o \
+        -name 's390-*'             -o \
+        -name 'vgabios*.bin'       -o \
+        -name 'pxe-*'              -o \
+        -name 'efi-*'              -o \
+        -name 'linuxboot*'         -o \
+        -name 'multiboot*'         -o \
+        -name 'kvmvapic.bin'       -o \
+        -name 'pvh.bin'            -o \
+        -name 'palcode-clipper'    -o \
+        -name 'openbios-*'         -o \
+        -name 'sgabios.bin'        -o \
+        -name 'qemu_vga.ndrv'      -o \
+        -name 'bamboo.dtb'         -o \
+        -name 'canyonlands*'       -o \
+        -name 'petalogix-*'        -o \
+        -name 'QEMU,*.bin'         -o \
+        -name 'ast*_bootrom.bin'   -o \
+        -name 'bios*.bin'          -o \
+        -name 'qboot.rom'          -o \
+        -name 'qemu-nsis.bmp'      \
     \) -delete 2>/dev/null || true
-    ok "裁剪完成"
+
+    # 删非 aarch64 的设备树二进制目录 (PowerPC/Microblaze 的 .dtb 全在里面)
+    rm -rf "$share/dtb" 2>/dev/null || true
+
+    # firmware/ 描述符 JSON 只保留 aarch64
+    if [[ -d "$share/firmware" ]]; then
+        find "$share/firmware" -type f -name '*.json' ! -name '*aarch64*' -delete 2>/dev/null || true
+    fi
+
+    ok "裁剪完成 ($(du -sh "$share" 2>/dev/null | cut -f1))"
 }
 
 # ---- 9. 落入 third_party/qemu ----
@@ -211,7 +265,12 @@ install_to_vendor() {
             cp -R "$STAGING_DIR/$sub" "$VENDOR_DIR/"
         fi
     done
-    ok "拷贝完成"
+    # 清扩展属性: QEMU 上游 entitlement.sh 会给 qemu-system-aarch64 附
+    # com.apple.FinderInfo + com.apple.ResourceFork (来自 pc-bios/qemu.rsrc),
+    # 这些 xattr 会让后续 codesign 报 "resource fork ... not allowed".
+    # bundle.sh 也会再清一次防御; 此处先清掉避免污染 third_party/
+    find "$VENDOR_DIR" -type f -exec xattr -c {} + 2>/dev/null || true
+    ok "拷贝完成 + xattr 清理"
 }
 
 # ---- 10. 写 LICENSE + MANIFEST (GPL 合规) ----
@@ -222,14 +281,16 @@ write_manifest() {
     local build_time
     build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-    # 收集 series 中实际生效的 patch 列表
+    # 收集 series 中实际生效的 patch 列表 (注释 + 空行不算)
+    # 用 awk 一次过滤; 空结果时 awk 返回 0, 不会触发 set -o pipefail
     local patches_json="[]"
     if [[ -f "$PATCHES_DIR/series" ]]; then
         local items
-        items="$(grep -v '^[[:space:]]*#' "$PATCHES_DIR/series" \
-            | grep -v '^[[:space:]]*$' \
-            | awk '{printf "    \"%s\",\n", $1}' \
-            | sed '$ s/,$//')"
+        items="$(awk '
+            /^[[:space:]]*#/ { next }
+            /^[[:space:]]*$/ { next }
+            { printf "    \"%s\",\n", $1 }
+        ' "$PATCHES_DIR/series" | sed '$ s/,$//')"
         if [[ -n "$items" ]]; then
             patches_json=$'[\n'"$items"$'\n  ]'
         fi

@@ -91,6 +91,9 @@ if [ -x "$QEMU_BIN_SRC" ]; then
     [ -f "$QEMU_VENDOR_DIR/LICENSE"       ] && cp "$QEMU_VENDOR_DIR/LICENSE"       "$QEMU_DST/LICENSE"
     [ -f "$QEMU_VENDOR_DIR/LICENSE.LGPL"  ] && cp "$QEMU_VENDOR_DIR/LICENSE.LGPL"  "$QEMU_DST/LICENSE.LGPL"
     [ -f "$QEMU_VENDOR_DIR/MANIFEST.json" ] && cp "$QEMU_VENDOR_DIR/MANIFEST.json" "$QEMU_DST/MANIFEST.json"
+    # 防御: 清扩展属性, 避免 codesign 报 "resource fork ... not allowed"
+    # (QEMU 上游 entitlement.sh 会给二进制附 com.apple.ResourceFork + FinderInfo)
+    find "$QEMU_DST" -type f -exec xattr -c {} + 2>/dev/null || true
     EMBED_QEMU=1
     echo "✔ 已嵌入 QEMU 后端: $QEMU_DST"
 else
