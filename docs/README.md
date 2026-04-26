@@ -39,6 +39,7 @@
 | [GUEST_OS_INSTALL.md](GUEST_OS_INSTALL.md) | macOS IPSW 装机(全自动)、Linux ISO 装机(半自动) |
 | [DISPLAY_INPUT.md](DISPLAY_INPUT.md) | 显示设备、键盘/鼠标设备、窗口容器、截图机制 |
 | [ERROR_MODEL.md](ERROR_MODEL.md) | 错误类型层级、用户文案规范、日志脱敏、错误码列表 |
+| [QEMU_INTEGRATION.md](QEMU_INTEGRATION.md) | QEMU 随包分发、包内目录与签名、**仅 Win/Linux guest arm64**、**运行时零外部依赖** 的工程约定 |
 
 ### 治理
 
@@ -75,6 +76,7 @@
 | GUEST_OS_INSTALL.md | J* |
 | DISPLAY_INPUT.md | K* |
 | ERROR_MODEL.md | L* |
+| QEMU_INTEGRATION.md | M* |
 
 新加文档 → 分配下一个字母前缀。
 
@@ -87,4 +89,4 @@
 
 ---
 
-**最后更新**: 2026-04-25
+**最后更新**: 2026-04-27
