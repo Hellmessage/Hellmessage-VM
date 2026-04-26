@@ -138,7 +138,9 @@ HVM.app/Contents/
 
 ## 实施状态（2026-04-26）
 
-工程脚手架已就绪，等待跑通首次 `make qemu` 与首个 Linux arm64 QEMU VM。
+QEMU 后端 Win11 / Linux arm64 完整闭环已落地。`make build-all` 一次跑通后, `.app` 自带 QEMU + EDK2 + swtpm + 全部依赖 dylib, 最终用户机器零依赖。
+
+### 工程脚手架（D0 系列）
 
 | 项目 | 状态 | 文件 |
 |------|------|------|
@@ -146,13 +148,36 @@ HVM.app/Contents/
 | 一键构建脚本 (Homebrew + brew deps + clone + patch + configure + build + EDK2 + manifest) | ✅ | `scripts/qemu_build.sh` |
 | Makefile target (`qemu` / `qemu-clean` / `build-all`) | ✅ | `Makefile` |
 | `bundle.sh` 软模式嵌入 + QEMU.entitlements 签名 | ✅ | `scripts/bundle.sh`, `app/Resources/QEMU.entitlements` |
-| 补丁串行管理骨架 | ✅ (空 series) | `patches/qemu/` |
+| 补丁串行管理骨架 | ✅ (当前 series 空, v10.2.0 原样构建) | `patches/qemu/` |
 | 仓库 ignore 规则 | ✅ | `.gitignore` |
-| Swift 侧 `HVMQemu` 模块 (后端进程编排 + QMP 客户端) | ⏳ 未开始 | `app/Sources/HVMQemu/` |
-| `VMConfig` 加 `engine: vz \| qemu` 字段 + 迁移 | ⏳ 未开始 | `app/Sources/HVMBundle/VMConfig.swift` |
-| `ConfigBuilder` 分支 (qemu 命令行构造) | ⏳ 未开始 | `app/Sources/HVMBackend/` |
-| Win 创建向导 (UI + 实验性标注) | ⏳ 未开始 | `app/Sources/HVM/UI/Dialogs/CreateVMDialog.swift` |
-| virtio-win 自动下载缓存 | ⏳ 未开始 | `app/Sources/HVMInstall/` |
+
+### Swift 侧 (A/B/C 系列)
+
+| 项目 | 状态 | 文件 |
+|------|------|------|
+| `HVMQemu` 模块 — `QemuPaths` / `QemuArgsBuilder` / `QemuProcessRunner` | ✅ | `app/Sources/HVMQemu/` |
+| `QmpClient` — unix socket 异步命令-响应 + AsyncStream 事件流 | ✅ | `app/Sources/HVMQemu/QmpClient.swift` |
+| `VMConfig.engine` + Windows guest case + `validate()` | ✅ | `app/Sources/HVMBundle/VMConfig.swift` |
+| `hvm-cli create --engine vz\|qemu` | ✅ | `app/Sources/hvm-cli/Commands/CreateCommand.swift` |
+| `hvm-dbg qemu-launch` (调试启动器, 绕过 host 进程) | ✅ | `app/Sources/hvm-dbg/Commands/QemuLaunchCommand.swift` |
+| `HVMHostEntry` 按 engine 分派 + `QemuHostEntry` 双后端 IPC | ✅ | `app/Sources/HVM/QemuHostEntry.swift` |
+
+### Win11 装机闭环 (D1/D2/D3 系列)
+
+| 项目 | 状态 | 文件 |
+|------|------|------|
+| GUI 创建向导加 Windows chip (实验性, QEMU 不可用时 disabled) | ✅ | `app/Sources/HVM/UI/Dialogs/CreateVMDialog.swift` |
+| `VirtioWinCache` + 自动下载 + 进度模态 + 第二 cdrom 挂载 | ✅ | `app/Sources/HVMInstall/VirtioWinCache.swift` |
+| `SwtpmPaths` / `SwtpmArgsBuilder` / `SwtpmRunner` (TPM 2.0 sidecar) | ✅ | `app/Sources/HVMQemu/Swtpm*.swift` |
+| swtpm 自动打包入 .app + 依赖 dylib 重定向 (`install_name_tool`) | ✅ | `scripts/qemu_build.sh` (`bundle_swtpm`) |
+| EDK2 pflash 双 drive (Win11 SecureBoot NVRAM 持久) | ✅ | `app/Sources/HVMQemu/QemuArgsBuilder.swift` |
+
+### 已知未做 / 待办
+
+- **真实 Win11 / Linux arm64 ISO 端到端实测** (假 ISO 只能验进程启停, 没法验 TPM 信任根 / SecureBoot / virtio 驱动加载)
+- **QEMU 后端 `dbg.*` 命令支持** — 当前 hvm-dbg screenshot/key/mouse/ocr 仅 VZ 后端; QEMU 等价物 (QMP `screendump` + `human-monitor-command sendkey`) 待接入
+- **QEMU 显示嵌入主窗口** — 当前 QEMU 用 `-display cocoa` 自开独立 NSWindow, 未嵌入 HVM 主窗口右栏 (需走 SPICE 或像素管道, 复杂度高)
+- **桥接网络 QEMU 分支** — 等 Apple `com.apple.vm.networking` entitlement 审批; QemuArgsBuilder 当前 bridged 直接 throw
 
 ## 相关文档
 
