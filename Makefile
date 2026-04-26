@@ -8,7 +8,7 @@ SWIFTPM_DIR   := $(PKG_DIR)/.build
 # 签名身份: 空/auto = bundle.sh 自动探测 (Apple Development 优先, 否则 ad-hoc)
 SIGN_IDENTITY ?= auto
 ENTITLEMENTS  := $(PKG_DIR)/Resources/HVM.entitlements
-# QEMU 后端产物 (由 scripts/qemu_build.sh 生成, 仓库 ignore, 详见 docs/QEMU_INTEGRATION.md)
+# QEMU 后端产物 (由 scripts/qemu-build.sh 生成, 仓库 ignore, 详见 docs/QEMU_INTEGRATION.md)
 QEMU_VENDOR   := third_party/qemu
 QEMU_BIN      := $(QEMU_VENDOR)/bin/qemu-system-aarch64
 
@@ -61,10 +61,10 @@ clean:
 	rm -rf $(BUILD_DIR) $(SWIFTPM_DIR)
 	@echo "✔ 已清除 build/ 与 $(SWIFTPM_DIR)/"
 
-# QEMU 后端构建 (仅打包者跑; 详见 scripts/qemu_build.sh 与 docs/QEMU_INTEGRATION.md)
+# QEMU 后端构建 (仅打包者跑; 详见 scripts/qemu-build.sh 与 docs/QEMU_INTEGRATION.md)
 # 第一次跑会自动装 Homebrew + 一组锁定 brew 依赖, 拉 v10.2.0 源码, 编译 ~10-30 分钟
 qemu:
-	@bash scripts/qemu_build.sh
+	@bash scripts/qemu-build.sh
 
 # 仅清 QEMU 相关产物, 不动 SwiftPM 与 .app
 qemu-clean:

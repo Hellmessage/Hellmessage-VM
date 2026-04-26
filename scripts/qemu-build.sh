@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/qemu_build.sh
+# scripts/qemu-build.sh
 # 一键: 装 Homebrew + 依赖 → 拉 QEMU v10.2.0 源码 → 应用补丁 → 构建 → 落 third_party/qemu/
 # 仅打包者跑; 最终用户机器不需要 (HVM.app 包内已带产物)
 # 详见 docs/QEMU_INTEGRATION.md 与 CLAUDE.md「QEMU 后端约束」

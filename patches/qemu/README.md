@@ -1,6 +1,6 @@
 # QEMU 补丁
 
-本目录存放对 QEMU `v10.2.0` 上游源码的本地补丁, 由 `scripts/qemu_build.sh` 在构建前依次应用。
+本目录存放对 QEMU `v10.2.0` 上游源码的本地补丁, 由 `scripts/qemu-build.sh` 在构建前依次应用。
 
 ## 文件约定
 
@@ -8,7 +8,7 @@
 - 每个 patch 由 `git format-patch` 产出, 必须包含:
   - `Subject:` — 一行简述, 中英文皆可
   - 正文 `Why:` 段 — 详细动机 (上游为何不收 / 项目特殊需求 / 关联 issue)
-- 任一 patch `git apply --check` 失败 → `qemu_build.sh` 立即中断, **禁止 `--reject` / `--3way` 救场**
+- 任一 patch `git apply --check` 失败 → `qemu-build.sh` 立即中断, **禁止 `--reject` / `--3way` 救场**
 - 跨 QEMU 大版本升级时, 必须 rebase 全部补丁; 上游若已合并, 从 `series` 删除该行
 
 ## series 文件
@@ -36,6 +36,6 @@
 ## 不允许的做法
 
 - ❌ fork 上游 QEMU 仓库改源码 (rebase 黑盒, 难审查)
-- ❌ 在 `qemu_build.sh` 里直接写 `sed -i` 改源 (无 diff, 无 history)
+- ❌ 在 `qemu-build.sh` 里直接写 `sed -i` 改源 (无 diff, 无 history)
 - ❌ 用 `--ignore-whitespace` / `--reject` 强 apply 失败的补丁 (掩盖上游变化)
 - ❌ 不写 `Why:` 段 (将来 rebase 时无法判断该补丁是否还有意义)

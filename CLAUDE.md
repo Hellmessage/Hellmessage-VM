@@ -23,7 +23,7 @@
 - `make build` 通过才算任务完成, 否则视为未完成
 - 空白 Mac 上 `make build` 一条命令跑通, 除 Xcode Command Line Tools 和 Apple Developer 证书外**零手动依赖**
 - **HVM 主体**不引入 Homebrew / Vendor / 编译外部 C 项目等重依赖, 所有逻辑走 Swift + Apple framework
-- **QEMU 后端例外**(详见下「QEMU 后端约束」): 打包者机器允许 `scripts/qemu_build.sh` 自动安装 Homebrew 与一组锁定 brew 包, 仅用于编译 QEMU 源码; **最终用户机器**仍零依赖, 所有运行时产物随 `.app` 包内分发
+- **QEMU 后端例外**(详见下「QEMU 后端约束」): 打包者机器允许 `scripts/qemu-build.sh` 自动安装 Homebrew 与一组锁定 brew 包, 仅用于编译 QEMU 源码; **最终用户机器**仍零依赖, 所有运行时产物随 `.app` 包内分发
 - `make build` 自身**不**编译 QEMU; 缺 QEMU 产物时 `.app` 仍可构建但不嵌入 QEMU 后端; 完整发布走 `make build-all`(先 `make qemu` 再 `make build`)
 
 ## 构建约束
@@ -77,13 +77,13 @@
 QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场景, 详见 `docs/QEMU_INTEGRATION.md`。
 
 - **架构限定**: 仅 `qemu-system-aarch64`(Apple Silicon 宿主机 + AArch64 guest), 不打包 x86_64 / riscv 等其他 `qemu-system-*` 目标
-- **版本锁定**: 包内 QEMU 与 `scripts/qemu_build.sh` 中的 `QEMU_TAG` (当前 `v10.2.0`) 严格绑定; 升级 QEMU 必须同步改 tag + 重跑 `make qemu` + 重 commit
+- **版本锁定**: 包内 QEMU 与 `scripts/qemu-build.sh` 中的 `QEMU_TAG` (当前 `v10.2.0`) 严格绑定; 升级 QEMU 必须同步改 tag + 重跑 `make qemu` + 重 commit
 - **构建参数固定**: `--target-list=aarch64-softmmu --enable-cocoa --enable-hvf`, 其他 UI / 加速器目标全部 disable, 控体积与签名面
 - **补丁串行管理**: 所有 QEMU 上游补丁放 `patches/qemu/*.patch`, 顺序由 `patches/qemu/series` 决定; 任一 patch apply 失败立即中断; **禁止 fork 上游仓库**以避免 rebase 黑盒
 - **产物路径**: 编译产物落 `third_party/qemu/{bin,share,lib,libexec}` (仓库 ignore), 由 `scripts/bundle.sh` 拷至 `HVM.app/Contents/Resources/QEMU/`
 - **依赖配套**:
-  - EDK2 aarch64 firmware (`QEMU_EFI.fd`) 由 `qemu_build.sh` 从 Linaro 官方下载并固化版本
-  - `swtpm` + `libtpms` 由 brew 锁版本 (Win11 TPM 2.0 必需), 由 `qemu_build.sh` 打包入 `Resources/QEMU/bin/swtpm` + dylib 重定向
+  - EDK2 aarch64 firmware (`QEMU_EFI.fd`) 由 `qemu-build.sh` 从 Linaro 官方下载并固化版本
+  - `swtpm` + `libtpms` 由 brew 锁版本 (Win11 TPM 2.0 必需), 由 `qemu-build.sh` 打包入 `Resources/QEMU/bin/swtpm` + dylib 重定向
   - `socket_vmnet` 由 brew 锁版本 (QEMU 走 vmnet bridged/shared 网络的非 root 桥接), 同模式打包入包内
   - **virtio-win 驱动 ISO 不入包** (体积约 700MB), 首次创建 Win VM 时按需下载到 `~/Library/Application Support/HVM/cache/virtio-win/`
 - **签名闭环**: `Resources/QEMU/bin/*` 与 `Resources/QEMU/lib/*.dylib` 必须逐文件 codesign; QEMU 二进制使用单独的 `app/Resources/QEMU.entitlements` (含 `com.apple.security.hypervisor`, HVF 必需), **不**与 HVM 主进程共用 entitlement; 整包再 `codesign --deep` 包裹
