@@ -37,9 +37,30 @@ public enum HVMPaths {
         appSupport.appendingPathComponent("cache/virtio-win", isDirectory: true)
     }
 
-    /// 对给定 uuid 返回默认 socket 路径
+    /// 对给定 uuid 返回默认 IPC socket 路径 (HVMHost ↔ hvm-cli/hvm-dbg)
     public static func socketPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).sock")
+    }
+
+    /// QEMU 后端运行时 socket 路径 (per-VM, transient). 由 QemuHostEntry / qemu-launch 共用,
+    /// 避免硬编码字符串在多处漂移.
+    public static func qmpSocketPath(for id: UUID) -> URL {
+        runDir.appendingPathComponent("\(id.uuidString.lowercased()).qmp")
+    }
+    public static func consoleSocketPath(for id: UUID) -> URL {
+        runDir.appendingPathComponent("\(id.uuidString.lowercased()).console.sock")
+    }
+    public static func swtpmSocketPath(for id: UUID) -> URL {
+        runDir.appendingPathComponent("\(id.uuidString.lowercased()).swtpm.sock")
+    }
+    public static func swtpmPidPath(for id: UUID) -> URL {
+        runDir.appendingPathComponent("\(id.uuidString.lowercased()).swtpm.pid")
+    }
+    public static func vmnetSocketPath(for id: UUID) -> URL {
+        runDir.appendingPathComponent("\(id.uuidString.lowercased()).vmnet.sock")
+    }
+    public static func vmnetPidPath(for id: UUID) -> URL {
+        runDir.appendingPathComponent("\(id.uuidString.lowercased()).vmnet.pid")
     }
 
     /// 若目录不存在则创建 (0755)

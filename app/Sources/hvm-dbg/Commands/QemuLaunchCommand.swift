@@ -57,8 +57,7 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         }
 
         try HVMPaths.ensure(HVMPaths.runDir)
-        let qmpSocket = HVMPaths.runDir
-            .appendingPathComponent("\(config.id.uuidString.lowercased()).qmp")
+        let qmpSocket = HVMPaths.qmpSocketPath(for: config.id)
         // 清残留 socket (上次崩溃留的会让 QEMU bind 失败)
         try? FileManager.default.removeItem(at: qmpSocket)
 
@@ -266,10 +265,8 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         let stateDir = BundleLayout.tpmStateDir(bundleURL)
         try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         try HVMPaths.ensure(HVMPaths.runDir)
-        let sockPath = HVMPaths.runDir
-            .appendingPathComponent("\(config.id.uuidString.lowercased()).swtpm.sock").path
-        let pidPath = HVMPaths.runDir
-            .appendingPathComponent("\(config.id.uuidString.lowercased()).swtpm.pid")
+        let sockPath = HVMPaths.swtpmSocketPath(for: config.id).path
+        let pidPath = HVMPaths.swtpmPidPath(for: config.id)
         let logFile = BundleLayout.logsDir(bundleURL).appendingPathComponent("swtpm.log")
         try? FileManager.default.removeItem(atPath: sockPath)
         try? FileManager.default.removeItem(at: pidPath)
@@ -314,10 +311,8 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         }
 
         try HVMPaths.ensure(HVMPaths.runDir)
-        let sockPath = HVMPaths.runDir
-            .appendingPathComponent("\(config.id.uuidString.lowercased()).vmnet.sock").path
-        let pidPath = HVMPaths.runDir
-            .appendingPathComponent("\(config.id.uuidString.lowercased()).vmnet.pid")
+        let sockPath = HVMPaths.vmnetSocketPath(for: config.id).path
+        let pidPath = HVMPaths.vmnetPidPath(for: config.id)
         try? FileManager.default.removeItem(atPath: sockPath)
         try? FileManager.default.removeItem(at: pidPath)
 

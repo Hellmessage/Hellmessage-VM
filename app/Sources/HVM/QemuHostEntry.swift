@@ -44,8 +44,7 @@ public enum QemuHostEntry {
             exit(20)
         }
 
-        let qmpSocketURL = HVMPaths.runDir
-            .appendingPathComponent("\(config.id.uuidString.lowercased()).qmp")
+        let qmpSocketURL = HVMPaths.qmpSocketPath(for: config.id)
         // 清残留 socket (上次崩溃留的会让 QEMU bind 失败)
         try? FileManager.default.removeItem(at: qmpSocketURL)
 
@@ -92,8 +91,7 @@ public enum QemuHostEntry {
 
         // 3.6 console socket 路径 (与 QMP / vmnet socket 同 runDir).
         // QemuConsoleBridge 在 QEMU 启动后 connect (见 6c).
-        let consoleSocketURL = HVMPaths.runDir
-            .appendingPathComponent("\(config.id.uuidString.lowercased()).console.sock")
+        let consoleSocketURL = HVMPaths.consoleSocketPath(for: config.id)
         try? FileManager.default.removeItem(at: consoleSocketURL)
 
         // 4. 构造 argv
@@ -282,10 +280,8 @@ public enum QemuHostEntry {
         // 2. 路径准备: state dir 持久 / socket+log+pid 运行时
         let stateDir = BundleLayout.tpmStateDir(bundleURL)
         try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
-        let sockPath = HVMPaths.runDir
-            .appendingPathComponent("\(config.id.uuidString.lowercased()).swtpm.sock").path
-        let pidPath = HVMPaths.runDir
-            .appendingPathComponent("\(config.id.uuidString.lowercased()).swtpm.pid")
+        let sockPath = HVMPaths.swtpmSocketPath(for: config.id).path
+        let pidPath = HVMPaths.swtpmPidPath(for: config.id)
         let logFile = BundleLayout.logsDir(bundleURL).appendingPathComponent("swtpm.log")
         // 清残留 socket / pid (上次崩溃留的会让 swtpm bind 失败 / 误以为已在跑)
         try? FileManager.default.removeItem(atPath: sockPath)
@@ -366,10 +362,8 @@ public enum QemuHostEntry {
         }
 
         // 2. 路径准备
-        let sockPath = HVMPaths.runDir
-            .appendingPathComponent("\(config.id.uuidString.lowercased()).vmnet.sock").path
-        let pidPath = HVMPaths.runDir
-            .appendingPathComponent("\(config.id.uuidString.lowercased()).vmnet.pid")
+        let sockPath = HVMPaths.vmnetSocketPath(for: config.id).path
+        let pidPath = HVMPaths.vmnetPidPath(for: config.id)
         try? FileManager.default.removeItem(atPath: sockPath)
         try? FileManager.default.removeItem(at: pidPath)
 
