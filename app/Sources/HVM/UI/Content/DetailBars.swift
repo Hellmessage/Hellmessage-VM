@@ -144,6 +144,7 @@ struct DetailBottomBar: View {
         switch net.mode {
         case .nat: return "nat"
         case .bridged: return "bridged"
+        case .shared: return "shared"
         }
     }
 }
@@ -166,6 +167,7 @@ struct StoppedContentView: View {
                 titleBlock
                 resourcesSection
                 metadataSection
+                disksSection
                 snapshotsSection
                 actionRow
             }
@@ -275,6 +277,129 @@ struct StoppedContentView: View {
             }
             .background(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).fill(HVMColor.bgCard))
             .overlay(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).stroke(HVMColor.border, lineWidth: 1))
+        }
+    }
+
+    // MARK: - Disks section
+
+    /// 磁盘列表 + add/resize/delete (M-2). 与 hvm-cli disk 等价, 都要求 VM stopped.
+    /// 主盘 (role=main) 不可删, 仅可 RESIZE; 数据盘 (role=data) 可 RESIZE / DELETE.
+    private var disksSection: some View {
+        TerminalSection("Disks") {
+            VStack(spacing: 0) {
+                disksHeader
+                disksRows
+            }
+            .background(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).fill(HVMColor.bgCard))
+            .overlay(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).stroke(HVMColor.border, lineWidth: 1))
+        }
+    }
+
+    private var disksHeader: some View {
+        HStack(spacing: HVMSpace.md) {
+            Text("\(item.config.disks.count) attached")
+                .font(HVMFont.caption)
+                .foregroundStyle(HVMColor.textTertiary)
+            Spacer()
+            Button {
+                model.diskAddItem = item
+            } label: {
+                Text("+ ADD")
+            }
+            .buttonStyle(GhostButtonStyle())
+            .help("加一块数据盘 (raw sparse)")
+        }
+        .padding(.horizontal, HVMSpace.md)
+        .padding(.vertical, HVMSpace.sm)
+    }
+
+    private var disksRows: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(item.config.disks.enumerated()), id: \.offset) { _, disk in
+                Rectangle().fill(HVMColor.border).frame(height: 1)
+                diskRow(disk)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func diskRow(_ disk: DiskSpec) -> some View {
+        let id = diskID(for: disk)
+        let absURL = item.bundleURL.appendingPathComponent(disk.path)
+        let actualBytes = (try? DiskFactory.actualBytes(at: absURL)) ?? 0
+        HStack(spacing: HVMSpace.md) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: HVMSpace.sm) {
+                    Text(id)
+                        .font(HVMFont.body)
+                        .foregroundStyle(HVMColor.textPrimary)
+                    Text(disk.role == .main ? "main" : "data")
+                        .font(HVMFont.small)
+                        .foregroundStyle(HVMColor.textTertiary)
+                }
+                Text("\(disk.sizeGiB) gb · 实占 \(formatMB(actualBytes))")
+                    .font(HVMFont.small)
+                    .foregroundStyle(HVMColor.textTertiary)
+            }
+            Spacer()
+            Button("RESIZE") {
+                model.diskResizeRequest = AppModel.DiskResizeRequest(
+                    item: item, diskID: id, currentSizeGiB: disk.sizeGiB
+                )
+            }
+            .buttonStyle(GhostButtonStyle())
+            .help("扩容磁盘 (只能增大)")
+            if disk.role == .data {
+                Button("DELETE") { deleteDataDisk(id: id) }
+                    .buttonStyle(GhostButtonStyle(destructive: true))
+                    .help("删除此数据盘")
+            }
+        }
+        .padding(.horizontal, HVMSpace.md)
+        .padding(.vertical, 9)
+    }
+
+    /// 主盘 → "main"; 数据盘 → 文件名里的 uuid8
+    private func diskID(for disk: DiskSpec) -> String {
+        if disk.role == .main { return "main" }
+        let prefix = "\(BundleLayout.disksDirName)/data-"
+        let suffix = ".img"
+        guard disk.path.hasPrefix(prefix), disk.path.hasSuffix(suffix) else { return "?" }
+        return String(disk.path.dropFirst(prefix.count).dropLast(suffix.count))
+    }
+
+    private func formatMB(_ bytes: UInt64) -> String {
+        let mb = Double(bytes) / 1024 / 1024
+        if mb < 1024 { return String(format: "%.1f mb", mb) }
+        return String(format: "%.2f gb", mb / 1024)
+    }
+
+    private func deleteDataDisk(id: String) {
+        confirms.present(ConfirmDialogModel(
+            title: "删除数据盘",
+            message: "确定删除数据盘 \"\(id)\"? 此操作不可撤销。",
+            confirmTitle: "删除",
+            cancelTitle: "取消",
+            destructive: true
+        )) { confirmed in
+            guard confirmed else { return }
+            do {
+                if BundleLock.isBusy(bundleURL: item.bundleURL) {
+                    throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
+                }
+                var config = try BundleIO.load(from: item.bundleURL)
+                let relPath = "\(BundleLayout.disksDirName)/data-\(id).img"
+                guard let idx = config.disks.firstIndex(where: { $0.role == .data && $0.path == relPath }) else {
+                    throw HVMError.config(.missingField(name: "data disk id=\(id) 未找到"))
+                }
+                let absURL = item.bundleURL.appendingPathComponent(config.disks[idx].path)
+                try DiskFactory.delete(at: absURL)
+                config.disks.remove(at: idx)
+                try BundleIO.save(config: config, to: item.bundleURL)
+                model.refreshList()
+            } catch {
+                errors.present(error)
+            }
         }
     }
 
@@ -600,6 +725,7 @@ struct StoppedContentView: View {
         switch net.mode {
         case .nat: return "NAT"
         case .bridged: return "Bridged"
+        case .shared: return "Shared"
         }
     }
 }

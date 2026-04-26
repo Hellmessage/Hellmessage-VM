@@ -31,9 +31,6 @@ public enum QemuArgsBuilder {
         /// swtpm 控制 socket 绝对路径 (仅 windows + tpmEnabled 时用).
         /// nil 时即便 windows.tpmEnabled=true 也不注入 TPM args (调用方负责事先启动 swtpm).
         public let swtpmSocketPath: String?
-        /// socket_vmnet 监听 socket 绝对路径 (仅 networks 含 bridged 时用).
-        /// nil 时 bridged NetworkSpec 抛 configInvalid (一期不再 throw 通用 "未实现").
-        public let socketVmnetPath: String?
         /// guest serial console 的 unix socket 绝对路径 (QEMU 当 server, HVMHost 当 client).
         /// nil 时不挂 chardev/serial — 仅在 hvm-dbg console.* 不需要时跳过 (一期总是传).
         public let consoleSocketPath: String?
@@ -45,7 +42,6 @@ public enum QemuArgsBuilder {
             qmpSocketPath: String,
             virtioWinISOPath: String? = nil,
             swtpmSocketPath: String? = nil,
-            socketVmnetPath: String? = nil,
             consoleSocketPath: String? = nil
         ) {
             self.config = config
@@ -54,7 +50,6 @@ public enum QemuArgsBuilder {
             self.qmpSocketPath = qmpSocketPath
             self.virtioWinISOPath = virtioWinISOPath
             self.swtpmSocketPath = swtpmSocketPath
-            self.socketVmnetPath = socketVmnetPath
             self.consoleSocketPath = consoleSocketPath
         }
     }
@@ -141,30 +136,49 @@ public enum QemuArgsBuilder {
         }
 
         // ---- 网络 ----
+        // bridged / shared 走系统级 socket_vmnet daemon (launchd 拉起, 见 scripts/install-vmnet-helper.sh).
+        // QEMU 用 -netdev stream 连固定 socket 路径, 不再 per-VM spawn sidecar.
         for (idx, net) in cfg.networks.enumerated() {
             let netId = "net\(idx)"
             switch net.mode {
             case .nat:
-                // user-mode NAT: QEMU 自带 SLIRP, 与 VZ NAT 语义对齐
+                // user-mode NAT: QEMU 自带 SLIRP, 与 VZ NAT 语义对齐 (无需任何 daemon)
                 args += ["-netdev", "user,id=\(netId)"]
                 args += ["-device", "virtio-net-pci,netdev=\(netId),mac=\(net.macAddress)"]
-            case .bridged:
-                // socket_vmnet sidecar 提供 vmnet-bridged 桥接 (跨物理 LAN).
-                // 需调用方先启动 socket_vmnet 进程并把 socket path 注入 socketVmnetPath.
-                guard let sockPath = inputs.socketVmnetPath else {
+            case .bridged(let iface):
+                let sockPath = VmnetDaemonPaths.bridgedSocket(interface: iface)
+                guard VmnetDaemonPaths.isReady(sockPath) else {
                     throw HVMError.backend(.configInvalid(
                         field: "networks[\(idx)].mode",
-                        reason: "bridged 网络需要 socket_vmnet sidecar; 调用方未启动. " +
-                                "首次使用走 GUI 创建向导自动配置 sudoers, 或 scripts/install-vmnet-helper.sh"
+                        reason: "bridged(\(iface)) 需要 socket_vmnet daemon 在 \(sockPath); " +
+                                "请跑: sudo scripts/install-vmnet-helper.sh \(iface)"
                     ))
                 }
-                // QEMU 10+ 的 stream netdev 直接连 unix socket (无需 socket_vmnet_client wrapper)
+                args += ["-netdev", "stream,id=\(netId),addr.type=unix,addr.path=\(sockPath),server=off"]
+                args += ["-device", "virtio-net-pci,netdev=\(netId),mac=\(net.macAddress)"]
+            case .shared:
+                let sockPath = VmnetDaemonPaths.sharedSocket
+                guard VmnetDaemonPaths.isReady(sockPath) else {
+                    throw HVMError.backend(.configInvalid(
+                        field: "networks[\(idx)].mode",
+                        reason: "shared 需要 socket_vmnet daemon 在 \(sockPath); " +
+                                "请跑: sudo scripts/install-vmnet-helper.sh"
+                    ))
+                }
                 args += ["-netdev", "stream,id=\(netId),addr.type=unix,addr.path=\(sockPath),server=off"]
                 args += ["-device", "virtio-net-pci,netdev=\(netId),mac=\(net.macAddress)"]
             }
         }
 
-        // ---- 显示 ----
+        // ---- 显示 + 输入 ----
+        // QEMU virt 机器默认无显卡, 只有 serial/parallel console; 必须显式加 GPU 才能出 graphical UEFI/OS UI.
+        // virtio-gpu-pci: 现代 virtio GPU, Linux 内核自带 driver; Windows arm64 装机界面要从 ISO 加载
+        // virtio GPU driver (virtio-win.iso 提供) 才能跳出 1080p, 装机阶段会先以 EDK2 GOP 出图.
+        args += ["-device", "virtio-gpu-pci"]
+        // USB xHCI 控制器 + USB 键盘 + USB tablet (绝对坐标鼠标; hvm-dbg mouse abs 注入也走它)
+        args += ["-device", "qemu-xhci,id=xhci"]
+        args += ["-device", "usb-kbd,bus=xhci.0"]
+        args += ["-device", "usb-tablet,bus=xhci.0"]
         // cocoa: QEMU 自开 NSWindow. 与 HVMDisplay 嵌入主窗口的集成留给后续 commit
         args += ["-display", "cocoa"]
 

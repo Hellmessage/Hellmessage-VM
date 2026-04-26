@@ -178,7 +178,7 @@ public final class QemuConsoleBridge: @unchecked Sendable {
                     FileManager.default.createFile(atPath: url.path, contents: nil)
                 }
                 if let h = try? FileHandle(forWritingTo: url) {
-                    try? h.seekToEnd()
+                    _ = try? h.seekToEnd()
                     s.logHandle = h
                 }
                 s.currentDay = nowDay

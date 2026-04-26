@@ -8,6 +8,7 @@ import HVMBackend
 import HVMBundle
 import HVMCore
 import HVMInstall
+import HVMIPC
 
 @MainActor
 @Observable
@@ -63,6 +64,24 @@ public final class AppModel {
     public var editConfigItem: VMListItem? = nil
     /// 新建 snapshot 弹窗的当前 VM. 非 nil → DialogOverlay 显示 SnapshotCreateDialog 模态
     public var snapshotCreateItem: VMListItem? = nil
+    /// 新建数据盘弹窗的当前 VM. 非 nil → DialogOverlay 显示 DiskAddDialog 模态
+    public var diskAddItem: VMListItem? = nil
+    /// 扩容磁盘弹窗的请求 (item + diskID + 当前大小). 非 nil → DialogOverlay 显示 DiskResizeDialog 模态
+    public var diskResizeRequest: DiskResizeRequest? = nil
+
+    /// 扩容请求载体: VM 引用 + 磁盘 id (主盘 "main" / 数据盘 uuid8) + 当前 GiB
+    public struct DiskResizeRequest: Identifiable, Sendable {
+        public let id: UUID
+        public let item: VMListItem
+        public let diskID: String
+        public let currentSizeGiB: UInt64
+        public init(item: VMListItem, diskID: String, currentSizeGiB: UInt64) {
+            self.id = UUID()
+            self.item = item
+            self.diskID = diskID
+            self.currentSizeGiB = currentSizeGiB
+        }
+    }
 
     public struct InstallProgressState: Sendable, Equatable {
         public let id: UUID
@@ -162,6 +181,28 @@ public final class AppModel {
 
     public func start(_ item: VMListItem) async throws {
         if sessions[item.id] != nil { return }
+        // QEMU 后端: 派生 HVM 自身二进制走 --host-mode-bundle 入 QemuHostEntry; QEMU 自带 cocoa 窗口,
+        // GUI 主窗口不嵌入 (与 VZ 路径区分). stop / kill 走 IPC fallback (见 stop/kill 方法).
+        if item.config.engine == .qemu {
+            // 与子进程 argv 使用同一套路径, 避免 symlink / 简写 导致 .lock 与 isBusy 判在不同 inode 上
+            let bundleURL = item.bundleURL.resolvingSymlinksInPath().standardizedFileURL
+            try spawnExternalHost(bundleURL: bundleURL)
+            // 轮询子进程是否成功拿到 BundleLock (子进程在 HVMHostEntry 入口即抢锁; 冷启动 dyld/首次签名偶发 >5s)
+            // 与 QMP 15s 超时同一量级, 留足 bridged + socket_vmnet 起 sidecar 前的余量
+            let waitSeconds = 20
+            let deadline = Date().addingTimeInterval(TimeInterval(waitSeconds))
+            var locked = false
+            while Date() < deadline {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                if BundleLock.isBusy(bundleURL: bundleURL) { locked = true; break }
+            }
+            refreshList()
+            if !locked {
+                let logDir = bundleURL.appendingPathComponent(BundleLayout.logsDirName, isDirectory: true).path
+                throw HVMError.backend(.qemuHostStartupTimeout(waitedSeconds: waitSeconds, logPath: logDir))
+            }
+            return
+        }
         let session = VMSession(bundleURL: item.bundleURL, config: item.config)
         // 自然结束(.stopped / .error) 通知 AppModel 清理列表 + 切回 stopped 卡片
         session.onEnded = { [weak self] id in
@@ -180,24 +221,60 @@ public final class AppModel {
         refreshList()
     }
 
+    /// QEMU 后端 (外部进程) 启动. 派生 self binary 走 --host-mode-bundle,
+    /// 子进程进 main.swift if 分支 → HVMHostEntry.run → QemuHostEntry.run.
+    /// stdout/stderr 落 bundle/logs/host-YYYY-MM-DD.log (与 hvm-cli StartCommand 一致).
+    private func spawnExternalHost(bundleURL: URL) throws {
+        guard let exec = Bundle.main.executableURL else {
+            throw HVMError.backend(.vzInternal(description: "无法定位 HVM.app 二进制"))
+        }
+        let logsDir = bundleURL.appendingPathComponent(BundleLayout.logsDirName, isDirectory: true)
+        try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        let logURL = logsDir.appendingPathComponent("host-\(df.string(from: Date())).log")
+        if !FileManager.default.fileExists(atPath: logURL.path) {
+            FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        }
+        let handle = try FileHandle(forWritingTo: logURL)
+        try handle.seekToEnd()
+        let proc = Process()
+        proc.executableURL = exec
+        proc.arguments = ["--host-mode-bundle", bundleURL.path]
+        proc.standardOutput = handle
+        proc.standardError = handle
+        try proc.run()
+    }
+
     public func stop(_ id: UUID) throws {
-        guard let s = sessions[id] else { return }
-        try s.requestStop()
+        if let s = sessions[id] {
+            try s.requestStop()
+            return
+        }
+        // 外部进程 (QEMU 后端): 走 IPC stop op
+        try sendIPC(id: id, op: .stop)
     }
 
     public func pause(_ id: UUID) async throws {
-        guard let s = sessions[id] else { return }
+        guard let s = sessions[id] else {
+            try sendIPC(id: id, op: .pause); return
+        }
         try await s.pause()
     }
 
     public func resume(_ id: UUID) async throws {
-        guard let s = sessions[id] else { return }
+        guard let s = sessions[id] else {
+            try sendIPC(id: id, op: .resume); return
+        }
         try await s.resume()
     }
 
     public func kill(_ id: UUID) async throws {
-        guard let s = sessions[id] else { return }
-        try await s.forceStop()
+        if let s = sessions[id] {
+            try await s.forceStop()
+        } else {
+            try sendIPC(id: id, op: .kill)
+        }
         // 不在此处 sessions.removeValue + refreshList:
         // forceStop 走完时, state observer 的 Task { @MainActor in onStateChanged(.stopped) }
         // 还没派发. 若此处 removeValue, 唯一的 local 强引用 s 出 scope 后 VMSession 立即 dealloc,
@@ -206,6 +283,29 @@ public final class AppModel {
         // flock 互斥) 把 runState 写成 running, sidebar 卡死.
         // 让 sessions / list 收尾走 VMSession.onStateChanged -> cleanup -> onEnded -> sessionDidEnd
         // 这条统一路径: cleanup 同步释放 lock, sessionDidEnd 的 refreshList 读到 busy=false.
+    }
+
+    /// 给外部 host 进程 (QEMU 后端) 发 IPC 控制命令. 内部走 BundleLock.inspect 取 socket path.
+    /// 返回 ok 状态; 不 ok 则抛 HVMError.ipc.remoteError.
+    private func sendIPC(id: UUID, op: IPCOp) throws {
+        guard let item = list.first(where: { $0.id == id }) else { return }
+        guard let holder = BundleLock.inspect(bundleURL: item.bundleURL),
+              !holder.socketPath.isEmpty else {
+            throw HVMError.ipc(.socketNotFound(path: "(inspect 失败)"))
+        }
+        let req = IPCRequest(op: op.rawValue)
+        let resp = try SocketClient.request(socketPath: holder.socketPath, request: req)
+        guard resp.ok else {
+            throw HVMError.ipc(.remoteError(
+                code: resp.error?.code ?? "ipc.remote_error",
+                message: resp.error?.message ?? "\(op.rawValue) 失败"
+            ))
+        }
+        // refresh: 让 sidebar 状态从 running 切回 stopped (host 进程会在退出时释放 BundleLock)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            self.refreshList()
+        }
     }
 
     // MARK: - macOS guest 装机

@@ -76,18 +76,8 @@ struct QemuLaunchCommand: AsyncParsableCommand {
             (swtpmRunner, swtpmSockPath) = try await launchSwtpmSidecar(config: config, bundleURL: bundleURL)
         }
 
-        // socket_vmnet sidecar (任一 bridged 网络时); sudoers NOPASSWD 未配会 ECONNREFUSED 报错
-        var vmnetRunner: SocketVmnetRunner? = nil
-        var vmnetSockPath: String? = nil
-        if let firstBridged = config.networks.first(where: {
-            if case .bridged = $0.mode { return true } else { return false }
-        }) {
-            if case .bridged(let iface) = firstBridged.mode {
-                (vmnetRunner, vmnetSockPath) = try await launchSocketVmnetSidecar(
-                    config: config, bundleURL: bundleURL, bridgedInterface: iface
-                )
-            }
-        }
+        // socket_vmnet 现在是系统级 launchd daemon (scripts/install-vmnet-helper.sh 安装),
+        // QemuArgsBuilder 直接连 /var/run/socket_vmnet*; daemon 缺会抛 configInvalid
 
         let inputs = QemuArgsBuilder.Inputs(
             config: config,
@@ -95,8 +85,7 @@ struct QemuLaunchCommand: AsyncParsableCommand {
             qemuRoot: qemuRoot,
             qmpSocketPath: qmpSocket.path,
             virtioWinISOPath: virtioWinPath,
-            swtpmSocketPath: swtpmSockPath,
-            socketVmnetPath: vmnetSockPath
+            swtpmSocketPath: swtpmSockPath
         )
         let args = try QemuArgsBuilder.build(inputs)
 
@@ -217,14 +206,7 @@ struct QemuLaunchCommand: AsyncParsableCommand {
             }
         }
 
-        // socket_vmnet: 无 --terminate, 主动 SIGTERM
-        if let v = vmnetRunner {
-            v.terminate()
-            v.waitUntilExit()
-            if let p = vmnetSockPath {
-                try? FileManager.default.removeItem(atPath: p)
-            }
-        }
+        // socket_vmnet 是系统级 launchd daemon, 不归本命令生命周期, 不动
 
         // 清 socket 残留
         try? FileManager.default.removeItem(at: qmpSocket)
@@ -297,57 +279,6 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         return (runner, sockPath)
     }
 
-    /// 启动 socket_vmnet sidecar (sudo -n + bridged 接口). 失败 throw ExitCode.
-    private func launchSocketVmnetSidecar(
-        config: VMConfig, bundleURL: URL, bridgedInterface: String
-    ) async throws -> (SocketVmnetRunner, String) {
-        let bin: URL
-        do {
-            bin = try SocketVmnetPaths.locate()
-        } catch {
-            FileHandle.standardError.write("✗ socket_vmnet 未找到: \(error)\n".data(using: .utf8)!)
-            FileHandle.standardError.write("  brew install socket_vmnet 或 make qemu (打包后含)\n".data(using: .utf8)!)
-            throw ExitCode(40)
-        }
-
-        try HVMPaths.ensure(HVMPaths.runDir)
-        let sockPath = HVMPaths.vmnetSocketPath(for: config.id).path
-        let pidPath = HVMPaths.vmnetPidPath(for: config.id)
-        try? FileManager.default.removeItem(atPath: sockPath)
-        try? FileManager.default.removeItem(at: pidPath)
-
-        let argsList: [String]
-        do {
-            argsList = try SocketVmnetArgsBuilder.build(SocketVmnetArgsBuilder.Inputs(
-                mode: .bridged, socketPath: sockPath, pidFile: pidPath,
-                bridgedInterface: bridgedInterface
-            ))
-        } catch {
-            FileHandle.standardError.write("✗ socket_vmnet argv 构造失败: \(error)\n".data(using: .utf8)!)
-            throw ExitCode(41)
-        }
-        let stderrLog = BundleLayout.logsDir(bundleURL).appendingPathComponent("socket_vmnet-stderr.log")
-        try? FileManager.default.removeItem(at: stderrLog)
-        let runner = SocketVmnetRunner(binary: bin, args: argsList,
-                                       socketPath: sockPath, stderrLog: stderrLog)
-        do {
-            try runner.start()
-        } catch {
-            FileHandle.standardError.write("✗ socket_vmnet 启动失败 (sudo -n): \(error)\n".data(using: .utf8)!)
-            FileHandle.standardError.write("  常见: sudoers NOPASSWD 未配, 跑 scripts/install-vmnet-helper.sh\n".data(using: .utf8)!)
-            throw ExitCode(42)
-        }
-        let ready = await runner.waitForSocketReady(timeoutSec: 5)
-        guard ready else {
-            FileHandle.standardError.write("✗ socket_vmnet socket 5s 未就绪 (state=\(runner.state))\n".data(using: .utf8)!)
-            FileHandle.standardError.write("  详见 \(stderrLog.path)\n".data(using: .utf8)!)
-            runner.forceKill()
-            runner.waitUntilExit()
-            throw ExitCode(43)
-        }
-        print("✔ socket_vmnet 已启动 sock=\(sockPath) iface=\(bridgedInterface)")
-        return (runner, sockPath)
-    }
 }
 
 /// 简单的一次性 signal/wait, 用 CheckedContinuation 配合 NSLock

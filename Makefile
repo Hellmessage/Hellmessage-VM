@@ -12,7 +12,7 @@ ENTITLEMENTS  := $(PKG_DIR)/Resources/HVM.entitlements
 QEMU_VENDOR   := third_party/qemu
 QEMU_BIN      := $(QEMU_VENDOR)/bin/qemu-system-aarch64
 
-.PHONY: all build bundle compile dev test verify clean help icon register-types qemu qemu-clean build-all
+.PHONY: all build bundle compile dev test verify clean help icon register-types qemu qemu-clean build-all xed install uninstall
 
 # 默认: release 模式 + 完整 .app 签名
 all: build
@@ -26,6 +26,9 @@ help:
 	@echo "  make test       — 跑 swift test"
 	@echo "  make verify     — smoke test, 验证 .app 可启动"
 	@echo "  make icon       — 从 app/Resources/AppIcon-src.png 生成 AppIcon.icns"
+	@echo "  make xed        — Xcode 打开 SwiftPM 包 (开发期辅助, 非权威构建路径)"
+	@echo "  make install    — 把 build/HVM.app 安装到 /Applications/ (覆盖旧版)"
+	@echo "  make uninstall  — 从 /Applications/ 卸载 HVM.app"
 	@echo "  make clean      — 清除 build/ 和 app/.build/"
 	@echo
 	@echo "QEMU 后端 (Win arm64 / 可选 Linux arm64; 详见 docs/QEMU_INTEGRATION.md):"
@@ -78,6 +81,35 @@ build-all:
 		$(MAKE) qemu; \
 	fi
 	@$(MAKE) build
+
+# Xcode 打开 SwiftPM 包 (开发期编辑/补全用, 产物无 entitlement 不签名; 真实运行仍走 make build)
+xed:
+	xed $(PKG_DIR)/Package.swift
+
+# 安装到 /Applications/ (覆盖旧版). admin 用户对 /Applications 有写权限, 不需 sudo;
+# /Applications/HVM.app 若存在则先删 (.app 是 directory, 不能直接 cp 覆盖).
+# 安装后 lsregister 刷新 LaunchServices, 让 .hvmz 关联 + Spotlight 索引立即生效.
+install: build
+	@if [ ! -d "$(BUILD_DIR)/HVM.app" ]; then \
+		echo "✗ $(BUILD_DIR)/HVM.app 不存在; 先 make build"; exit 1; \
+	fi
+	@if [ -e /Applications/HVM.app ]; then \
+		echo "ℹ 覆盖旧版 /Applications/HVM.app"; \
+		rm -rf /Applications/HVM.app; \
+	fi
+	cp -R $(BUILD_DIR)/HVM.app /Applications/HVM.app
+	@LSREG="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"; \
+		"$$LSREG" -f /Applications/HVM.app 2>/dev/null || true
+	@echo "✔ 已安装: /Applications/HVM.app"
+
+# 从 /Applications/ 卸载 (用户数据 ~/Library/Application Support/HVM/ 不动)
+uninstall:
+	@if [ -e /Applications/HVM.app ]; then \
+		rm -rf /Applications/HVM.app; \
+		echo "✔ 已卸载 /Applications/HVM.app (用户数据 ~/Library/Application Support/HVM/ 保留)"; \
+	else \
+		echo "ℹ /Applications/HVM.app 不存在, 无需卸载"; \
+	fi
 
 # 让 Finder 立刻识别 .hvmz 为 package. 仅当 Finder 图标未更新时手动跑一次
 register-types: build

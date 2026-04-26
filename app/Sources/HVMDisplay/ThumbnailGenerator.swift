@@ -22,18 +22,8 @@ public enum ThumbnailGenerator {
         guard let shot = ScreenCapture.capturePNG(from: view, maxEdge: maxEdge) else {
             return false
         }
-        let metaDir = BundleLayout.metaDir(bundleURL)
-        try? FileManager.default.createDirectory(at: metaDir, withIntermediateDirectories: true)
-        let target = metaDir.appendingPathComponent(BundleLayout.thumbnailName)
         do {
-            let tmp = target.deletingLastPathComponent()
-                .appendingPathComponent(".\(BundleLayout.thumbnailName).tmp")
-            try shot.data.write(to: tmp, options: .atomic)
-            if FileManager.default.fileExists(atPath: target.path) {
-                _ = try FileManager.default.replaceItemAt(target, withItemAt: tmp)
-            } else {
-                try FileManager.default.moveItem(at: tmp, to: target)
-            }
+            try ThumbnailWriter.writeAtomic(shot.data, to: bundleURL)
             return true
         } catch {
             return false

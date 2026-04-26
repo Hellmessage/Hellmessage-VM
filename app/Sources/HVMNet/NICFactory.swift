@@ -32,6 +32,12 @@ public enum NICFactory {
                 ))
             }
             nic.attachment = VZBridgedNetworkDeviceAttachment(interface: iface)
+
+        case .shared:
+            // VZ 后端不支持 socket_vmnet 风格的 shared (多 guest 互通); 退化到 NAT,
+            // 用户若要真 shared 应走 QEMU 后端. 见 docs/NETWORK.md.
+            // GUI/CLI 入口已在 engine=vz 时不暴露 .shared, 这里是兜底防 config 手改.
+            nic.attachment = VZNATNetworkDeviceAttachment()
         }
 
         return nic

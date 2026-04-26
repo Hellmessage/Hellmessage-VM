@@ -66,56 +66,18 @@
   build/hvm-cli start foo
   # guest 内验证 IP 是物理 LAN 段, 跨机 ping / ssh 通
   ```
-
----
-
-## 🟡 短期可做 (小工程, < 200 行)
-
-### S-1 · QEMU 后端 hvm-dbg qemu-launch 接 socket_vmnet sidecar 也用
-- **现状**: `QemuHostEntry` (生产路径) 已支持 socket_vmnet bridged; `QemuLaunchCommand`
-  (调试路径) 也加了, 但未实测
-- **工作量**: 已经做过 (E1 commit), 需实测确认
-
-### S-2 · docs/DEBUG_PROBE.md 加 QEMU 后端 dbg.* 章节
-- **现状**: 文档主要描述 VZ 路径; QEMU 等价实现细节 (QMP screendump → PPM, send-key qcode 映射,
-  input-send-event abs 32767 等) 没归档
-- **工作量**: 1-2 小时, 纯文档
-
-### S-3 · README.md 加 socket_vmnet bridged 使用方法
-- **现状**: README 只示例 NAT; bridged 流程 (helper 脚本 + `--network bridged:en0`) 没写
-
-### S-4 · `xed` 命令封装到 Makefile
-- **现状**: 文档让用户 `xed app/Package.swift`; 加 `make xed` 等 alias 更顺手
-- **工作量**: 5 分钟
+- **顺便验**: `hvm-dbg qemu-launch` (调试路径) 也走 socket_vmnet sidecar
+  (代码已就位 `QemuLaunchCommand.swift:79-99,300-348`, 与生产 `QemuHostEntry` 共用 `SocketVmnetRunner`,
+  逻辑等价, 只差实测)
 
 ---
 
 ## 🟠 中期 (中等工程, 200-500 行)
 
-### M-1 · GUI 加 bridged 网络选项 + sudoers 自动检测引导 dialog
-- **现状**: `CreateVMDialog` 硬编码 `NetworkSpec(mode: .nat)`; 用户走 GUI 创建无法选 bridged
-- **要做**:
-  - CreateVMDialog 加 Network 段 (Picker: NAT / Bridged / Shared / Host)
-  - 选 Bridged 时弹接口选择 + 检测 `/etc/sudoers.d/hvm-socket-vmnet` 是否就绪
-  - 缺则在 dialog 内插提示卡片 + "Run install-vmnet-helper.sh" 按钮 (NSWorkspace 开 Terminal)
-  - EditConfigDialog 同步加网络模式可改
-- **关联**: 之前 D2 时记为 E3b, 推迟到 GUI 真有 bridged 入口时一起做
-- **工作量**: ~300 行 (UI + sudoers 检测 helper)
-
-### M-2 · GUI 数据盘 add/remove + 扩容
-- **现状**: CLI 有 `hvm-cli disk add/grow/list/delete`; GUI 详情面板没暴露
-- **要做**: VM 详情面板加 Disks 段, 列表 + 加按钮 + 大小调整
-- **工作量**: ~250 行
-
 ### M-3 · GUI Snapshot 操作
 - **现状**: CLI 有 `hvm-cli snapshot create/list/restore/delete`; GUI 半成品
 - **要做**: 详情面板 Snapshots 段, 列表 + 创建 dialog (已有 SnapshotCreateDialog 骨架) + 还原确认
 - **工作量**: ~200 行
-
-### M-4 · QEMU 后端的 GUI 列表 thumbnail
-- **现状**: VZ 路径有 `ThumbnailCache` (`ScreenCapture` 抓离屏 window); QEMU 路径没接, 缩略图为空
-- **要做**: 用 `QemuScreenshot` 定期抓 → 写到 `bundle/meta/thumbnail.png` (与 VZ 路径同位置)
-- **工作量**: ~150 行
 
 ---
 
@@ -166,6 +128,11 @@
 
 ## ✅ 最近完成 (供历史追溯, 滚动清理)
 
+- (2026-04-26) **M-1**: NetworkMode 加 .shared (跨 HVMBundle/HVMNet/HVMQemu/CLI 同步); GUI CreateVMDialog 加 Engine 选择器 (Linux 专用) + Network 段 (NAT/Bridged/Shared) + 接口枚举 + sudoers 检测 + osascript+复制 helper; EditConfigDialog 同步加 Network 编辑; install-vmnet-helper.sh 打包入 .app
+- (2026-04-26) **M-2**: GUI Disks section 列表 + DiskAddDialog / DiskResizeDialog + 数据盘 delete 走 ConfirmPresenter
+- (2026-04-26) **M-4**: QEMU host 进程加 thumbnail 10s 定时器 (与 VZ 同周期); HVMBundle 抽 ThumbnailWriter atomic 写盘 helper, VZ 与 QEMU 路径共用
+- (2026-04-26) **bug fix**: GUI 启动 QEMU VM 走外部进程 (spawn HVM 自身 --host-mode-bundle); stop/kill 通过 IPC client fallback (修「VZ 后端不支持 windows」错误)
+- (2026-04-26) **S 系列**: docs/DEBUG_PROBE.md 加 QEMU 后端附注 (S-2); README 加 socket_vmnet bridged 使用 (S-3); Makefile 加 `make xed` (S-4); S-1 代码已就位, 实测合并到 U-3
 - (2026-04-26) **G 系列**: VZ/QEMU 共用 helper (BootPhaseClassifier / OCRTextSearch / GuestOSType.defaultFramebufferSize)
 - (2026-04-26) **F 系列**: QEMU dbg.* 串口通道 (boot_progress / console.read / console.write)
 - (2026-04-26) **E4 系列**: QEMU dbg.* 截屏 + 输入 (screenshot/status/ocr/find_text/key/mouse)
@@ -177,4 +144,4 @@
 
 ---
 
-**最后更新**: 2026-04-26
+**最后更新**: 2026-04-26 (M-1 / M-2 / M-4 + GUI QEMU 启动派发 bug fix 完成; 剩 M-3 / L 系列 / Polish)

@@ -33,6 +33,12 @@ struct DialogOverlay: View {
             if let snapItem = model.snapshotCreateItem {
                 SnapshotCreateDialog(model: model, errors: errors, item: snapItem)
             }
+            if let diskAdd = model.diskAddItem {
+                DiskAddDialog(model: model, errors: errors, item: diskAdd)
+            }
+            if let resize = model.diskResizeRequest {
+                DiskResizeDialog(model: model, errors: errors, request: resize)
+            }
             ErrorDialogOverlay(presenter: errors)
             ConfirmDialogOverlay(presenter: confirms)
         }
@@ -44,6 +50,8 @@ struct DialogOverlay: View {
             model.ipswCatalogPicker != nil ||
             model.editConfigItem != nil ||
             model.snapshotCreateItem != nil ||
+            model.diskAddItem != nil ||
+            model.diskResizeRequest != nil ||
             errors.current != nil ||
             confirms.current != nil
         )

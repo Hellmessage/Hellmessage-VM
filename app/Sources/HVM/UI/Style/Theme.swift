@@ -94,6 +94,66 @@ public struct LabelText: View {
     }
 }
 
+/// 网络模式等横向分段: 选中用 `bgSelected` + 青绿描边与字色, 避免整块高亮 contrast 过硬
+public struct HVMNetModeSegment: View {
+    public let label: String
+    public let selected: Bool
+    public let disabled: Bool
+
+    public init(_ label: String, selected: Bool, disabled: Bool = false) {
+        self.label = label
+        self.selected = selected
+        self.disabled = disabled
+    }
+
+    public var body: some View {
+        Text(label)
+            .font(.system(size: 12, weight: .medium))
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .padding(.horizontal, HVMSpace.sm)
+            .foregroundStyle(disabled
+                ? HVMColor.textTertiary
+                : (selected ? HVMColor.accent : HVMColor.textSecondary))
+            .background(
+                RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
+                    .fill(selected ? HVMColor.bgSelected : HVMColor.bgBase)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
+                    .stroke(selected ? HVMColor.borderAccent : HVMColor.border, lineWidth: 1)
+            )
+            .opacity(disabled ? 0.45 : 1.0)
+    }
+}
+
+/// 与 `TextField(roundedBorder)` 同宽的 menu 形 Picker 外框, 右缘与整表对齐
+public struct HVMFormMenuField<Content: View>: View {
+    private let content: () -> Content
+
+    public init(@ViewBuilder content: @escaping () -> Content) {
+        self.content = content
+    }
+
+    public var body: some View {
+        content()
+            .font(HVMFont.body)
+            .tint(HVMColor.textPrimary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, HVMSpace.md)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
+                    .fill(HVMColor.bgCardHi)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: HVMRadius.sm, style: .continuous)
+                    .stroke(HVMColor.border, lineWidth: 1)
+            )
+    }
+}
+
 /// 脉冲 running 点
 public struct PulseDot: View {
     let color: Color

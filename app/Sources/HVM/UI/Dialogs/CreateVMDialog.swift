@@ -28,6 +28,43 @@ struct CreateVMDialog: View {
     /// 进入向导时探测一次 QEMU 后端是否就绪 (third_party/qemu 或 .app/Contents/Resources/QEMU);
     /// 不可用时 Windows 按钮 disabled, 给清晰的"先 make qemu"提示
     @State private var qemuBackendAvailable: Bool = false
+    /// Linux 专用: 引擎选择 (macOS=vz / Windows=qemu 强制, 不暴露)
+    @State private var linuxEngine: Engine = .vz
+    /// 网络模式 (NAT / Bridged / Shared); .bridged/.shared 仅 effectiveEngine == .qemu 可选
+    @State private var networkChoice: NetworkChoice = .nat
+    /// bridged 模式选定接口 (默认空字符串, picker 渲染时初始化)
+    @State private var bridgedInterface: String = ""
+    /// host 上检测到的可桥接接口 (en0, en1, ...). 选 .bridged 时刷新一次
+    @State private var availableInterfaces: [VmnetSetupHelper.InterfaceInfo] = []
+    /// 当前 daemon 是否就绪 (按选中模式 + 选中接口); onAppear / 模式切换 / 接口切换重新探测
+    @State private var daemonReady: Bool = false
+    /// osascript 引导失败时返回的命令字符串, 显示在卡片里供用户复制
+    @State private var helperFallbackCommand: String? = nil
+
+    private enum NetworkChoice: String, CaseIterable, Hashable {
+        case nat, bridged, shared
+        var label: String {
+            switch self {
+            case .nat: return "NAT"
+            case .bridged: return "Bridged"
+            case .shared: return "Shared"
+            }
+        }
+    }
+
+    /// 当前实际生效的 engine. macOS 强制 vz, windows 强制 qemu, linux 跟随用户选择
+    private var effectiveEngine: Engine {
+        switch guestOS {
+        case .macOS:   return .vz
+        case .windows: return .qemu
+        case .linux:   return linuxEngine
+        }
+    }
+
+    /// .bridged / .shared 是否可选: 仅 QEMU 后端 (socket_vmnet sidecar)
+    private var vmnetModesEnabled: Bool {
+        effectiveEngine == .qemu
+    }
 
     /// 装机字段是否合法 (按 OS 分支)
     private var installerPathValid: Bool {
@@ -60,8 +97,26 @@ struct CreateVMDialog: View {
         .onAppear {
             reloadCache()
             qemuBackendAvailable = (try? QemuPaths.resolveRoot()) != nil
+            availableInterfaces = VmnetSetupHelper.listInterfaces()
+            if bridgedInterface.isEmpty {
+                bridgedInterface = availableInterfaces.first?.name ?? ""
+            }
+            refreshDaemonReady()
         }
-        .onChange(of: guestOS) { _, _ in reloadCache() }
+        .onChange(of: guestOS) { _, newOS in
+            reloadCache()
+            if newOS != .linux { linuxEngine = .vz }
+            if !vmnetModesEnabled, networkChoice != .nat {
+                networkChoice = .nat
+            }
+        }
+        .onChange(of: linuxEngine) { _, _ in
+            if !vmnetModesEnabled, networkChoice != .nat {
+                networkChoice = .nat
+            }
+        }
+        .onChange(of: networkChoice) { _, _ in refreshDaemonReady() }
+        .onChange(of: bridgedInterface) { _, _ in refreshDaemonReady() }
         // banner 完成态消失也意味着 cache 可能新增, 跟着刷
         .onChange(of: model.ipswFetchState == nil) { _, _ in reloadCache() }
     }
@@ -126,6 +181,27 @@ struct CreateVMDialog: View {
                 }
             }
 
+            // Engine: Linux 时显示选项 (VZ / QEMU); macOS / Windows 锁死
+            if guestOS == .linux {
+                field("Engine") {
+                    HStack(spacing: HVMSpace.sm) {
+                        Button { linuxEngine = .vz } label: {
+                            osChip("VZ", selected: linuxEngine == .vz)
+                        }
+                        .buttonStyle(.plain)
+                        Button { linuxEngine = .qemu } label: {
+                            osChip("QEMU", selected: linuxEngine == .qemu, disabled: !qemuBackendAvailable)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!qemuBackendAvailable)
+                        .help(qemuBackendAvailable
+                              ? "QEMU 后端: 支持 socket_vmnet 桥接/共享网络"
+                              : "QEMU 暂不可选 — 需先 make qemu (或 make build-all)")
+                        Spacer()
+                    }
+                }
+            }
+
             // CPU / Memory / Disk 三列
             HStack(spacing: HVMSpace.md) {
                 field("CPU") {
@@ -138,6 +214,8 @@ struct CreateVMDialog: View {
                     stepperRow(unit: "GB", binding: $diskGiB, range: 8...2048, step: 8)
                 }
             }
+
+            networkSection
 
             // 装机源: Linux/Windows 走 ISO, macOS 走 IPSW
             switch guestOS {
@@ -205,6 +283,145 @@ struct CreateVMDialog: View {
         VStack(alignment: .leading, spacing: HVMSpace.xs) {
             LabelText(title)
             content()
+        }
+    }
+
+    /// 网络段: NAT 任意 engine; bridged/shared 仅 QEMU 后端 (走 socket_vmnet 系统级 daemon).
+    /// 选 bridged 时下挂接口 picker; 选 bridged/shared 且对应 daemon 未跑时显示提示卡片.
+    @ViewBuilder
+    private var networkSection: some View {
+        field("Network") {
+            VStack(alignment: .leading, spacing: HVMSpace.md) {
+                HStack(spacing: HVMSpace.sm) {
+                    ForEach(NetworkChoice.allCases, id: \.self) { choice in
+                        let disabled = (choice != .nat) && !vmnetModesEnabled
+                        Button { networkChoice = choice } label: {
+                            HVMNetModeSegment(choice.label, selected: networkChoice == choice, disabled: disabled)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(disabled)
+                        .frame(maxWidth: .infinity)
+                        .help(networkHelp(for: choice))
+                    }
+                }
+                if !vmnetModesEnabled {
+                    Text("// Bridged / Shared 仅 QEMU 后端可选 (VZ bridged 等 Apple entitlement 审批)")
+                        .font(HVMFont.caption)
+                        .foregroundStyle(HVMColor.textTertiary)
+                }
+                if networkChoice == .bridged {
+                    bridgedInterfacePicker
+                }
+                if networkChoice == .bridged || networkChoice == .shared {
+                    if !daemonReady {
+                        daemonHelperCard
+                    }
+                }
+            }
+        }
+    }
+
+    private func networkHelp(for c: NetworkChoice) -> String {
+        switch c {
+        case .nat: return "QEMU SLIRP / VZ NAT: 默认网络, guest 可出网, host 与 guest 单向"
+        case .bridged: return vmnetModesEnabled
+            ? "socket_vmnet bridged: guest IP 落在物理 LAN 段, 跨机可达"
+            : "需 QEMU 后端"
+        case .shared: return vmnetModesEnabled
+            ? "socket_vmnet shared: NAT 内网, host 与 guest 互通, 多 guest 互通"
+            : "需 QEMU 后端"
+        }
+    }
+
+    @ViewBuilder
+    private var bridgedInterfacePicker: some View {
+        if availableInterfaces.isEmpty {
+            Text("// 未检测到可用接口 (要求 IFF_UP & IFF_RUNNING + 非 lo / utun / awdl)")
+                .font(HVMFont.caption)
+                .foregroundStyle(HVMColor.textTertiary)
+        } else {
+            HVMFormMenuField {
+                Picker("", selection: $bridgedInterface) {
+                    ForEach(availableInterfaces, id: \.name) { ifc in
+                        Text(ifc.displayName).tag(ifc.name)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+            }
+        }
+    }
+
+    /// 当前网络模式对应的 daemon 是否就绪. networkChoice / bridgedInterface 改变时刷新.
+    private func refreshDaemonReady() {
+        switch networkChoice {
+        case .nat:     daemonReady = true   // NAT 不需 daemon
+        case .bridged: daemonReady = bridgedInterface.isEmpty
+            ? false
+            : VmnetSetupHelper.daemonReady(.bridged(interface: bridgedInterface))
+        case .shared:  daemonReady = VmnetSetupHelper.daemonReady(.shared)
+        }
+    }
+
+    /// daemon 未跑时的提示卡片. 主按钮跑 osascript→Terminal sudo bash <script> [iface];
+    /// 失败 fallback 到命令字符串复制.
+    @ViewBuilder
+    private var daemonHelperCard: some View {
+        let modeLabel = (networkChoice == .bridged) ? "bridged(\(bridgedInterface))" : "shared"
+        VStack(alignment: .leading, spacing: HVMSpace.xs) {
+            Text("⚠ socket_vmnet \(modeLabel) daemon 未跑")
+                .font(HVMFont.caption)
+                .foregroundStyle(HVMColor.textPrimary)
+            Text("一次 sudo 装 launchd daemon, 之后所有 VM 启动 / 关闭 不再 sudo. 详见 scripts/install-vmnet-helper.sh.")
+                .font(HVMFont.small)
+                .foregroundStyle(HVMColor.textTertiary)
+            HStack(spacing: HVMSpace.sm) {
+                Button("装 daemon") { runDaemonHelper() }
+                    .buttonStyle(GhostButtonStyle())
+                if let cmd = helperFallbackCommand {
+                    Button("复制命令") {
+                        VmnetSetupHelper.copyToClipboard(cmd)
+                    }
+                    .buttonStyle(GhostButtonStyle())
+                }
+                Button("已就绪") { refreshDaemonReady() }
+                    .buttonStyle(GhostButtonStyle())
+                    .help("跑完脚本后点这里重新探测对应 socket")
+                Spacer()
+            }
+            if let cmd = helperFallbackCommand {
+                Text(cmd)
+                    .font(HVMFont.small.monospaced())
+                    .foregroundStyle(HVMColor.textSecondary)
+                    .textSelection(.enabled)
+                    .padding(HVMSpace.xs)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: HVMRadius.sm).fill(HVMColor.bgBase))
+            }
+        }
+        .padding(HVMSpace.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: HVMRadius.sm).fill(HVMColor.bgCard))
+        .overlay(RoundedRectangle(cornerRadius: HVMRadius.sm).stroke(HVMColor.border, lineWidth: 1))
+    }
+
+    private func runDaemonHelper() {
+        // bridged 时把接口名作为脚本参数传 (脚本约定: 不带参 → 装 shared+host; 带 ifaceName → 加桥接)
+        let extra: [String]
+        if networkChoice == .bridged, !bridgedInterface.isEmpty {
+            extra = [bridgedInterface]
+        } else {
+            extra = []
+        }
+        switch VmnetSetupHelper.runInstallScript(extraArgs: extra) {
+        case .launched:
+            helperFallbackCommand = nil
+        case .fallbackCommand(let cmd):
+            helperFallbackCommand = cmd
+        case .scriptMissing:
+            errors.present(HVMError.backend(.vzInternal(
+                description: "未找到 install-vmnet-helper.sh; 请重新 make build (脚本会被打包入 .app)"
+            )))
         }
     }
 
@@ -395,21 +612,31 @@ struct CreateVMDialog: View {
                 }
             }
 
-            // Windows 强制 QEMU 后端 + WindowsSpec 默认开 SecureBoot + TPM (Win11 必需)
-            let engineValue: Engine
+            // engine: Windows 强制 qemu, macOS 强制 vz, Linux 跟随 linuxEngine 选择
+            // network: NAT 任意 engine; bridged/shared 仅 effectiveEngine == .qemu (走 socket_vmnet sidecar)
+            let engineValue: Engine = effectiveEngine
             let macOSSpec: MacOSSpec?
             let linuxSpec: LinuxSpec?
             let windowsSpec: WindowsSpec?
             switch guestOS {
             case .linux:
-                engineValue = .vz; macOSSpec = nil; linuxSpec = LinuxSpec(); windowsSpec = nil
+                macOSSpec = nil; linuxSpec = LinuxSpec(); windowsSpec = nil
             case .macOS:
-                engineValue = .vz
                 macOSSpec = MacOSSpec(ipsw: ipswPath, autoInstalled: false)
                 linuxSpec = nil; windowsSpec = nil
             case .windows:
-                engineValue = .qemu; macOSSpec = nil; linuxSpec = nil
-                windowsSpec = WindowsSpec()
+                macOSSpec = nil; linuxSpec = nil; windowsSpec = WindowsSpec()
+            }
+
+            let netMode: NetworkMode
+            switch networkChoice {
+            case .nat: netMode = .nat
+            case .bridged:
+                guard !bridgedInterface.isEmpty else {
+                    throw HVMError.config(.missingField(name: "network bridged 接口未选"))
+                }
+                netMode = .bridged(interface: bridgedInterface)
+            case .shared: netMode = .shared
             }
 
             let config = VMConfig(
@@ -419,7 +646,7 @@ struct CreateVMDialog: View {
                 cpuCount: cpu,
                 memoryMiB: UInt64(memoryGiB) * 1024,
                 disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: UInt64(diskGiB))],
-                networks: [NetworkSpec(mode: .nat, macAddress: MACAddressGenerator.random())],
+                networks: [NetworkSpec(mode: netMode, macAddress: MACAddressGenerator.random())],
                 installerISO: guestOS == .macOS ? nil : isoPath,
                 bootFromDiskOnly: false,
                 macOS: macOSSpec,
@@ -438,6 +665,21 @@ struct CreateVMDialog: View {
                 at: BundleLayout.mainDiskURL(bundleURL),
                 sizeGiB: UInt64(diskGiB)
             )
+
+            // Win VM (QEMU 双 pflash) 必须 RW NVRAM vars 文件; 从 EDK2 vars 模板拷贝.
+            // 模板由 make qemu 下载到 .app/Resources/QEMU/share/qemu/edk2-aarch64-vars.fd; 缺则 host 启动时兜底再拷.
+            if guestOS == .windows, let qemuRoot = try? QemuPaths.resolveRoot() {
+                let nvramURL = BundleLayout.nvramURL(bundleURL)
+                let varsTemplate = qemuRoot.appendingPathComponent("share/qemu/edk2-aarch64-vars.fd")
+                if FileManager.default.fileExists(atPath: varsTemplate.path),
+                   !FileManager.default.fileExists(atPath: nvramURL.path) {
+                    try FileManager.default.createDirectory(
+                        at: nvramURL.deletingLastPathComponent(),
+                        withIntermediateDirectories: true
+                    )
+                    try FileManager.default.copyItem(at: varsTemplate, to: nvramURL)
+                }
+            }
             model.showCreateWizard = false
             model.refreshList()
             model.selectedID = config.id

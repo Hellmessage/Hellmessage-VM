@@ -9,8 +9,12 @@ set -euo pipefail
 # ---- 锁定参数 (修改必须同步 docs/QEMU_INTEGRATION.md 与 CLAUDE.md) ----
 QEMU_TAG="v10.2.0"
 QEMU_REPO="https://gitlab.com/qemu-project/qemu.git"
-# Linaro 官方预编译 EDK2 (aarch64 UEFI), Win11/Linux arm64 启动必需
-EDK2_FIRMWARE_URL="https://releases.linaro.org/components/kernel/uefi-linaro/latest/release/qemu64/QEMU_EFI.fd"
+# EDK2 aarch64 UEFI 预编译固件 (Win11 / Linux arm64 启动必需)
+# code.fd 是 RO firmware; vars.fd 是 RW NVRAM vars 模板 (Win11 SecureBoot 必需).
+# 来源说明: 旧用 Linaro releases, 但 Linaro 仅发 QEMU_EFI.fd 不发 QEMU_VARS.fd, 切到 retrage edk2-nightly
+# (github.io 公开镜像, RELEASEAARCH64_* 双文件 build 一致, 不匹配会导致 SecureBoot/Boot 异常).
+EDK2_FIRMWARE_URL="https://retrage.github.io/edk2-nightly/bin/RELEASEAARCH64_QEMU_EFI.fd"
+EDK2_VARS_URL="https://retrage.github.io/edk2-nightly/bin/RELEASEAARCH64_QEMU_VARS.fd"
 
 # brew 包列表 (锁定):
 #   - meson/ninja/pkgconf/glib/pixman/libslirp/dtc/capstone — QEMU 编译依赖
@@ -185,14 +189,23 @@ build_qemu() {
 
 # ---- 7. EDK2 firmware (Win11/Linux arm64 UEFI 引导必需) ----
 fetch_edk2_firmware() {
-    step "下载 EDK2 aarch64 firmware (QEMU_EFI.fd, Linaro 官方预编译)"
+    step "下载 EDK2 aarch64 firmware (RELEASEAARCH64_QEMU_{EFI,VARS}.fd, retrage edk2-nightly)"
     local fw_dir="$STAGING_DIR/share/qemu"
     local fw_dst="$fw_dir/edk2-aarch64-code.fd"
+    local vars_dst="$fw_dir/edk2-aarch64-vars.fd"
     mkdir -p "$fw_dir"
     curl -fL --retry 3 -o "$fw_dst.tmp" "$EDK2_FIRMWARE_URL" \
         || err "EDK2 firmware 下载失败: $EDK2_FIRMWARE_URL"
     mv "$fw_dst.tmp" "$fw_dst"
-    ok "EDK2 firmware: $fw_dst"
+    curl -fL --retry 3 -o "$vars_dst.tmp" "$EDK2_VARS_URL" \
+        || err "EDK2 vars 下载失败: $EDK2_VARS_URL"
+    mv "$vars_dst.tmp" "$vars_dst"
+    # QEMU virt 机器 pflash device 固定 64MB; 必须 padding, 否则启动报
+    # "device requires 67108864 bytes, pflash0 block backend provides X bytes"
+    truncate -s 64M "$fw_dst"
+    truncate -s 64M "$vars_dst"
+    ok "EDK2 firmware: $fw_dst (64MB)"
+    ok "EDK2 vars 模板: $vars_dst (64MB; 创建 Win VM 时拷贝到 bundle/nvram/efi-vars.fd)"
 }
 
 # ---- 8. 裁剪 share (删非 aarch64 用不上的固件) ----

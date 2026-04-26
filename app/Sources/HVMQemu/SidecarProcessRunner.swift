@@ -1,10 +1,11 @@
 // HVMQemu/SidecarProcessRunner.swift
-// 公共 sidecar 子进程编排. QemuProcessRunner / SwtpmRunner / SocketVmnetRunner 都是
+// 公共 sidecar 子进程编排. QemuProcessRunner / SwtpmRunner 都是
 // 它的 thin wrapper (保留各自 public API, 内部转发到这里).
 //
-// 抽出原因: 三个 Runner 状态机 / lifecycle / stderr 落盘 / observer 几乎逐字相同 (>75%
-// 复制); bug 修一处忘另两处的风险高. 抽到一个 class 后, 通过 Config 控制差异化行为
-// (是否走 sudo, 是否带 socket-ready poll), 三种业务都跑同一份代码.
+// 抽出原因: 多个 Runner 状态机 / lifecycle / stderr 落盘 / observer 几乎逐字相同 (>75%
+// 复制); bug 修一处忘另一处的风险高. 抽到一个 class 后, 通过 Config 控制差异化行为
+// (是否走 sudo, 是否带 socket-ready poll), 不同业务都跑同一份代码.
+// 注: socket_vmnet 改为系统级 launchd daemon 后已不再有 SocketVmnetRunner.
 //
 // 状态机: .idle → .running(pid) → .exited(code) | .crashed(signal)
 
@@ -97,7 +98,7 @@ public final class SidecarProcessRunner: @unchecked Sendable {
                 fm.createFile(atPath: logURL.path, contents: nil)
             }
             stderrFileHandle = try? FileHandle(forWritingTo: logURL)
-            try? stderrFileHandle?.seekToEnd()
+            _ = try? stderrFileHandle?.seekToEnd()
         }
 
         // sudo 包装 vs 直接 exec

@@ -34,6 +34,7 @@ public enum HVMErrorCode: String, Sendable {
     case backendBridgedNotEntitled = "backend.bridged_not_entitled"
     case backendIPSWInvalid     = "backend.ipsw_invalid"
     case backendVZInternal      = "backend.vz_internal"
+    case backendQemuHostStartupTimeout = "backend.qemu_host_startup_timeout"
 
     // install.*
     case installIPSWNotFound    = "install.ipsw_not_found"

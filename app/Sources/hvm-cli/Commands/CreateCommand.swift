@@ -173,16 +173,17 @@ struct CreateCommand: AsyncParsableCommand {
 
     private func parseNetwork(_ raw: String) throws -> NetworkMode {
         if raw == "nat" { return .nat }
+        if raw == "shared" { return .shared }
         if raw.hasPrefix("bridged:") {
             let iface = String(raw.dropFirst("bridged:".count))
             guard !iface.isEmpty else {
                 throw HVMError.config(.invalidEnum(field: "network", raw: raw,
-                                                   allowed: ["nat", "bridged:<iface>"]))
+                                                   allowed: ["nat", "shared", "bridged:<iface>"]))
             }
             return .bridged(interface: iface)
         }
         throw HVMError.config(.invalidEnum(field: "network", raw: raw,
-                                           allowed: ["nat", "bridged:<iface>"]))
+                                           allowed: ["nat", "shared", "bridged:<iface>"]))
     }
 
     private func resolveMAC(explicit: String?) throws -> String {

@@ -57,6 +57,8 @@ public enum BackendError: Error, Sendable {
     case ipswInvalid(reason: String)
     case invalidTransition(from: String, to: String)
     case vzInternal(description: String)
+    /// GUI 已拉起 `--host-mode-bundle` 子进程, 在时限内未观测到其持有 BundleLock (通常表示子进程已退出或极慢)
+    case qemuHostStartupTimeout(waitedSeconds: Int, logPath: String)
 }
 
 // MARK: - Install
@@ -276,6 +278,11 @@ public extension BackendError {
             return .init(code: HVMErrorCode.backendVZInternal.rawValue,
                          message: "VZ 内部错误",
                          details: ["description": d])
+        case .qemuHostStartupTimeout(let sec, let logPath):
+            return .init(code: HVMErrorCode.backendQemuHostStartupTimeout.rawValue,
+                         message: "QEMU 宿主进程未在规定时间内就绪",
+                         details: ["waitedSeconds": "\(sec)", "log": logPath],
+                         hint: "请查看 log 中 host-*.log; Bridged/Shared 时确认 socket_vmnet 与 sudoers 已正确配置, 并排除 bundle 正被其他进程占用。")
         }
     }
 }

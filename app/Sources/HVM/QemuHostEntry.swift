@@ -58,36 +58,47 @@ public enum QemuHostEntry {
                 fputs("HVMHost(qemu): ⚠ virtio-win.iso 未缓存, Win 装机将看不到 virtio-blk 盘\n", stderr)
                 fputs("  GUI 创建向导会自动下载; CLI 创建后请用 GUI Cache → Download virtio-win\n", stderr)
             }
+            // 2.1 NVRAM (Win 双 pflash 必需 RW vars 文件); 不存在则从 EDK2 vars 模板初始化一次.
+            // 老 bundle (本特性前创建) 没初始化 nvram, 这里兜底; 新 bundle 创建时 CreateVMDialog 也会预置.
+            let nvramURL = BundleLayout.nvramURL(bundleURL)
+            if !FileManager.default.fileExists(atPath: nvramURL.path) {
+                let varsTemplate = qemuRoot.appendingPathComponent("share/qemu/edk2-aarch64-vars.fd")
+                guard FileManager.default.fileExists(atPath: varsTemplate.path) else {
+                    fputs("HVMHost(qemu): ✗ 缺 EDK2 vars 模板: \(varsTemplate.path); 请重新 make qemu\n", stderr)
+                    lock.release()
+                    exit(24)
+                }
+                do {
+                    try FileManager.default.createDirectory(
+                        at: nvramURL.deletingLastPathComponent(),
+                        withIntermediateDirectories: true
+                    )
+                    try FileManager.default.copyItem(at: varsTemplate, to: nvramURL)
+                    fputs("HVMHost(qemu): ✔ NVRAM 已初始化 (从 EDK2 vars 模板拷贝): \(nvramURL.path)\n", stderr)
+                } catch {
+                    fputs("HVMHost(qemu): ✗ NVRAM 初始化失败: \(error)\n", stderr)
+                    lock.release()
+                    exit(25)
+                }
+            }
         }
 
         // 3. swtpm sidecar (windows + tpmEnabled). 必须在 QEMU 启动前 listen, 否则 QEMU 连不上.
         // helper 失败路径直接 exit() (内部已 release lock); 成功返非 nil tuple.
+        // 立即注册到全局 state, 任何 early-exit 都通过 tearDown 回收 (避免孤儿 swtpm 占 NVRAM lock)
         var swtpmSockPath: String? = nil
-        var swtpmRunner: SwtpmRunner? = nil
         if config.guestOS == .windows, config.windows?.tpmEnabled == true {
             let (path, runner) = startSwtpmSidecar(config: config, bundleURL: bundleURL, lock: lock)
             swtpmSockPath = path
-            swtpmRunner = runner
+            QemuHostState.shared.lock = lock
+            QemuHostState.shared.bundleURL = bundleURL
+            QemuHostState.shared.swtpmRunner = runner
+            QemuHostState.shared.swtpmSocketPath = path
         }
 
-        // 3.5 socket_vmnet sidecar (任一 networks[i].mode == .bridged 时).
-        // 一期: 仅起一个 socket_vmnet, 第一个 bridged 接入它; 多 bridged 网络后续支持.
-        // sudoers NOPASSWD 未配则 helper 内 fputs + exit.
-        var socketVmnetPath: String? = nil
-        var socketVmnetRunner: SocketVmnetRunner? = nil
-        if let firstBridged = config.networks.first(where: {
-            if case .bridged = $0.mode { return true } else { return false }
-        }) {
-            if case .bridged(let iface) = firstBridged.mode {
-                let (path, runner) = startSocketVmnetSidecar(
-                    config: config, bundleURL: bundleURL,
-                    lock: lock, swtpmRunner: swtpmRunner,
-                    bridgedInterface: iface
-                )
-                socketVmnetPath = path
-                socketVmnetRunner = runner
-            }
-        }
+        // 3.5 socket_vmnet daemon (新方案): bridged / shared 网络由系统级 launchd daemon 提供
+        // (scripts/install-vmnet-helper.sh 安装), QEMU -netdev stream 直接连 /var/run/socket_vmnet.* .
+        // 不再 per-VM spawn sidecar; daemon 缺失由 QemuArgsBuilder 抛 configInvalid 提示安装路径.
 
         // 3.6 console socket 路径 (与 QMP / vmnet socket 同 runDir).
         // QemuConsoleBridge 在 QEMU 启动后 connect (见 6c).
@@ -102,21 +113,13 @@ public enum QemuHostEntry {
                 qemuRoot: qemuRoot, qmpSocketPath: qmpSocketURL.path,
                 virtioWinISOPath: virtioWinPath,
                 swtpmSocketPath: swtpmSockPath,
-                socketVmnetPath: socketVmnetPath,
                 consoleSocketPath: consoleSocketURL.path
             )
             args = try QemuArgsBuilder.build(inputs)
         } catch {
             fputs("HVMHost(qemu): argv 构造失败: \(error)\n", stderr)
-            swtpmRunner?.terminate()
-            socketVmnetRunner?.forceKill()
-            lock.release()
-            exit(21)
+            QemuHostState.shared.tearDown(exitCode: 21)
         }
-        QemuHostState.shared.swtpmRunner = swtpmRunner
-        QemuHostState.shared.swtpmSocketPath = swtpmSockPath
-        QemuHostState.shared.socketVmnetRunner = socketVmnetRunner
-        QemuHostState.shared.socketVmnetSocketPath = socketVmnetPath
         QemuHostState.shared.consoleSocketURL = consoleSocketURL
 
         // 3. stderr 落 bundle/logs/qemu-stderr.log (truncate, 不累积老错误)
@@ -130,8 +133,7 @@ public enum QemuHostEntry {
             try runner.start()
         } catch {
             fputs("HVMHost(qemu): QEMU 启动失败: \(error)\n", stderr)
-            lock.release()
-            exit(22)
+            QemuHostState.shared.tearDown(exitCode: 22)
         }
         fputs("HVMHost(qemu): QEMU 已启动 (state=\(runner.state)) bundle=\(bundleURL.lastPathComponent)\n", stderr)
 
@@ -156,13 +158,13 @@ public enum QemuHostEntry {
             guard let client else {
                 fputs("HVMHost(qemu): QMP 连接失败 (15s 超时); 查看 \(stderrLog.path)\n", stderr)
                 runner.forceKill()
-                runner.waitUntilExit()
-                try? FileManager.default.removeItem(at: qmpSocketURL)
-                lock.release()
-                exit(23)
+                QemuHostState.shared.tearDown(exitCode: 23)
             }
             QemuHostState.shared.qmpClient = client
             fputs("HVMHost(qemu): QMP 已连接\n", stderr)
+
+            // 6.1 thumbnail 抓帧定时器 (M-4): 与 VZ 路径周期一致, 抓 → 写 bundle/meta/thumbnail.png
+            QemuHostState.shared.startThumbnailTimer()
 
             // 6.5 console bridge: poll-wait socket 文件 + connect; 失败仅警告, 不阻塞 VM 启动
             let bridge = QemuConsoleBridge(
@@ -238,15 +240,11 @@ public enum QemuHostEntry {
         } catch let e as HVMError {
             fputs("HVMHost(qemu): IPC server 启动失败: \(e.userFacing.message)\n", stderr)
             runner.forceKill()
-            runner.waitUntilExit()
-            lock.release()
-            exit(12)
+            QemuHostState.shared.tearDown(exitCode: 12)
         } catch {
             fputs("HVMHost(qemu): IPC server 启动失败: \(error)\n", stderr)
             runner.forceKill()
-            runner.waitUntilExit()
-            lock.release()
-            exit(12)
+            QemuHostState.shared.tearDown(exitCode: 12)
         }
 
         fputs("HVMHost(qemu): 就绪 (pid=\(getpid()), qmp=\(qmpSocketURL.lastPathComponent))\n", stderr)
@@ -336,105 +334,6 @@ public enum QemuHostEntry {
         return (sockPath, runner)
     }
 
-    /// 启动 socket_vmnet sidecar (vmnet bridged/shared/host 走非 root 桥接).
-    /// sudo -n 拉起; sudoers NOPASSWD 未配则 sudo 立即非 0 退, helper 内打详细诊断 + exit.
-    /// 失败路径自身 cleanup (含先启的 swtpm) + exit (Never).
-    @MainActor
-    private static func startSocketVmnetSidecar(
-        config: VMConfig,
-        bundleURL: URL,
-        lock: BundleLock,
-        swtpmRunner: SwtpmRunner?,
-        bridgedInterface: String
-    ) -> (String, SocketVmnetRunner) {
-        // 1. 定位
-        let bin: URL
-        do {
-            bin = try SocketVmnetPaths.locate()
-        } catch {
-            fputs("HVMHost(qemu): ✗ socket_vmnet 未找到: \(error)\n", stderr)
-            fputs("  bridged 网络需要 socket_vmnet. 解决:\n", stderr)
-            fputs("    a) make qemu (会从 Homebrew 复制 socket_vmnet 入包)\n", stderr)
-            fputs("    b) brew install socket_vmnet (临时降级)\n", stderr)
-            swtpmRunner?.terminate()
-            lock.release()
-            exit(40)
-        }
-
-        // 2. 路径准备
-        let sockPath = HVMPaths.vmnetSocketPath(for: config.id).path
-        let pidPath = HVMPaths.vmnetPidPath(for: config.id)
-        try? FileManager.default.removeItem(atPath: sockPath)
-        try? FileManager.default.removeItem(at: pidPath)
-
-        // 3. argv 构造
-        let argsList: [String]
-        do {
-            argsList = try SocketVmnetArgsBuilder.build(SocketVmnetArgsBuilder.Inputs(
-                mode: .bridged,
-                socketPath: sockPath,
-                pidFile: pidPath,
-                bridgedInterface: bridgedInterface
-            ))
-        } catch {
-            fputs("HVMHost(qemu): ✗ socket_vmnet argv 构造失败: \(error)\n", stderr)
-            swtpmRunner?.terminate()
-            lock.release()
-            exit(41)
-        }
-
-        // 4. 启动
-        let stderrLog = BundleLayout.logsDir(bundleURL).appendingPathComponent("socket_vmnet-stderr.log")
-        try? FileManager.default.removeItem(at: stderrLog)
-        let runner = SocketVmnetRunner(binary: bin, args: argsList,
-                                       socketPath: sockPath, stderrLog: stderrLog)
-        do {
-            try runner.start()
-        } catch {
-            fputs("HVMHost(qemu): ✗ socket_vmnet 启动失败: \(error)\n", stderr)
-            swtpmRunner?.terminate()
-            lock.release()
-            exit(42)
-        }
-
-        // 5. 阻塞等 socket 就绪 (5s; sudo 失败会让 runner 立即 exited 非 0)
-        let deadline = Date().addingTimeInterval(5)
-        var ready = false
-        while Date() < deadline {
-            switch runner.state {
-            case .exited(let code):
-                fputs("HVMHost(qemu): ✗ socket_vmnet 启动后立即退出 exit=\(code)\n", stderr)
-                if code == 1 {
-                    fputs("  常见原因: sudoers NOPASSWD 未配置. 跑一次 scripts/install-vmnet-helper.sh\n", stderr)
-                }
-                fputs("  详见 \(stderrLog.path)\n", stderr)
-                swtpmRunner?.terminate()
-                lock.release()
-                exit(43)
-            case .crashed(let signal):
-                fputs("HVMHost(qemu): ✗ socket_vmnet 被信号杀 signal=\(signal)\n", stderr)
-                swtpmRunner?.terminate()
-                lock.release()
-                exit(44)
-            default: break
-            }
-            if FileManager.default.fileExists(atPath: sockPath) {
-                ready = true
-                break
-            }
-            usleep(100_000)
-        }
-        if !ready {
-            fputs("HVMHost(qemu): ✗ socket_vmnet socket 5s 未就绪\n", stderr)
-            runner.forceKill()
-            swtpmRunner?.terminate()
-            lock.release()
-            exit(45)
-        }
-        fputs("HVMHost(qemu): socket_vmnet 已就绪 sock=\(sockPath) iface=\(bridgedInterface)\n", stderr)
-        return (sockPath, runner)
-    }
-
     /// QMP 连接重试: bind 与 listen 之间有窗口, 200ms 间隔 backoff;
     /// 若 QEMU 进程提前 exit/crashed (如配置错误立即崩) 不再重试.
     @MainActor
@@ -484,14 +383,13 @@ final class QemuHostState {
     /// swtpm sidecar (仅 windows + tpmEnabled). nil 表示无 TPM
     var swtpmRunner: SwtpmRunner?
     var swtpmSocketPath: String?
-    /// socket_vmnet sidecar (任一 networks[i].mode == .bridged 时). nil 表示纯 NAT
-    var socketVmnetRunner: SocketVmnetRunner?
-    var socketVmnetSocketPath: String?
     /// dbg.status 用: 最近一次截图的 sha256 (用于客户端做"画面变没变"轮询)
     var lastFrameSha256: String?
     /// guest serial console 桥接 (-chardev socket); console.read/write 走它
     var consoleBridge: QemuConsoleBridge?
     var consoleSocketURL: URL?
+    /// VM 列表 thumbnail 抓帧定时器 (M-4): QMP screendump → bundle/meta/thumbnail.png. 与 VZ 路径同周期 10s
+    var thumbnailTimer: Timer?
 
     var statusItem: NSStatusItem?
     var statusMenu: QemuStatusMenuController?
@@ -912,8 +810,30 @@ final class QemuHostState {
         }
     }
 
-    /// 关闭 IPC server / QMP / 进程; 释放 lock; 清 socket; 退主进程
-    func tearDown(exitCode: Int32) {
+    /// 启动 10s 间隔 thumbnail 抓帧 (与 VZ VMSession.startThumbnailTimer 同周期).
+    /// QMP 必须已就绪. 失败仅 NSLog 不影响 VM 主流程.
+    func startThumbnailTimer() {
+        thumbnailTimer?.invalidate()
+        thumbnailTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { _ in
+            Task { @MainActor in
+                guard let client = QemuHostState.shared.qmpClient,
+                      let bundleURL = QemuHostState.shared.bundleURL else { return }
+                do {
+                    let shot = try await QemuScreenshot.capture(
+                        via: client, tempDir: HVMPaths.runDir, maxEdge: 512
+                    )
+                    try ThumbnailWriter.writeAtomic(shot.pngData, to: bundleURL)
+                } catch {
+                    NSLog("HVMHost(qemu): thumbnail capture 失败 \(error)")
+                }
+            }
+        }
+    }
+
+    /// 关闭 IPC server / QMP / 进程; 释放 lock; 清 socket; 退主进程 (永不返回)
+    func tearDown(exitCode: Int32) -> Never {
+        thumbnailTimer?.invalidate()
+        thumbnailTimer = nil
         ipcServer?.stop()
         qmpClient?.close()
         runner?.waitUntilExit()
@@ -922,18 +842,11 @@ final class QemuHostState {
             s.terminate()
             s.waitUntilExit()
         }
-        // socket_vmnet 不会自动退 (没 --terminate equivalent), 主动 SIGTERM + 等
-        if let v = socketVmnetRunner {
-            v.terminate()
-            v.waitUntilExit()
-        }
+        // socket_vmnet 现在是系统级 launchd daemon, 不归本进程生命周期; tearDown 不动它
         if let qmpSocketURL {
             try? FileManager.default.removeItem(at: qmpSocketURL)
         }
         if let p = swtpmSocketPath {
-            try? FileManager.default.removeItem(atPath: p)
-        }
-        if let p = socketVmnetSocketPath {
             try? FileManager.default.removeItem(atPath: p)
         }
         consoleBridge?.close()

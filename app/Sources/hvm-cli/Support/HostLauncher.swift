@@ -43,9 +43,10 @@ public enum HostLauncher {
             ))
         }
 
+        let resolved = bundleURL.resolvingSymlinksInPath().standardizedFileURL
         // 日志目标: bundle/logs/host-YYYY-MM-DD.log
         let fm = FileManager.default
-        let logsDir = bundleURL.appendingPathComponent("logs", isDirectory: true)
+        let logsDir = resolved.appendingPathComponent("logs", isDirectory: true)
         try? fm.createDirectory(at: logsDir, withIntermediateDirectories: true)
         let df = DateFormatter()
         df.dateFormat = "yyyy-MM-dd"
@@ -58,7 +59,7 @@ public enum HostLauncher {
 
         let proc = Process()
         proc.executableURL = binary
-        proc.arguments = ["--host-mode-bundle", bundleURL.path]
+        proc.arguments = ["--host-mode-bundle", resolved.path]
         proc.standardOutput = logHandle
         proc.standardError = logHandle
         // 将子进程放到独立进程组, 确保 hvm-cli 退出后它不被信号连坐

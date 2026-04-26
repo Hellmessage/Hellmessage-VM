@@ -187,6 +187,53 @@ Windows 11 arm64 走 QEMU 后端 (实验性, 需先 `make build-all`):
 
 完整子命令清单见 [docs/CLI.md](docs/CLI.md)。
 
+### 桥接 / 共享网络 (实验性, QEMU 后端)
+
+默认 NAT 网络下 guest 拿不到物理 LAN 段地址, 跨机访问受限。QEMU 后端走 `socket_vmnet` 系统级 daemon
+实现真桥接 / 内网共享, 让 guest IP 落在物理 LAN 段或 host 与 guest 互通的 NAT 段。
+
+一次性安装 (sudo, 之后所有 VM 启动 / 关闭 完全免密):
+
+```bash
+# 装 shared + host (默认; 不带桥接)
+sudo bash scripts/install-vmnet-helper.sh
+
+# 加桥接接口 (en0): 同时装 shared / host / bridged.en0
+sudo bash scripts/install-vmnet-helper.sh en0
+
+# 多桥接 (en0, en1)
+sudo bash scripts/install-vmnet-helper.sh en0 en1
+
+# 状态 / 卸载
+sudo bash scripts/install-vmnet-helper.sh --check
+sudo bash scripts/install-vmnet-helper.sh --uninstall
+```
+
+之后创建 VM:
+
+```bash
+./build/hvm-cli create --name foo --os linux --engine qemu \
+    --cpu 4 --memory 4 --disk 32 \
+    --network bridged:en0 \
+    --iso ~/Downloads/ubuntu-24.04-live-server-arm64.iso
+
+./build/hvm-cli start foo
+# guest 内 IP 在 en0 同段, 跨机 ssh / ping 通
+```
+
+socket_vmnet 由 launchd 以 root 常驻, 监听固定 unix socket:
+
+| 模式 | socket 路径 |
+|---|---|
+| shared  | `/var/run/socket_vmnet` |
+| host    | `/var/run/socket_vmnet.host` |
+| bridged | `/var/run/socket_vmnet.bridged.<iface>` |
+
+QEMU 通过 `-netdev stream,addr.type=unix` 直接连。GUI 创建向导若检测到对应 daemon 未跑会提示一键安装。
+
+> VZ 后端的桥接 (`com.apple.vm.networking` entitlement) 仍在 Apple 审批中, 审批通过前 VZ 路径只能用 NAT。
+> 详见 [docs/NETWORK.md](docs/NETWORK.md)。
+
 ### `hvm-dbg` (调试探针 / AI agent 入口)
 
 ```bash

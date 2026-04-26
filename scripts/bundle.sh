@@ -74,6 +74,14 @@ if [ -f "$ROOT/app/Resources/embedded.provisionprofile" ]; then
     cp "$ROOT/app/Resources/embedded.provisionprofile" "$CONTENTS/embedded.provisionprofile"
 fi
 
+# 4.4 拷贝 install-vmnet-helper.sh 入 Resources/scripts/, 让 GUI 引导按钮可定位.
+#     dev 模式仍可直接走仓库 scripts/, 这是打包后兜底
+mkdir -p "$RESOURCES/scripts"
+if [ -f "$ROOT/scripts/install-vmnet-helper.sh" ]; then
+    cp "$ROOT/scripts/install-vmnet-helper.sh" "$RESOURCES/scripts/install-vmnet-helper.sh"
+    chmod +x "$RESOURCES/scripts/install-vmnet-helper.sh"
+fi
+
 # 4.5 嵌入 QEMU 后端 (软模式: third_party/qemu/ 不存在则跳过, 仍出 .app)
 #     完整发布走 make build-all (会先 make qemu); 此处 make build 不强制要求 QEMU 就绪
 QEMU_VENDOR_DIR="$ROOT/third_party/qemu"

@@ -1,23 +1,30 @@
 #!/usr/bin/env bash
 # scripts/install-vmnet-helper.sh
-# 一次性配置 /etc/sudoers.d/hvm-socket-vmnet, 让 socket_vmnet 走 sudo NOPASSWD.
+# 安装 socket_vmnet 的 launchd daemon, 让 vmnet shared / host / bridged 三种模式
+# 的 unix socket 由 root 自动拉起, HVM 启动 VM 时直接连固定 socket 即可, 不再 per-VM sudo.
 #
-# 背景: macOS vmnet API 必须 root. socket_vmnet 是 Lima 项目的 daemon, 由 root 启,
-#       通过 unix socket 让非 root QEMU 接 vmnet 桥接 / shared 网络.
-#       为避免每次启 VM 弹密码, 一次性配置 sudoers NOPASSWD.
-#
-# 安全考量: sudoers entry 严格绑定具体 socket_vmnet 二进制绝对路径,
-#          只允许 admin 组用户. 移动 .app 后需重新跑本脚本.
+# 架构:
+#   - launchd daemon 以 root 运行 socket_vmnet (vmnet.framework 要求 root)
+#   - HVM 主进程 (普通用户) 通过 -netdev stream 连 /var/run/socket_vmnet*  (普通用户可读写)
+#   - 一次 sudo 装好, 之后所有 VM 启动 / 关闭 都不再需要 sudo
 #
 # 用法:
-#   ./scripts/install-vmnet-helper.sh                    # 自动探测 socket_vmnet 路径
-#   ./scripts/install-vmnet-helper.sh --bin <path>       # 显式指定
-#   ./scripts/install-vmnet-helper.sh --check            # 只检查现有配置, 不写
-#   ./scripts/install-vmnet-helper.sh --uninstall        # 删除 sudoers entry
+#   sudo scripts/install-vmnet-helper.sh                # 装 shared + host (默认)
+#   sudo scripts/install-vmnet-helper.sh en0            # + bridged(en0)
+#   sudo scripts/install-vmnet-helper.sh en0 en1        # + bridged(en0) + bridged(en1)
+#   sudo scripts/install-vmnet-helper.sh --uninstall    # 卸载所有 daemon
+#   sudo scripts/install-vmnet-helper.sh --check        # 只列出当前 daemon 状态
+#
+# socket 路径约定 (与 socket_vmnet 上游 / lima / hell-vm 一致):
+#   shared          → /var/run/socket_vmnet
+#   host            → /var/run/socket_vmnet.host
+#   bridged.<iface> → /var/run/socket_vmnet.bridged.<iface>
 
 set -euo pipefail
 
-SUDOERS_FILE="/etc/sudoers.d/hvm-socket-vmnet"
+PLIST_DIR="/Library/LaunchDaemons"
+LABEL_PREFIX="com.hellmessage.hvm.vmnet"
+SOCKET_BASE="/var/run/socket_vmnet"
 
 c_red()    { printf '\033[0;31m%s\033[0m\n' "$*"; }
 c_green()  { printf '\033[0;32m%s\033[0m\n' "$*"; }
@@ -28,23 +35,23 @@ warn()  { c_yellow "⚠ $*"; }
 err()   { c_red   "✗ $*" >&2; exit 1; }
 info()  { c_blue  "ℹ $*"; }
 
-usage() {
-    grep '^#' "$0" | grep -v '^#!/' | sed 's/^# \?//'
-    exit 0
+# ---- 必须 root ----
+require_root() {
+    if [ "$(id -u)" != "0" ]; then
+        err "需要以 root 运行: sudo $0 $*"
+    fi
 }
 
-# ---- 自动探测 socket_vmnet 路径 ----
+# ---- 探测 socket_vmnet 二进制 ----
 # 优先级: 显式 --bin > HVM_SOCKET_VMNET_PATH env > .app 包内 > 仓库 third_party > brew
 auto_locate() {
     if [[ -n "${HVM_SOCKET_VMNET_PATH:-}" && -x "$HVM_SOCKET_VMNET_PATH" ]]; then
         echo "$HVM_SOCKET_VMNET_PATH"; return
     fi
-    # /Applications/HVM.app
     for app in "/Applications/HVM.app" "$HOME/Applications/HVM.app"; do
         local cand="$app/Contents/Resources/QEMU/bin/socket_vmnet"
         if [[ -x "$cand" ]]; then echo "$cand"; return; fi
     done
-    # script 同根 (开发期 build/HVM.app 或 third_party/qemu)
     local script_dir
     script_dir="$(cd "$(dirname "$0")/.." && pwd)"
     for cand in \
@@ -53,117 +60,171 @@ auto_locate() {
     do
         if [[ -x "$cand" ]]; then echo "$cand"; return; fi
     done
-    # brew 兜底
     for cand in \
         "/opt/homebrew/opt/socket_vmnet/bin/socket_vmnet" \
         "/opt/homebrew/bin/socket_vmnet" \
-        "/usr/local/opt/socket_vmnet/bin/socket_vmnet"
+        "/usr/local/opt/socket_vmnet/bin/socket_vmnet" \
+        "/usr/local/bin/socket_vmnet"
     do
         if [[ -x "$cand" ]]; then echo "$cand"; return; fi
     done
     echo ""
 }
 
-# ---- 读现有 sudoers 配置, 提取 binary 路径 ----
-current_sudoers_bin() {
-    if [[ ! -r "$SUDOERS_FILE" ]]; then echo ""; return; fi
-    # 解 NOPASSWD: <path> "*"  → 取 <path>
-    sudo cat "$SUDOERS_FILE" 2>/dev/null \
-        | grep -oE 'NOPASSWD:NOSETENV: [^ ]+' \
-        | head -1 \
-        | sed 's/NOPASSWD:NOSETENV: //'
+# ---- check: 列出当前 daemon 状态 ----
+mode_check() {
+    info "当前 HVM socket_vmnet daemon 状态:"
+    local found=0
+    for plist in "$PLIST_DIR"/${LABEL_PREFIX}.*.plist; do
+        [ -e "$plist" ] || continue
+        found=1
+        local label
+        label=$(basename "$plist" .plist)
+        local sock
+        case "$label" in
+            "${LABEL_PREFIX}.shared")        sock="$SOCKET_BASE";;
+            "${LABEL_PREFIX}.host")          sock="${SOCKET_BASE}.host";;
+            "${LABEL_PREFIX}.bridged."*)     sock="${SOCKET_BASE}.bridged.${label##*.bridged.}";;
+            *)                               sock="?";;
+        esac
+        local status="DOWN"
+        if [ -S "$sock" ]; then status="UP"; fi
+        echo "    [$status] $label  →  $sock"
+    done
+    if [ "$found" = "0" ]; then
+        echo "    (无)"
+        echo ""
+        info "运行 \`sudo $0\` 安装 shared+host; 或 \`sudo $0 en0\` 加桥接 en0"
+        exit 1
+    fi
+    exit 0
 }
 
-# ---- check / install / uninstall ----
+# ---- uninstall: 卸载所有 HVM 装的 daemon ----
+mode_uninstall() {
+    require_root "$@"
+    shopt -s nullglob
+    local removed=0
+    for plist in "$PLIST_DIR"/${LABEL_PREFIX}.*.plist; do
+        local label
+        label=$(basename "$plist" .plist)
+        info "卸载 $label"
+        launchctl bootout "system/$label" 2>/dev/null || true
+        rm -f "$plist"
+        removed=$((removed + 1))
+    done
+    rm -f "$SOCKET_BASE" "$SOCKET_BASE".host "$SOCKET_BASE".bridged.*
+    ok "已卸载 $removed 个 daemon"
+    exit 0
+}
+
+# ---- install: 装一个 daemon plist + bootstrap ----
+# 参数: <suffix> <socket_path> <socket_vmnet 额外参数...>
+install_one() {
+    local suffix="$1"; shift
+    local sock="$1"; shift
+    local label="${LABEL_PREFIX}.${suffix}"
+    local plist="$PLIST_DIR/${label}.plist"
+    local args_xml=""
+    args_xml+="    <string>$SOCKET_VMNET</string>"$'\n'
+    for a in "$@"; do
+        args_xml+="    <string>$a</string>"$'\n'
+    done
+    args_xml+="    <string>$sock</string>"
+
+    # 旧 plist 存在则先 bootout, 保证新参数生效
+    launchctl bootout "system/$label" 2>/dev/null || true
+    cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$label</string>
+  <key>ProgramArguments</key>
+  <array>
+$args_xml
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>UserName</key>
+  <string>root</string>
+  <key>StandardOutPath</key>
+  <string>/var/log/socket_vmnet.$suffix.log</string>
+  <key>StandardErrorPath</key>
+  <string>/var/log/socket_vmnet.$suffix.log</string>
+</dict>
+</plist>
+EOF
+    chmod 644 "$plist"
+    chown root:wheel "$plist"
+    rm -f "$sock"
+    launchctl bootstrap system "$plist"
+    launchctl enable "system/$label" 2>/dev/null || true
+    ok "$label  →  $sock"
+}
+
+# ---- 主流程 ----
 mode="install"
+ifaces=()
 explicit_bin=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --bin)        explicit_bin="$2"; shift 2;;
         --check)      mode="check"; shift;;
         --uninstall)  mode="uninstall"; shift;;
-        -h|--help)    usage;;
-        *) err "未知参数: $1";;
+        --bin)        explicit_bin="$2"; shift 2;;
+        -h|--help)    sed -n '2,/^$/p' "$0" | sed 's/^# \?//'; exit 0;;
+        -*)           err "未知参数: $1";;
+        *)            ifaces+=("$1"); shift;;
     esac
 done
 
 case "$mode" in
-    check)
-        cur="$(current_sudoers_bin)"
-        if [[ -z "$cur" ]]; then
-            warn "$SUDOERS_FILE 未配置"
-            exit 1
-        fi
-        if [[ ! -x "$cur" ]]; then
-            warn "$SUDOERS_FILE 配置的路径已不存在: $cur"
-            exit 2
-        fi
-        ok "$SUDOERS_FILE 已配置: $cur"
-        exit 0
-        ;;
-    uninstall)
-        if [[ ! -f "$SUDOERS_FILE" ]]; then
-            info "$SUDOERS_FILE 不存在, 无需卸载"
-            exit 0
-        fi
-        info "删除 $SUDOERS_FILE (需 sudo 密码):"
-        sudo rm "$SUDOERS_FILE"
-        ok "已卸载"
-        exit 0
-        ;;
-    install)
-        sv_bin="${explicit_bin:-$(auto_locate)}"
-        if [[ -z "$sv_bin" || ! -x "$sv_bin" ]]; then
-            err "找不到 socket_vmnet 二进制. 用 --bin <path> 显式指定; 或先 make build-all (会打包入 .app)"
-        fi
-        info "socket_vmnet: $sv_bin"
-
-        # 安全: 路径必须以 /socket_vmnet 结尾, 防止误指错二进制
-        if [[ "${sv_bin##*/}" != "socket_vmnet" ]]; then
-            err "二进制名必须是 socket_vmnet, 收到: $sv_bin"
-        fi
-
-        # 检查与现有配置一致 → 跳过
-        cur="$(current_sudoers_bin)"
-        if [[ "$cur" == "$sv_bin" ]]; then
-            ok "$SUDOERS_FILE 已配置且路径一致, 无需重写"
-            exit 0
-        fi
-        if [[ -n "$cur" ]]; then
-            warn "现有 sudoers 指向 $cur, 将被覆盖"
-        fi
-
-        # 生成 sudoers 内容. 跟 Lima 模板对齐, 用 %admin 组 + NOPASSWD:NOSETENV.
-        # "*" 通配符: 允许任意 socket_vmnet 参数 (--vmnet-mode / --vmnet-interface /
-        # --pidfile / 监听 socket 路径都是动态生成 per-VM, sudoers 没法穷举).
-        # 安全等价于"所有 admin 组用户可以以 root 身份跑这个 binary 任意参数",
-        # 而 socket_vmnet binary 自身只做 vmnet 相关操作, 不是通用 root shell.
-        tmp="$(mktemp)"
-        cat > "$tmp" <<EOF
-# /etc/sudoers.d/hvm-socket-vmnet — by HVM scripts/install-vmnet-helper.sh
-# 允许 admin 组用户 NOPASSWD 启动包内 socket_vmnet (vmnet 桥接 daemon).
-# 移动 .app 后需重新跑该脚本更新路径.
-%admin ALL=(root:root) NOPASSWD:NOSETENV: $sv_bin *
-EOF
-        chmod 440 "$tmp"
-
-        info "写入 $SUDOERS_FILE (需 sudo 密码一次):"
-        sudo install -m 440 -o root -g wheel "$tmp" "$SUDOERS_FILE"
-        rm -f "$tmp"
-
-        # 验证 sudoers 语法 (visudo -c)
-        if ! sudo visudo -c -f "$SUDOERS_FILE" >/dev/null; then
-            sudo rm "$SUDOERS_FILE"
-            err "visudo 校验失败, 已回退. 请检查 $sv_bin 路径是否含特殊字符"
-        fi
-        ok "$SUDOERS_FILE 写入成功"
-
-        # 自检: sudo -n 无密码跑 socket_vmnet --version 应能通
-        info "自检: sudo -n $sv_bin --version"
-        if sudo -n "$sv_bin" --version 2>&1 | head -3; then
-            ok "NOPASSWD 配置生效"
-        else
-            warn "sudo -n 仍然要密码, 检查当前用户是否在 admin 组: dseditgroup -o checkmember -m \$USER admin"
-        fi
-        ;;
+    check)     mode_check;;
+    uninstall) mode_uninstall;;
 esac
+
+# install 路径
+require_root "$@"
+SOCKET_VMNET="${explicit_bin:-$(auto_locate)}"
+if [[ -z "$SOCKET_VMNET" || ! -x "$SOCKET_VMNET" ]]; then
+    err "找不到 socket_vmnet 二进制. 用 --bin <path> 显式指定; 或先 make build-all (会打包入 .app)"
+fi
+# 安全: 路径必须以 /socket_vmnet 结尾
+if [[ "${SOCKET_VMNET##*/}" != "socket_vmnet" ]]; then
+    err "二进制名必须是 socket_vmnet, 收到: $SOCKET_VMNET"
+fi
+info "socket_vmnet: $SOCKET_VMNET"
+
+info "安装 shared (类 NAT, host 与 guest 互通; 多 guest 互通)"
+install_one "shared" "$SOCKET_BASE" \
+    "--vmnet-mode=shared" \
+    "--vmnet-gateway=192.168.105.1" \
+    "--vmnet-dhcp-end=192.168.105.254"
+
+info "安装 host (host-only, 仅 host 与 guest 互通)"
+install_one "host" "${SOCKET_BASE}.host" \
+    "--vmnet-mode=host" \
+    "--vmnet-gateway=192.168.106.1" \
+    "--vmnet-dhcp-end=192.168.106.254"
+
+# bridged: 每个传入的接口起一个 daemon
+for iface in "${ifaces[@]}"; do
+    if ! [[ "$iface" =~ ^[a-zA-Z0-9]+$ ]]; then
+        warn "跳过非法接口名 '$iface'"
+        continue
+    fi
+    info "安装 bridged($iface) (跨物理 LAN; guest IP 落物理网段)"
+    install_one "bridged.$iface" "${SOCKET_BASE}.bridged.$iface" \
+        "--vmnet-mode=bridged" \
+        "--vmnet-interface=$iface"
+done
+
+echo ""
+info "完成. 当前 socket:"
+ls -la ${SOCKET_BASE}* 2>/dev/null || echo "    (socket 启动有 1-2s 延迟, 稍等再 ls)"
+echo ""
+info "卸载: sudo $0 --uninstall"
+info "状态: $0 --check"

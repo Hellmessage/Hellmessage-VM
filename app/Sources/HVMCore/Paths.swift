@@ -56,12 +56,8 @@ public enum HVMPaths {
     public static func swtpmPidPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).swtpm.pid")
     }
-    public static func vmnetSocketPath(for id: UUID) -> URL {
-        runDir.appendingPathComponent("\(id.uuidString.lowercased()).vmnet.sock")
-    }
-    public static func vmnetPidPath(for id: UUID) -> URL {
-        runDir.appendingPathComponent("\(id.uuidString.lowercased()).vmnet.pid")
-    }
+    // vmnetSocketPath / vmnetPidPath 已废弃: socket_vmnet 改成系统级 launchd daemon
+    // (路径见 HVMQemu/VmnetDaemonPaths), 不再 per-VM 起 sidecar.
 
     /// 若目录不存在则创建 (0755)
     @discardableResult

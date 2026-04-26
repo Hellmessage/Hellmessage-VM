@@ -86,6 +86,7 @@ struct StatusCommand: AsyncParsableCommand {
                     switch net.mode {
                     case .nat: modeStr = "nat"
                     case .bridged(let i): modeStr = "bridged(\(i))"
+                    case .shared: modeStr = "shared"
                     }
                     print("  network:    \(modeStr) · \(net.macAddress)")
                 }

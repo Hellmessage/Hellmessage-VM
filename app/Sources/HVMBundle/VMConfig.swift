@@ -55,9 +55,12 @@ public struct DiskSpec: Codable, Sendable, Equatable {
 public enum NetworkMode: Codable, Sendable, Equatable {
     case nat
     case bridged(interface: String)
+    /// QEMU socket_vmnet --vmnet-mode shared: NAT 内网, host 与 guest 互通,
+    /// guest 之间也互通, 但出口流量走 host 共享地址段 (与 .nat 区别在于多 guest 互通)
+    case shared
 
     private enum CodingKeys: String, CodingKey { case mode, bridgedInterface }
-    private enum Raw: String { case nat, bridged }
+    private enum Raw: String { case nat, bridged, shared }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -67,10 +70,11 @@ public enum NetworkMode: Codable, Sendable, Equatable {
         case .bridged:
             let iface = try c.decode(String.self, forKey: .bridgedInterface)
             self = .bridged(interface: iface)
+        case .shared: self = .shared
         case .none:
             throw DecodingError.dataCorruptedError(
                 forKey: .mode, in: c,
-                debugDescription: "未知 network mode: \(raw); 允许值: nat, bridged"
+                debugDescription: "未知 network mode: \(raw); 允许值: nat, bridged, shared"
             )
         }
     }
@@ -83,6 +87,8 @@ public enum NetworkMode: Codable, Sendable, Equatable {
         case .bridged(let iface):
             try c.encode(Raw.bridged.rawValue, forKey: .mode)
             try c.encode(iface, forKey: .bridgedInterface)
+        case .shared:
+            try c.encode(Raw.shared.rawValue, forKey: .mode)
         }
     }
 }
