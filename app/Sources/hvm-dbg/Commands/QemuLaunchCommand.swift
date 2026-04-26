@@ -98,7 +98,7 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         // stderr 落全局 ~/Library/.../HVM/logs/<displayName>-<uuid8>/qemu-stderr.log;
         // 每次 truncate 避免累积老错误干扰判断
         let qemuLogsDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id)
-        try? HVMPaths.ensure(qemuLogsDir)
+        _ = try? HVMPaths.ensure(qemuLogsDir)
         let stderrLog = qemuLogsDir.appendingPathComponent("qemu-stderr.log")
         try? FileManager.default.removeItem(at: stderrLog)
 
