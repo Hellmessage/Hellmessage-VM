@@ -163,6 +163,28 @@ public final class QmpClient: @unchecked Sendable {
         return String(data: returnData, encoding: .utf8) ?? ""
     }
 
+    /// send-key: 同时按下一组 qkey (qkey 名见 QEMU qkeys.json), 然后一起释放.
+    /// holdTimeMs: 按下持续时间 (默认 100ms); guest 太快可能丢键, 偏长一点稳.
+    /// qkeys 例: ["a"], ["shift", "a"] (Shift+A 大写), ["ctrl", "alt", "delete"]
+    public func sendKey(_ qkeys: [String], holdTimeMs: Int = 100) async throws {
+        let keysList: [[String: Any]] = qkeys.map { qk in
+            ["type": "qcode", "data": qk]
+        }
+        let args: [String: Any] = [
+            "keys": keysList,
+            "hold-time": holdTimeMs,
+        ]
+        _ = try await executeRaw("send-key", argumentsObject: args)
+    }
+
+    /// input-send-event: 直接给 guest input 子系统送事件. 用于鼠标 abs 坐标 + 按键.
+    /// events 形如 [{"type": "abs", "data": {"axis": "x", "value": 1234}}, ...].
+    /// 调用方负责构造事件列表; QmpInput 高层有 mouseMove/mouseClick 包装.
+    public func inputSendEvent(events: [[String: Any]]) async throws {
+        let args: [String: Any] = ["events": events]
+        _ = try await executeRaw("input-send-event", argumentsObject: args)
+    }
+
     // MARK: - 内部: 通用命令执行
 
     /// 通用命令执行. 返回 "return" 字段的原始 JSON Data; QEMU error 抛 QmpError.qemu.

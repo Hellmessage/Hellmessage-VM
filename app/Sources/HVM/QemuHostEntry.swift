@@ -559,15 +559,15 @@ final class QemuHostState {
         case IPCOp.dbgStatus.rawValue:     return handleDbgStatus(req: req)
         case IPCOp.dbgOcr.rawValue:        return await handleDbgOcr(req: req)
         case IPCOp.dbgFindText.rawValue:   return await handleDbgFindText(req: req)
+        case IPCOp.dbgKey.rawValue:        return await handleDbgKey(req: req)
+        case IPCOp.dbgMouse.rawValue:      return await handleDbgMouse(req: req)
 
         default:
-            // 剩余 dbg.* (key/mouse/boot_progress/console.*) 留给 E4b / 后续:
-            //   - key/mouse: QMP send-key + input-send-event 包装 (E4b)
-            //   - console.read/write + boot_progress: 需先接 -chardev pty/socket 给 serial,
-            //     然后跟 ConsoleBridge 等价路径接入
+            // 剩余 dbg.* (boot_progress/console.*) 需先接 -chardev pty/socket 给 serial,
+            // 然后跟 ConsoleBridge 等价路径接入. 留给后续 commit.
             if req.op.hasPrefix("dbg.") {
                 return .failure(id: req.id, code: "backend.qemu_dbg_unsupported",
-                                message: "QEMU 后端尚未实现 \(req.op); screenshot/status/ocr/find_text 已支持")
+                                message: "QEMU 后端尚未实现 \(req.op); screenshot/status/ocr/find_text/key/mouse 已支持")
             }
             return .failure(id: req.id, code: "ipc.unknown_op", message: "未知 op: \(req.op)")
         }
@@ -666,6 +666,85 @@ final class QemuHostState {
         } catch {
             return .failure(id: req.id, code: "backend.qmp_error", message: "\(error)")
         }
+    }
+
+    private func handleDbgKey(req: IPCRequest) async -> IPCResponse {
+        guard let client = qmpClient else {
+            return .failure(id: req.id, code: "backend.qmp_unavailable", message: "QMP 未就绪")
+        }
+        // 只接受 running (paused 时 send-key 也行但 guest 不消化, 行为不可预测)
+        if case .running = runner?.state {} else {
+            return .failure(id: req.id, code: "dbg.vm_not_running",
+                            message: "QEMU 进程未运行")
+        }
+        do {
+            if let text = req.args["text"] {
+                try await QemuInput.typeText(text, via: client)
+            } else if let press = req.args["press"] {
+                try await QemuInput.pressCombo(press, via: client)
+            } else {
+                return .failure(id: req.id, code: "config.missing_field",
+                                message: "需要 args.text 或 args.press")
+            }
+            return .success(id: req.id)
+        } catch let QemuInput.InputError.unknownKey(k) {
+            return .failure(id: req.id, code: "config.invalid_enum",
+                            message: "未识别按键 / 字符: \(k)")
+        } catch {
+            return .failure(id: req.id, code: "backend.qmp_error", message: "\(error)")
+        }
+    }
+
+    private func handleDbgMouse(req: IPCRequest) async -> IPCResponse {
+        guard let client = qmpClient else {
+            return .failure(id: req.id, code: "backend.qmp_unavailable", message: "QMP 未就绪")
+        }
+        if case .running = runner?.state {} else {
+            return .failure(id: req.id, code: "dbg.vm_not_running",
+                            message: "QEMU 进程未运行")
+        }
+        // guest framebuffer 尺寸 (与 dbgStatus 同, 估算)
+        let (gw, gh): (Int, Int)
+        switch config?.guestOS {
+        case .linux, .windows: (gw, gh) = (1024, 768)
+        case .macOS:           (gw, gh) = (1920, 1080)
+        case .none:            (gw, gh) = (1, 1)
+        }
+        let guestSize = CGSize(width: gw, height: gh)
+        let button = req.args["button"] ?? "left"
+        do {
+            switch req.args["op"] ?? "" {
+            case "move":
+                let (x, y) = try parseXY(req)
+                try await QemuInput.mouseMove(x: x, y: y, guestSize: guestSize, via: client)
+            case "click":
+                let (x, y) = try parseXY(req)
+                try await QemuInput.mouseClick(x: x, y: y, button: button, guestSize: guestSize, via: client)
+            case "double-click":
+                let (x, y) = try parseXY(req)
+                try await QemuInput.mouseDoubleClick(x: x, y: y, button: button, guestSize: guestSize, via: client)
+            default:
+                return .failure(id: req.id, code: "config.invalid_enum",
+                                message: "args.op 应为 move / click / double-click")
+            }
+            return .success(id: req.id)
+        } catch let QemuInput.InputError.invalidPoint(reason) {
+            return .failure(id: req.id, code: "config.invalid_range", message: reason)
+        } catch let QemuInput.InputError.unsupportedButton(b) {
+            return .failure(id: req.id, code: "config.invalid_enum",
+                            message: "button 必须是 left/right/middle, 实际 \(b)")
+        } catch {
+            return .failure(id: req.id, code: "backend.qmp_error", message: "\(error)")
+        }
+    }
+
+    /// args.x / args.y 解析 (字符串 → Int). 缺/格式错抛 invalidPoint.
+    private func parseXY(_ req: IPCRequest) throws -> (Int, Int) {
+        guard let xs = req.args["x"], let ys = req.args["y"],
+              let x = Int(xs), let y = Int(ys) else {
+            throw QemuInput.InputError.invalidPoint(reason: "args.x / args.y 必须是整数")
+        }
+        return (x, y)
     }
 
     private func handleDbgFindText(req: IPCRequest) async -> IPCResponse {
