@@ -28,7 +28,7 @@
 
 - 所有构建产物输出到根目录 `build/`(`build/HVM.app`, `build/hvm-cli`, `build/hvm-dbg`)
 - SwiftPM 是唯一构建系统, 产物由 `scripts/bundle.sh` 组装 + 签名成 `.app`
-- 同时兼容 Xcode: `xed Package.swift` 可直接打开、编辑、构建(产裸二进制, 无 entitlement, 仅用于开发期调试)
+- 同时兼容 Xcode: `xed app/Package.swift` 可直接打开、编辑、构建(产裸二进制, 无 entitlement, 仅用于开发期调试)
 - 真实运行必须走 `make build`(出带 entitlement 签名的 .app)
 
 ## 代码约束

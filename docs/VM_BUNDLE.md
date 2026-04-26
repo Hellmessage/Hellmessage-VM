@@ -202,7 +202,7 @@ public final class BundleLock {
 - 删字段**保留 JSON key**, 读取时忽略, 避免老 HVM 报错
 - 不兼容变更(改字段语义、重命名字段、字段单位变化)必须升 `schemaVersion`, 并加一次性迁移
 - 迁移实现:
-  - 入口在 `Sources/HVMBundle/ConfigMigrator.swift` 的 `ConfigMigrator.migrate(data:from:to:)`
+  - 入口在 `app/Sources/HVMBundle/ConfigMigrator.swift` 的 `ConfigMigrator.migrate(data:from:to:)`
   - 在 JSON `Data` 层面操作(字典 patch),不为每个老版本另起 Codable struct
   - 链式升级:`v1 → v2 → ... → current`,逐版跑;不允许跨版直接跳
   - 升级后 `BundleIO.save` 会以 `currentSchemaVersion` 重写 `config.json`,以后再 load 不会再走 migrator

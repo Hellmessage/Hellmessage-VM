@@ -4,7 +4,7 @@
 
 | Entitlement | 状态 | 备注 |
 |---|---|---|
-| `com.apple.security.virtualization` | ✅ 开发者账号自带 | VZ 基础能力, `Resources/HVM.entitlements` 默认启用 |
+| `com.apple.security.virtualization` | ✅ 开发者账号自带 | VZ 基础能力, `app/Resources/HVM.entitlements` 默认启用 |
 | `com.apple.vm.networking` | ⏳ 审批中 | 桥接网络, 已向 Apple Developer Support 提交 |
 | (其他) | ❌ 不申请 | 没必要 |
 
@@ -71,11 +71,11 @@ h13642229904@gmail.com
    - 找到关联 `com.hellmessage.vm` 的 Development profile → Edit → Save → Download
    - 或 Xcode → Preferences → Accounts → Download Manual Profiles
 3. **把 profile 嵌入项目**:
-   - 放到 `Resources/embedded.provisionprofile`
-   - `scripts/bundle.sh` 加一行 `cp "$ROOT/Resources/embedded.provisionprofile" "$APP_DIR/Contents/embedded.provisionprofile"`
+   - 放到 `app/Resources/embedded.provisionprofile`
+   - `scripts/bundle.sh` 加一行 `cp "$ROOT/app/Resources/embedded.provisionprofile" "$APP_DIR/Contents/embedded.provisionprofile"`
 4. **更新 entitlement 文件**:
    ```xml
-   <!-- Resources/HVM.entitlements -->
+   <!-- app/Resources/HVM.entitlements -->
    <key>com.apple.vm.networking</key>
    <true/>
    ```

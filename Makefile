@@ -1,12 +1,13 @@
 # HVM Makefile
-# 唯一构建入口 (Xcode 打开 Package.swift 作为开发期辅助, 不做权威构建)
+# 唯一构建入口 (Xcode 打开 app/Package.swift 作为开发期辅助, 不做权威构建)
 
 CONFIGURATION ?= release
 BUILD_DIR     := build
-SWIFTPM_DIR   := .build
+PKG_DIR       := app
+SWIFTPM_DIR   := $(PKG_DIR)/.build
 # 签名身份: 空/auto = bundle.sh 自动探测 (Apple Development 优先, 否则 ad-hoc)
 SIGN_IDENTITY ?= auto
-ENTITLEMENTS  := Resources/HVM.entitlements
+ENTITLEMENTS  := $(PKG_DIR)/Resources/HVM.entitlements
 
 .PHONY: all build bundle compile dev test verify clean help icon register-types
 
@@ -21,14 +22,14 @@ help:
 	@echo "  make dev     — debug 模式, 组装 .app + 签名"
 	@echo "  make test    — 跑 swift test"
 	@echo "  make verify  — smoke test, 验证 .app 可启动"
-	@echo "  make icon    — 从 Resources/AppIcon-src.png 生成 AppIcon.icns"
-	@echo "  make clean   — 清除 build/ 和 .build/"
+	@echo "  make icon    — 从 app/Resources/AppIcon-src.png 生成 AppIcon.icns"
+	@echo "  make clean   — 清除 build/ 和 app/.build/"
 
 # 1. SwiftPM 编译全部 executable
 compile:
-	swift build -c $(CONFIGURATION) --product HVM
-	swift build -c $(CONFIGURATION) --product hvm-cli
-	swift build -c $(CONFIGURATION) --product hvm-dbg
+	swift build --package-path $(PKG_DIR) -c $(CONFIGURATION) --product HVM
+	swift build --package-path $(PKG_DIR) -c $(CONFIGURATION) --product hvm-cli
+	swift build --package-path $(PKG_DIR) -c $(CONFIGURATION) --product hvm-dbg
 
 # 2. 生成图标 (源图不存在则跳过, 不阻断构建)
 icon:
@@ -43,14 +44,14 @@ dev:
 	@$(MAKE) build CONFIGURATION=debug
 
 test:
-	swift test
+	swift test --package-path $(PKG_DIR)
 
 verify:
 	@bash scripts/verify-build.sh
 
 clean:
 	rm -rf $(BUILD_DIR) $(SWIFTPM_DIR)
-	@echo "✔ 已清除 build/ 与 .build/"
+	@echo "✔ 已清除 build/ 与 $(SWIFTPM_DIR)/"
 
 # 让 Finder 立刻识别 .hvmz 为 package. 仅当 Finder 图标未更新时手动跑一次
 register-types: build

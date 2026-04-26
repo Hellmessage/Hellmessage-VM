@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# 从 Resources/AppIcon-src.png (至少 1024x1024) 生成 Resources/AppIcon.icns
+# 从 app/Resources/AppIcon-src.png (至少 1024x1024) 生成 app/Resources/AppIcon.icns
 # 源图不存在时仅打印提示, 不阻断构建
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SRC="$ROOT/Resources/AppIcon-src.png"
-OUT="$ROOT/Resources/AppIcon.icns"
-SET="$ROOT/Resources/AppIcon.iconset"
+SRC="$ROOT/app/Resources/AppIcon-src.png"
+OUT="$ROOT/app/Resources/AppIcon.icns"
+SET="$ROOT/app/Resources/AppIcon.iconset"
 
 if [ ! -f "$SRC" ]; then
     if [ ! -f "$OUT" ]; then
-        echo "ℹ 未找到 Resources/AppIcon-src.png, .app 将暂无图标"
+        echo "ℹ 未找到 app/Resources/AppIcon-src.png, .app 将暂无图标"
         echo "  保存一张 1024x1024 PNG 到该路径后再 make build, 自动生成 .icns"
     fi
     exit 0

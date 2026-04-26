@@ -132,7 +132,7 @@ addSubview(hvmView)                     // 直挂, 不经 hosting
 - 再次点画面 → 重新捕获
 - 鼠标用 `VZUSBScreenCoordinatePointingDevice` (绝对坐标), **没有 grab 概念**, 鼠标随时可以离开 view, 不需要"释放"
 
-实现 (`Sources/HVMDisplay/HVMView.swift`):
+实现 (`app/Sources/HVMDisplay/HVMView.swift`):
 
 ```swift
 override func flagsChanged(with event: NSEvent) {
@@ -153,7 +153,7 @@ override func flagsChanged(with event: NSEvent) {
 1. **光标消失**: VZVirtualMachineView 在 `mouseEntered` / `mouseMoved` 里走全局 `NSCursor.hide()` (不是 cursor rect), AppKit 上层 cursor rect 压不过 — 即使 overlay 视觉上盖在前面, VZ view 的 `NSTrackingArea` 仍按几何位置触发 hide, 鼠标在 dialog 区域看不见
 2. **键盘冲撞**: VZ first responder 还在, 键盘输入仍然进 guest
 
-机制: `HVMView.inputSuspended: Bool` (Sources/HVMDisplay/HVMView.swift) 拨到 `true` 时:
+机制: `HVMView.inputSuspended: Bool` (app/Sources/HVMDisplay/HVMView.swift) 拨到 `true` 时:
 
 - 所有 mouse* / scrollWheel / flagsChanged / cursorUpdate 跳过 `super` → guest 不再收到 host 输入, VZ 也不会再 hide cursor
 - 设置瞬间一次性多调几次 `NSCursor.unhide()` + `NSCursor.arrow.set()`, 抵消之前累计的 hide (NSCursor 是平衡计数, 不知 VZ 调了几次)

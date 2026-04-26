@@ -18,7 +18,7 @@
 
 ### 范围
 
-- `Package.swift`, `Makefile`, `scripts/bundle.sh`, `Resources/*`
+- `app/Package.swift`, `Makefile`, `scripts/bundle.sh`, `app/Resources/*`
 - 所有 HVM* 模块目录创建, 只有 namespace 占位文件
 - `HVMCore`: 空 `Logger` wrapper, 空 `HVMError` 根
 - `HVM` target 出一个最小 SwiftUI 空窗口, 能被签名打包
@@ -34,7 +34,7 @@ open build/HVM.app    # 空窗口, 黑色, 30 秒后退出
 
 - `codesign -d --entitlements -` 能看到 `com.apple.security.virtualization`
 - 无任何三方依赖(除 swift-argument-parser)
-- Xcode `xed Package.swift` 能打开
+- Xcode `xed app/Package.swift` 能打开
 
 ## M1 — CLI 起 Linux guest
 
@@ -141,7 +141,7 @@ hvm-cli start mac1       # 进首次启动向导 → 设用户密码 → 桌面
 
 ### 范围
 
-1. 更新 `Resources/HVM.entitlements` 启用 `com.apple.vm.networking`
+1. 更新 `app/Resources/HVM.entitlements` 启用 `com.apple.vm.networking`
 2. 嵌入 `embedded.provisionprofile`
 3. `HVMNet.BridgedAttachment` 启用
 4. GUI 创建向导网络页加 "桥接" 选项 + 接口选择下拉

@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="${CONFIGURATION:-release}"
 BUILD="$ROOT/build"
-ENTITLEMENTS="$ROOT/Resources/HVM.entitlements"
+ENTITLEMENTS="$ROOT/app/Resources/HVM.entitlements"
 
 # 签名身份选择. 优先级:
 #   1. 显式 $SIGN_IDENTITY (非 "auto")
@@ -30,9 +30,9 @@ EOF
 fi
 
 # SwiftPM 输出路径 (仅 arm64-apple-macosx, 因为项目硬约束 Apple Silicon)
-SWIFT_BIN="$ROOT/.build/arm64-apple-macosx/$CONFIG"
+SWIFT_BIN="$ROOT/app/.build/arm64-apple-macosx/$CONFIG"
 if [ ! -x "$SWIFT_BIN/HVM" ]; then
-    echo "✗ 未找到 $SWIFT_BIN/HVM, 请先 swift build" >&2
+    echo "✗ 未找到 $SWIFT_BIN/HVM, 请先 swift build --package-path app" >&2
     exit 1
 fi
 
@@ -61,17 +61,17 @@ BUILD_NUM=$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo "1")
 sed \
     -e "s/__VERSION__/$VERSION/g" \
     -e "s/__BUILD__/$BUILD_NUM/g" \
-    "$ROOT/Resources/Info.plist.template" > "$CONTENTS/Info.plist"
+    "$ROOT/app/Resources/Info.plist.template" > "$CONTENTS/Info.plist"
 plutil -convert xml1 "$CONTENTS/Info.plist"
 
 # 3. Resources (图标可选)
-if [ -f "$ROOT/Resources/AppIcon.icns" ]; then
-    cp "$ROOT/Resources/AppIcon.icns" "$RESOURCES/AppIcon.icns"
+if [ -f "$ROOT/app/Resources/AppIcon.icns" ]; then
+    cp "$ROOT/app/Resources/AppIcon.icns" "$RESOURCES/AppIcon.icns"
 fi
 
 # 4. provisioning profile (仅当 bridged entitlement 审批通过并放入时)
-if [ -f "$ROOT/Resources/embedded.provisionprofile" ]; then
-    cp "$ROOT/Resources/embedded.provisionprofile" "$CONTENTS/embedded.provisionprofile"
+if [ -f "$ROOT/app/Resources/embedded.provisionprofile" ]; then
+    cp "$ROOT/app/Resources/embedded.provisionprofile" "$CONTENTS/embedded.provisionprofile"
 fi
 
 # 5. 签名: 先内部 binary, 再外层 .app, 最后 cli / dbg

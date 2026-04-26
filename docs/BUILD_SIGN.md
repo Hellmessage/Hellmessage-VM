@@ -4,7 +4,7 @@
 
 - 空白 Mac 上 `make build` 一条命令跑通, 除 Xcode Command Line Tools + Apple Developer 证书外**零手动依赖**
 - SwiftPM 是唯一构建系统, 产物由 `scripts/bundle.sh` 组装 + 签名成 `.app`
-- Xcode 开发期可用 `xed Package.swift` 直接打开, 不强制走 Makefile
+- Xcode 开发期可用 `xed app/Package.swift` 直接打开, 不强制走 Makefile
 
 ## 工具依赖
 
@@ -21,26 +21,27 @@
 
 ```
 HVM/
-├── Package.swift                     — SwiftPM manifest, 唯一构建入口
-├── Sources/
-│   ├── HVMCore/                      — 基础库
-│   ├── HVMBundle/
-│   ├── HVMStorage/
-│   ├── HVMBackend/
-│   ├── HVMDisplay/
-│   ├── HVMInstall/
-│   ├── HVMNet/
-│   ├── HVMIPC/
-│   ├── HVM/                          — App target (executable, SwiftUI 入口)
-│   ├── hvm-cli/
-│   └── hvm-dbg/
-├── Tests/
-│   └── HVM*Tests/
-├── Resources/
-│   ├── HVM.entitlements              — entitlement plist
-│   ├── Info.plist.template           — App 的 Info.plist 模板
-│   ├── AppIcon.icns
-│   └── embedded.provisionprofile     — bridged entitlement 通过后放入
+├── app/                              — SwiftPM 子目录, 全部 Swift 源 + Resources 都在这
+│   ├── Package.swift                 — SwiftPM manifest, 唯一构建入口
+│   ├── Sources/
+│   │   ├── HVMCore/                  — 基础库
+│   │   ├── HVMBundle/
+│   │   ├── HVMStorage/
+│   │   ├── HVMBackend/
+│   │   ├── HVMDisplay/
+│   │   ├── HVMInstall/
+│   │   ├── HVMNet/
+│   │   ├── HVMIPC/
+│   │   ├── HVM/                      — App target (executable, SwiftUI 入口)
+│   │   ├── hvm-cli/
+│   │   └── hvm-dbg/
+│   ├── Tests/
+│   │   └── HVM*Tests/
+│   └── Resources/
+│       ├── HVM.entitlements          — entitlement plist
+│       ├── Info.plist.template       — App 的 Info.plist 模板
+│       ├── AppIcon.icns
+│       └── embedded.provisionprofile — bridged entitlement 通过后放入
 ├── scripts/
 │   ├── bundle.sh                     — 组装 .app, 签名
 │   ├── gen-icon.sh                   — 从 PNG 生成 .icns
@@ -114,10 +115,10 @@ let package = Package(
 ```makefile
 CONFIGURATION ?= release
 BUILD_DIR     := build
-SWIFTPM_DIR   := .build
-TEAM_ID       := Q7L455FS97
-SIGN_IDENTITY := "Apple Development"
-ENTITLEMENTS  := Resources/HVM.entitlements
+PKG_DIR       := app
+SWIFTPM_DIR   := $(PKG_DIR)/.build
+SIGN_IDENTITY ?= auto
+ENTITLEMENTS  := $(PKG_DIR)/Resources/HVM.entitlements
 
 .PHONY: all build bundle sign clean test verify
 
@@ -125,11 +126,11 @@ all: build
 
 build: bundle
 
-# 1. SwiftPM 编译全部 executable
+# 1. SwiftPM 编译全部 executable (从 app/ 子目录)
 compile:
-	swift build -c $(CONFIGURATION) --product HVM
-	swift build -c $(CONFIGURATION) --product hvm-cli
-	swift build -c $(CONFIGURATION) --product hvm-dbg
+	swift build --package-path $(PKG_DIR) -c $(CONFIGURATION) --product HVM
+	swift build --package-path $(PKG_DIR) -c $(CONFIGURATION) --product hvm-cli
+	swift build --package-path $(PKG_DIR) -c $(CONFIGURATION) --product hvm-dbg
 
 # 2. 组装 .app + 签名
 bundle: compile
@@ -140,7 +141,7 @@ verify:
 	bash scripts/verify-build.sh
 
 test:
-	swift test
+	swift test --package-path $(PKG_DIR)
 
 clean:
 	rm -rf $(BUILD_DIR) $(SWIFTPM_DIR)
@@ -172,7 +173,7 @@ CONFIG="${1:-release}"
 SIGN="${2:-Apple Development}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/build"
-SWIFT_BIN="$ROOT/.build/arm64-apple-macosx/$CONFIG"
+SWIFT_BIN="$ROOT/app/.build/arm64-apple-macosx/$CONFIG"
 APP="$BUILD/HVM.app"
 
 rm -rf "$APP"
@@ -191,19 +192,19 @@ BUILD_NUM=$(git rev-list --count HEAD 2>/dev/null || echo "1")
 sed \
   -e "s/__VERSION__/$VERSION/" \
   -e "s/__BUILD__/$BUILD_NUM/" \
-  "$ROOT/Resources/Info.plist.template" > "$APP/Contents/Info.plist"
+  "$ROOT/app/Resources/Info.plist.template" > "$APP/Contents/Info.plist"
 plutil -convert xml1 "$APP/Contents/Info.plist"
 
 # 3. Resources
-cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/"
+cp "$ROOT/app/Resources/AppIcon.icns" "$APP/Contents/Resources/"
 
 # 4. provisioning profile (只在已审批 bridged 后才存在)
-if [ -f "$ROOT/Resources/embedded.provisionprofile" ]; then
-    cp "$ROOT/Resources/embedded.provisionprofile" "$APP/Contents/embedded.provisionprofile"
+if [ -f "$ROOT/app/Resources/embedded.provisionprofile" ]; then
+    cp "$ROOT/app/Resources/embedded.provisionprofile" "$APP/Contents/embedded.provisionprofile"
 fi
 
 # 5. 签名: 先内部 binary (含 .app 内的 CLI), 再 .app, 最后 build/ 下的独立副本
-ARGS=(--force --options runtime --sign "$SIGN" --entitlements "$ROOT/Resources/HVM.entitlements")
+ARGS=(--force --options runtime --sign "$SIGN" --entitlements "$ROOT/app/Resources/HVM.entitlements")
 codesign "${ARGS[@]}" "$APP/Contents/MacOS/HVM"
 codesign "${ARGS[@]}" "$APP/Contents/MacOS/hvm-cli"
 codesign "${ARGS[@]}" "$APP/Contents/MacOS/hvm-dbg"
@@ -248,7 +249,7 @@ echo "✔ 构建完成: $APP"
 
 ## Info.plist 模板
 
-`Resources/Info.plist.template`:
+`app/Resources/Info.plist.template`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -274,7 +275,7 @@ echo "✔ 构建完成: $APP"
 
 ## Entitlements
 
-`Resources/HVM.entitlements`:
+`app/Resources/HVM.entitlements`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -304,7 +305,7 @@ echo "✔ 构建完成: $APP"
 ## Xcode 兼容路径
 
 ```bash
-xed Package.swift
+xed app/Package.swift
 ```
 
 在 Xcode 里:
@@ -319,7 +320,7 @@ xed Package.swift
 | 命令 | 产物 | 用途 |
 |---|---|---|
 | `make build` | `build/HVM.app`, `build/hvm-cli`, `build/hvm-dbg` | **权威, 可跑 VM** |
-| `swift build` | `.build/arm64-apple-macosx/debug/...` | SwiftPM 开发测试 |
+| `swift build --package-path app` | `app/.build/arm64-apple-macosx/debug/...` | SwiftPM 开发测试 |
 | `swift test` | 测试二进制 | 单元测试 |
 | `xed + Run` | Xcode 内 DerivedData | UI 迭代, **不可跑 VM** |
 
@@ -331,7 +332,7 @@ make clean
 
 删:
 - `build/`
-- `.build/`
+- `app/.build/`
 - `DerivedData`(Xcode 内手动删, 不自动)
 
 ## CI 策略(占位)
@@ -364,7 +365,7 @@ ln -s "$PWD/build/hvm-dbg" /usr/local/bin/
 3. **不做 Developer ID 公证 / notarize**: 不分发, 只自用
 4. **不做 TestFlight / App Store**: 不上架
 5. **不做自更新机制**(Sparkle 等)
-6. **不写 Xcode `.xcodeproj`**: SwiftPM 足矣, Xcode 打开 Package.swift 即可
+6. **不写 Xcode `.xcodeproj`**: SwiftPM 足矣, Xcode 打开 `app/Package.swift` 即可
 7. **不嵌入 Python / Ruby 脚本作为构建依赖**: scripts/ 只有 bash
 
 ## 未决事项

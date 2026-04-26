@@ -85,7 +85,7 @@ make help               # 看全部目标
 Xcode 用户:
 
 ```bash
-xed Package.swift       # 仅作开发期调试用, 出裸二进制无 entitlement; 真实运行必须走 make build
+xed app/Package.swift   # 仅作开发期调试用, 出裸二进制无 entitlement; 真实运行必须走 make build
 ```
 
 ## 快速上手
