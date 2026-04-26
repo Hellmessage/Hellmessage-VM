@@ -26,6 +26,8 @@ private func _hvmClonefile(_ src: UnsafePointer<CChar>,
                             _ flags: UInt32) -> Int32
 
 public enum SnapshotManager {
+    private static let log = HVMLog.logger("storage.snapshot")
+
     public struct Info: Sendable {
         public let name: String
         public let createdAt: Date
@@ -44,6 +46,7 @@ public enum SnapshotManager {
         if FileManager.default.fileExists(atPath: snapDir.path) {
             throw HVMError.storage(.diskAlreadyExists(path: snapDir.path))
         }
+        Self.log.info("snapshot create: \(bundleURL.lastPathComponent, privacy: .public) name=\(name, privacy: .public)")
         let snapDisks = snapDir.appendingPathComponent(BundleLayout.disksDirName)
         try FileManager.default.createDirectory(at: snapDisks, withIntermediateDirectories: true)
 
@@ -89,6 +92,7 @@ public enum SnapshotManager {
         guard FileManager.default.fileExists(atPath: snapDir.path) else {
             throw HVMError.storage(.ioError(errno: ENOENT, path: snapDir.path))
         }
+        Self.log.warning("snapshot restore: \(bundleURL.lastPathComponent, privacy: .public) name=\(name, privacy: .public) (覆盖当前 disks + config)")
         let snapDisks = snapDir.appendingPathComponent(BundleLayout.disksDirName)
         let bundleDisks = BundleLayout.disksDir(bundleURL)
 
@@ -130,6 +134,7 @@ public enum SnapshotManager {
     }
 
     public static func delete(bundleURL: URL, name: String) throws {
+        Self.log.info("snapshot delete: \(bundleURL.lastPathComponent, privacy: .public) name=\(name, privacy: .public)")
         let snapDir = BundleLayout.snapshotDir(bundleURL, name: name)
         guard FileManager.default.fileExists(atPath: snapDir.path) else {
             throw HVMError.storage(.ioError(errno: ENOENT, path: snapDir.path))

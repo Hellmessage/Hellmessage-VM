@@ -15,6 +15,8 @@ public final class SocketServer: @unchecked Sendable {
     private var handler: Handler?
     private var stopped = false
 
+    private static let log = HVMLog.logger("ipc.server")
+
     public init(socketPath: URL) {
         self.path = socketPath.path
     }
@@ -73,6 +75,7 @@ public final class SocketServer: @unchecked Sendable {
         thread.name = "HVMIPC.accept"
         thread.start()
         self.acceptThread = thread
+        Self.log.info("ipc server start: \(self.path, privacy: .public)")
     }
 
     public func stop() {
@@ -84,6 +87,7 @@ public final class SocketServer: @unchecked Sendable {
             listenFd = -1
         }
         unlink(path)
+        Self.log.info("ipc server stop: \(self.path, privacy: .public)")
     }
 
     deinit { stop() }
@@ -130,7 +134,19 @@ public final class SocketServer: @unchecked Sendable {
                 }
                 continue
             }
-            let resp = handler(req)
+            // 协议版本校验: nil 视作 legacy 接受; != current 返 protocol_mismatch
+            let resp: IPCResponse
+            if let v = req.protoVersion, v != IPCProtocol.version {
+                Self.log.warning("ipc protocol mismatch: client=\(v) server=\(IPCProtocol.version) op=\(req.op, privacy: .public)")
+                resp = IPCResponse.failure(
+                    id: req.id,
+                    code: "ipc.protocol_mismatch",
+                    message: "客户端协议版本 \(v) 与服务端 \(IPCProtocol.version) 不兼容, 请重启 HVM 或对齐二进制版本",
+                    details: ["client": "\(v)", "server": "\(IPCProtocol.version)"]
+                )
+            } else {
+                resp = handler(req)
+            }
             if let d = try? encoder.encode(resp) {
                 do { try Frame.write(fd: fd, payload: d) } catch { return }
             }

@@ -3,12 +3,26 @@
 //   M1: status / stop / kill
 //   M5: dbg.screenshot / dbg.status (hvm-dbg 走的子集)
 //
-// 协议版本不做兼容协商, 全家桶同版本编译 (hvm-cli + hvm-dbg + HVM 都来自同一次 swift build).
+// === 协议版本 ===
+//
+// 期望全家桶同版本编译 (hvm-cli + hvm-dbg + HVM 来自同一次 swift build), 但用户可能从老
+// .app 启动 VMHost, 又用新装好的 hvm-cli 调用 — 此时版本错位会让请求语义模糊.
+//
+// 协议:
+//   - 客户端 (SocketClient) 自动在 IPCRequest 里填 protoVersion = IPCProtocol.version
+//   - 服务端 (SocketServer 调 handler) 在 dispatcher 之前校验 protoVersion:
+//     - nil (老客户端发的请求, 没有这个字段) → 视作 legacy, 接受 (向后兼容)
+//     - != current → 返 ipc.protocol_mismatch 错误, 让客户端清晰报错
+//   - 未知 op 由 handler 兜底 (HVMHostEntry.handle default 分支), 返 ipc.unknown_op
+//
+// JSONDecoder 默认忽略未知字段, 所以 "新客户端 → 老服务端" 不会因为 protoVersion 字段失败.
+// "老客户端 → 新服务端" 因为 nil 走 legacy 分支也接受. 真正错位需双方都 != current 才会拦下.
 
 import Foundation
 
 public enum IPCProtocol {
-    /// 协议版本, 不做兼容协商 (全家桶同版本编译)
+    /// 协议版本. 改 IPCRequest / IPCResponse / 已知 op 语义时 +1.
+    /// 加新 op (向上扩展) 不需要 +1.
     public static let version: Int = 1
 }
 
@@ -16,11 +30,19 @@ public struct IPCRequest: Codable, Sendable {
     public var id: String
     public var op: String
     public var args: [String: String]
+    /// 客户端协议版本. nil 视作 legacy 客户端 (兼容老 hvm-cli).
+    public var protoVersion: Int?
 
-    public init(id: String = UUID().uuidString, op: String, args: [String: String] = [:]) {
+    public init(
+        id: String = UUID().uuidString,
+        op: String,
+        args: [String: String] = [:],
+        protoVersion: Int? = IPCProtocol.version
+    ) {
         self.id = id
         self.op = op
         self.args = args
+        self.protoVersion = protoVersion
     }
 }
 

@@ -6,6 +6,8 @@ import Foundation
 import HVMCore
 
 public enum BundleIO {
+    private static let log = HVMLog.logger("bundle.io")
+
     /// 创建一个全新的 .hvmz 目录, 写入初始 config.json 及子目录骨架.
     /// 若目标已存在 (哪怕是空目录) 也拒绝, 避免意外覆盖.
     public static func create(at bundleURL: URL, config: VMConfig) throws {
@@ -13,6 +15,7 @@ public enum BundleIO {
         if fm.fileExists(atPath: bundleURL.path) {
             throw HVMError.bundle(.alreadyExists(path: bundleURL.path))
         }
+        Self.log.info("create bundle: \(bundleURL.lastPathComponent, privacy: .public) os=\(config.guestOS.rawValue, privacy: .public) cpu=\(config.cpuCount) mem=\(config.memoryMiB)MiB")
 
         do {
             try fm.createDirectory(at: bundleURL, withIntermediateDirectories: true,
@@ -73,6 +76,7 @@ public enum BundleIO {
         // Step 2: 老 schema → 走升级链拿到当前版本的 JSON, 再 decode.
         let upgradedData: Data
         if envelope.schemaVersion < VMConfig.currentSchemaVersion {
+            Self.log.info("bundle 走 schema 迁移: \(bundleURL.lastPathComponent, privacy: .public) v\(envelope.schemaVersion) → v\(VMConfig.currentSchemaVersion)")
             do {
                 upgradedData = try ConfigMigrator.migrate(
                     data: data,

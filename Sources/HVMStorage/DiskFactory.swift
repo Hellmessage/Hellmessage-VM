@@ -7,6 +7,8 @@ import Darwin
 import HVMCore
 
 public enum DiskFactory {
+    private static let log = HVMLog.logger("storage.disk")
+
     /// 创建 sizeGiB 大小的 raw sparse 文件. ftruncate 不实际分配块, 文件一开始物理占用 0.
     /// - Throws: HVMError.storage.diskAlreadyExists / .creationFailed
     public static func create(at url: URL, sizeGiB: UInt64) throws {
@@ -24,6 +26,7 @@ public enum DiskFactory {
             try? FileManager.default.removeItem(at: url)
             throw HVMError.storage(.creationFailed(errno: saved, path: url.path))
         }
+        Self.log.info("disk created: \(url.lastPathComponent, privacy: .public) sizeGiB=\(sizeGiB)")
     }
 
     /// 扩容到新大小 (GiB). 只支持增大, 缩小直接抛 .shrinkNotSupported.
@@ -46,6 +49,7 @@ public enum DiskFactory {
         guard ftruncate(fd, off_t(newBytes)) == 0 else {
             throw HVMError.storage(.ioError(errno: errno, path: url.path))
         }
+        Self.log.info("disk grown: \(url.lastPathComponent, privacy: .public) \(oldBytes)B → \(newBytes)B")
     }
 
     public static func delete(at url: URL) throws {
@@ -55,6 +59,7 @@ public enum DiskFactory {
         } catch {
             throw HVMError.storage(.ioError(errno: EIO, path: url.path))
         }
+        Self.log.info("disk deleted: \(url.lastPathComponent, privacy: .public)")
     }
 
     /// 逻辑大小 (stat.st_size)
