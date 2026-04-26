@@ -14,13 +14,15 @@ final class QemuArgsBuilderTests: XCTestCase {
         config: VMConfig,
         bundlePath: String = "/tmp/hvm-test/foo.hvmz",
         qemuRoot: String = "/opt/test/qemu",
-        qmpPath: String = "/tmp/hvm-test/run/foo.qmp"
+        qmpPath: String = "/tmp/hvm-test/run/foo.qmp",
+        virtioWinISOPath: String? = nil
     ) -> QemuArgsBuilder.Inputs {
         QemuArgsBuilder.Inputs(
             config: config,
             bundleURL: URL(fileURLWithPath: bundlePath, isDirectory: true),
             qemuRoot: URL(fileURLWithPath: qemuRoot, isDirectory: true),
-            qmpSocketPath: qmpPath
+            qmpSocketPath: qmpPath,
+            virtioWinISOPath: virtioWinISOPath
         )
     }
 
@@ -197,6 +199,53 @@ final class QemuArgsBuilderTests: XCTestCase {
         let args = try QemuArgsBuilder.build(makeInputs(config: cfg))
         XCTAssertFalse(args.contains("-tpmdev"),
                        "tpmEnabled=false 时不应注入 -tpmdev")
+    }
+
+    // MARK: - virtio-win 第二 cdrom (Win11 装机驱动)
+
+    func testWindowsVirtioWinAttachedAsSecondCdrom() throws {
+        let cfg = VMConfig(
+            displayName: "win11",
+            guestOS: .windows, engine: .qemu,
+            cpuCount: 4, memoryMiB: 8192,
+            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 64)],
+            installerISO: "/tmp/win11.iso",
+            bootFromDiskOnly: false,
+            windows: WindowsSpec()
+        )
+        let args = try QemuArgsBuilder.build(makeInputs(
+            config: cfg, virtioWinISOPath: "/Users/me/cache/virtio-win/virtio-win.iso"
+        ))
+        let cdroms = args.allFlagValues("-drive").filter { $0.contains("media=cdrom") }
+        XCTAssertEqual(cdroms.count, 2, "Win11 应挂 2 个 cdrom: 安装 ISO + virtio-win")
+        XCTAssertTrue(cdroms.contains(where: { $0.contains("/tmp/win11.iso") }))
+        XCTAssertTrue(cdroms.contains(where: { $0.contains("virtio-win.iso") }))
+    }
+
+    func testLinuxIgnoresVirtioWinPath() throws {
+        let cfg = linuxConfig()
+        let args = try QemuArgsBuilder.build(makeInputs(
+            config: cfg, virtioWinISOPath: "/Users/me/virtio-win.iso"
+        ))
+        let cdroms = args.allFlagValues("-drive").filter { $0.contains("media=cdrom") }
+        // 仅 Linux 安装 ISO 一个 cdrom; virtio-win 仅 Windows 用
+        XCTAssertEqual(cdroms.count, 1)
+        XCTAssertFalse(cdroms.contains(where: { $0.contains("virtio-win") }))
+    }
+
+    func testWindowsWithoutVirtioWinPathIsSingleCdrom() throws {
+        let cfg = VMConfig(
+            displayName: "win11",
+            guestOS: .windows, engine: .qemu,
+            cpuCount: 2, memoryMiB: 4096,
+            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 32)],
+            installerISO: "/tmp/win11.iso",
+            windows: WindowsSpec()
+        )
+        // 没传 virtioWinISOPath; 仍应能构造 (虽然装机会因缺驱动看不见盘)
+        let args = try QemuArgsBuilder.build(makeInputs(config: cfg))
+        let cdroms = args.allFlagValues("-drive").filter { $0.contains("media=cdrom") }
+        XCTAssertEqual(cdroms.count, 1)
     }
 }
 

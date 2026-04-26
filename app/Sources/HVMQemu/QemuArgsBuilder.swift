@@ -25,12 +25,22 @@ public enum QemuArgsBuilder {
         public let qemuRoot: URL
         /// QMP 控制 socket 的 host 侧绝对路径 (typical: ~/Library/Application Support/HVM/run/<vm-id>.qmp)
         public let qmpSocketPath: String
+        /// virtio-win.iso 全局缓存绝对路径 (仅 windows guest 用; 由 VirtioWinCache 提供).
+        /// 非 windows 或路径 nil 时不挂第二 cdrom.
+        public let virtioWinISOPath: String?
 
-        public init(config: VMConfig, bundleURL: URL, qemuRoot: URL, qmpSocketPath: String) {
+        public init(
+            config: VMConfig,
+            bundleURL: URL,
+            qemuRoot: URL,
+            qmpSocketPath: String,
+            virtioWinISOPath: String? = nil
+        ) {
             self.config = config
             self.bundleURL = bundleURL
             self.qemuRoot = qemuRoot
             self.qmpSocketPath = qmpSocketPath
+            self.virtioWinISOPath = virtioWinISOPath
         }
     }
 
@@ -97,6 +107,13 @@ public enum QemuArgsBuilder {
         // virtio-blk media=cdrom: 性能比 IDE-cdrom 好, Linux/Windows installer 都认
         if !cfg.bootFromDiskOnly, let iso = cfg.installerISO {
             args += ["-drive", "file=\(iso),if=virtio,media=cdrom,readonly=on"]
+        }
+
+        // ---- virtio-win 驱动 ISO (仅 windows guest, 第二 cdrom) ----
+        // Win11 装机看不到 virtio-blk 主盘, 必须从 virtio-win.iso 加载 viostor.sys
+        // 非 windows guest 即便传了 path 也不挂 (省得 Linux 装机界面多个空 cdrom 干扰)
+        if cfg.guestOS == .windows, let virtioWinPath = inputs.virtioWinISOPath {
+            args += ["-drive", "file=\(virtioWinPath),if=virtio,media=cdrom,readonly=on"]
         }
 
         // ---- 网络 ----

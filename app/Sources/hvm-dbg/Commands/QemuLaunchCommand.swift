@@ -15,6 +15,7 @@ import ArgumentParser
 import Foundation
 import HVMBundle
 import HVMCore
+import HVMInstall
 import HVMQemu
 import Darwin
 
@@ -61,11 +62,20 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         // 清残留 socket (上次崩溃留的会让 QEMU bind 失败)
         try? FileManager.default.removeItem(at: qmpSocket)
 
+        // virtio-win (windows guest only); 调试命令不做下载, 已缓存就挂, 否则警告
+        var virtioWinPath: String? = nil
+        if config.guestOS == .windows, VirtioWinCache.isReady {
+            virtioWinPath = VirtioWinCache.cachedISOURL.path
+        } else if config.guestOS == .windows {
+            FileHandle.standardError.write("⚠ virtio-win.iso 未缓存, Win 装机看不到 virtio-blk 盘\n".data(using: .utf8)!)
+        }
+
         let inputs = QemuArgsBuilder.Inputs(
             config: config,
             bundleURL: bundleURL,
             qemuRoot: qemuRoot,
-            qmpSocketPath: qmpSocket.path
+            qmpSocketPath: qmpSocket.path,
+            virtioWinISOPath: virtioWinPath
         )
         let args = try QemuArgsBuilder.build(inputs)
 

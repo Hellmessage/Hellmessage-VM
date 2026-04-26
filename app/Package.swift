@@ -53,7 +53,7 @@ let package = Package(
         .executableTarget(
             name: "hvm-dbg",
             dependencies: [
-                "HVMCore", "HVMBundle", "HVMIPC", "HVMQemu",
+                "HVMCore", "HVMBundle", "HVMIPC", "HVMQemu", "HVMInstall",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),

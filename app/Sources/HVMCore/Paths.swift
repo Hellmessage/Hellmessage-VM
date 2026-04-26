@@ -31,6 +31,12 @@ public enum HVMPaths {
         appSupport.appendingPathComponent("cache/ipsw", isDirectory: true)
     }
 
+    /// virtio-win.iso 缓存目录, ~/Library/Application Support/HVM/cache/virtio-win
+    /// (Win11 arm64 装机必需的 virtio-blk/net/gpu 驱动 ISO; 全局共享一份)
+    public static var virtioWinCacheDir: URL {
+        appSupport.appendingPathComponent("cache/virtio-win", isDirectory: true)
+    }
+
     /// 对给定 uuid 返回默认 socket 路径
     public static func socketPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).sock")

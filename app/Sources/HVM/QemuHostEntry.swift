@@ -17,6 +17,7 @@ import Foundation
 import HVMBackend
 import HVMBundle
 import HVMCore
+import HVMInstall
 import HVMIPC
 import HVMQemu
 
@@ -47,12 +48,25 @@ public enum QemuHostEntry {
         // 清残留 socket (上次崩溃留的会让 QEMU bind 失败)
         try? FileManager.default.removeItem(at: qmpSocketURL)
 
-        // 2. 构造 argv
+        // 2. virtio-win 路径解析 (windows guest 才用; 缓存就绪才挂第二 cdrom).
+        //    创建 Win VM 时 GUI 会前台触发 ensureCached; 这里不做下载, 缺则降级.
+        var virtioWinPath: String? = nil
+        if config.guestOS == .windows {
+            if VirtioWinCache.isReady {
+                virtioWinPath = VirtioWinCache.cachedISOURL.path
+            } else {
+                fputs("HVMHost(qemu): ⚠ virtio-win.iso 未缓存, Win 装机将看不到 virtio-blk 盘\n", stderr)
+                fputs("  GUI 创建向导会自动下载; CLI 创建后请用 GUI Cache → Download virtio-win\n", stderr)
+            }
+        }
+
+        // 3. 构造 argv
         let args: [String]
         do {
             let inputs = QemuArgsBuilder.Inputs(
                 config: config, bundleURL: bundleURL,
-                qemuRoot: qemuRoot, qmpSocketPath: qmpSocketURL.path
+                qemuRoot: qemuRoot, qmpSocketPath: qmpSocketURL.path,
+                virtioWinISOPath: virtioWinPath
             )
             args = try QemuArgsBuilder.build(inputs)
         } catch {

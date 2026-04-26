@@ -45,6 +45,8 @@ public final class AppModel {
     public var installState: InstallProgressState? = nil
     /// 正在拉 IPSW 时的进度. 非 nil → DialogOverlay 显示 IpswFetchDialog 模态
     public var ipswFetchState: IpswFetchState? = nil
+    /// 正在拉 virtio-win.iso 时的进度. 非 nil → DialogOverlay 显示 VirtioWinFetchDialog 模态
+    public var virtioWinFetchState: VirtioWinFetchState? = nil
     /// IPSW 版本选择器是否打开. 非 nil → DialogOverlay 显示 IpswCatalogPicker 模态.
     /// 选完后通过 onSelect 回调把 entry 交回上层 (向导)
     public var ipswCatalogPicker: IpswCatalogPickerState? = nil
@@ -70,6 +72,17 @@ public final class AppModel {
 
         public enum Phase: String, Sendable, Equatable {
             case preparing, installing, finalizing
+        }
+    }
+
+    /// virtio-win.iso 下载进度 (Win11 装机驱动). 由 startVirtioWinFetch 维护.
+    public struct VirtioWinFetchState: Sendable, Equatable {
+        public var receivedBytes: Int64
+        public var totalBytes: Int64?     // 服务端 Content-Length, 缺失时 UI 退化为字节数
+
+        public var fraction: Double? {
+            guard let t = totalBytes, t > 0 else { return nil }
+            return Double(receivedBytes) / Double(t)
         }
     }
 
@@ -309,6 +322,40 @@ public final class AppModel {
         s.bytesPerSecond = p.bytesPerSecond
         s.etaSeconds = p.etaSeconds
         ipswFetchState = s
+    }
+
+    // MARK: - virtio-win 下载
+
+    /// 异步确保 virtio-win.iso 已缓存. 已就绪即立即 onComplete; 否则前台下载 + 进度上报.
+    /// 失败走 errors.present, 不调 onComplete.
+    /// 与 startIpswFetch 同模式: 进度通过 virtioWinFetchState 更新, VirtioWinFetchDialog 读.
+    public func startVirtioWinFetch(
+        errors: ErrorPresenter,
+        onComplete: @escaping @MainActor () -> Void
+    ) {
+        if VirtioWinCache.isReady {
+            // 已缓存: 直接 onComplete, 不弹 dialog
+            onComplete()
+            return
+        }
+        virtioWinFetchState = VirtioWinFetchState(receivedBytes: 0, totalBytes: nil)
+        Task { @MainActor in
+            do {
+                _ = try await VirtioWinCache.ensureCached { p in
+                    Task { @MainActor [self] in
+                        self.virtioWinFetchState = VirtioWinFetchState(
+                            receivedBytes: p.receivedBytes,
+                            totalBytes: p.totalBytes
+                        )
+                    }
+                }
+                self.virtioWinFetchState = nil
+                onComplete()
+            } catch {
+                self.virtioWinFetchState = nil
+                errors.present(error)
+            }
+        }
     }
 
     /// session 自然结束时通知 (guestDidStop / error) -> 从 sessions 移除

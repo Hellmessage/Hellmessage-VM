@@ -373,6 +373,18 @@ struct CreateVMDialog: View {
 
     private func createAction() {
         creating = true
+        // Windows + virtio-win 未缓存: 先前台下载 (~700MB modal), 完成后再走 bundle 创建.
+        // 若已缓存 startVirtioWinFetch 内部会立即 onComplete 不弹 dialog.
+        if guestOS == .windows {
+            model.startVirtioWinFetch(errors: errors) {
+                self.proceedWithBundleCreation()
+            }
+            return
+        }
+        proceedWithBundleCreation()
+    }
+
+    private func proceedWithBundleCreation() {
         do {
             // 装机源校验
             switch guestOS {
