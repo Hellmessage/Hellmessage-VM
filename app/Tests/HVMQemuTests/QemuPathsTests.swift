@@ -68,10 +68,10 @@ final class QemuPathsTests: XCTestCase {
     }
 
     /// env var 指向不存在路径 + 没装 .app + 仓库可能不在 cwd → 应该抛 rootMissing
-    /// (本测试假设 cwd 不含 third_party/qemu; 在仓库里跑可能误命中, 故 skip-if-found)
+    /// (本测试假设 cwd 不含 third_party/qemu-stage; 在仓库里跑可能误命中, 故 skip-if-found)
     func testThrowsWhenAllCandidatesAbsent() throws {
         try withEnv(QemuPaths.rootEnvVar, "/nonexistent-\(UUID().uuidString)") {
-            // 兜底链路若意外命中真实仓库的 third_party/qemu/, 跳过本断言
+            // 兜底链路若意外命中真实仓库的 third_party/qemu-stage/, 跳过本断言
             // (例如开发期 swift test 时 cwd 在仓库根)
             do {
                 _ = try QemuPaths.resolveRoot()

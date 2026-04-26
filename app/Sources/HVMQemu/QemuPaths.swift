@@ -1,7 +1,7 @@
 // HVMQemu/QemuPaths.swift
 // 解析 QEMU 二进制 + 固件 + share 目录的实际路径.
 //
-// 严格只走 .app 包内, 不再 fallback 到 third_party/qemu / brew (CLAUDE.md 第三方二进制约束):
+// 严格只走 .app 包内, 不再 fallback 到 third_party/qemu-stage / brew (CLAUDE.md 第三方二进制约束):
 //   1. 环境变量 HVM_QEMU_ROOT - CI / 调试显式覆盖
 //   2. Bundle.main/Contents/Resources/QEMU - 当前进程 .app 包内
 //      a) dev: open build/HVM.app → Bundle.main = build/HVM.app
@@ -36,7 +36,7 @@ public enum QemuPaths {
         }
 
         // 2. Bundle.main 资源 (打包后 .app: dev = build/HVM.app, prod = /Applications/HVM.app)
-        // 不再 fallback 到 third_party/qemu — 见 CLAUDE.md "第三方二进制 / Helper 脚本约束".
+        // 不再 fallback 到 third_party/qemu-stage — 见 CLAUDE.md "第三方二进制 / Helper 脚本约束".
         // swift run / swift test 须用 HVM_QEMU_ROOT env 显式指定 root.
         if let resURL = Bundle.main.resourceURL {
             let candidate = resURL.appendingPathComponent("QEMU", isDirectory: true)

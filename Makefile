@@ -9,8 +9,10 @@ SWIFTPM_DIR   := $(PKG_DIR)/.build
 SIGN_IDENTITY ?= auto
 ENTITLEMENTS  := $(PKG_DIR)/Resources/HVM.entitlements
 # QEMU 后端产物 (由 scripts/qemu-build.sh 生成, 仓库 ignore, 详见 docs/QEMU_INTEGRATION.md)
-QEMU_VENDOR   := third_party/qemu
-QEMU_BIN      := $(QEMU_VENDOR)/bin/qemu-system-aarch64
+# stage 即裁剪 + 签名 + LICENSE/MANIFEST 后的最终成品, bundle.sh 直接拷进 .app
+# 不再有 third_party/qemu/ 中间 vendor 层
+QEMU_STAGE    := third_party/qemu-stage
+QEMU_BIN      := $(QEMU_STAGE)/bin/qemu-system-aarch64
 
 .PHONY: all build bundle compile dev test verify clean help icon register-types qemu qemu-clean build-all xed install uninstall
 
@@ -33,7 +35,7 @@ help:
 	@echo
 	@echo "QEMU 后端 (Win arm64 / 可选 Linux arm64; 详见 docs/QEMU_INTEGRATION.md):"
 	@echo "  make qemu       — 装 brew 依赖 + 拉源码 + 编译 QEMU (10-30 分钟; 仅打包者跑)"
-	@echo "  make qemu-clean — 清除 third_party/qemu/, build/qemu-src/, build/qemu-stage/"
+	@echo "  make qemu-clean — 清除 third_party/qemu-src/, third_party/qemu-stage/"
 	@echo "  make build-all  — make qemu + make build (发布完整流程)"
 
 # 1. SwiftPM 编译全部 executable
@@ -71,8 +73,8 @@ qemu:
 
 # 仅清 QEMU 相关产物, 不动 SwiftPM 与 .app
 qemu-clean:
-	rm -rf $(QEMU_VENDOR) $(BUILD_DIR)/qemu-src $(BUILD_DIR)/qemu-stage
-	@echo "✔ 已清除 $(QEMU_VENDOR)/, $(BUILD_DIR)/qemu-src/, $(BUILD_DIR)/qemu-stage/"
+	rm -rf third_party/qemu-src third_party/qemu-stage
+	@echo "✔ 已清除 third_party/qemu-src/, third_party/qemu-stage/"
 
 # 完整发布: 确保 QEMU 已就绪 (不存在则触发 make qemu) + 组装 .app 嵌入 QEMU
 build-all:

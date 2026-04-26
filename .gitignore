@@ -31,7 +31,8 @@ app/Resources/embedded.provisionprofile
 *.log
 .cursor/rules/commit.mdc
 
-# QEMU 后端 (随 .app 嵌入, 由 scripts/qemu_build.sh 产出, 不进 git)
-third_party/qemu/
-build/qemu-src/
-build/qemu-stage/
+# QEMU 后端 (随 .app 嵌入, 由 scripts/qemu-build.sh 产出, 不进 git)
+# qemu-src:   上游 v10.2.0 git clone 源码 (~900M)
+# qemu-stage: 编译 + 裁剪 + 嵌 swtpm/socket_vmnet 后的成品 (~180M, bundle.sh 直接拷进 .app)
+third_party/qemu-src/
+third_party/qemu-stage/

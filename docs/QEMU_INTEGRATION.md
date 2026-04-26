@@ -12,7 +12,7 @@
 | 项 | 决策 | 备注 |
 |----|------|------|
 | **QEMU 版本** | `v10.2.0` (2025-12) | HVF 路径稳定 + virtio-scsi 多队列 + 5 个月 bake-in;v11.0 太新不赌 |
-| **产物来源** (M5) | **方案 B**: 本地/CI 构建产物落 `third_party/qemu/`, 不进 git | 详见 `scripts/qemu-build.sh` |
+| **产物来源** (M5) | **方案 B**: 本地/CI 构建产物落 `third_party/qemu-stage/`, 不进 git | 详见 `scripts/qemu-build.sh` |
 | **Linux 后端** (M7) | **VZ + QEMU 双后端**: 默认 VZ, 高级模式可选 QEMU | UI 需提供切换;Windows 强制 QEMU |
 | **EDK2 firmware** | 从 Linaro 官方下载预编译 `QEMU_EFI.fd` | 由 `qemu-build.sh` 拉取, 不打包 EDK2 源码 |
 | **virtio-win 驱动 ISO** | **不入包**, 首次创建 Win VM 按需下载到 `~/Library/Application Support/HVM/cache/virtio-win/` | 体积约 700MB, 入包会让 .app 爆胀 |
@@ -132,7 +132,7 @@ HVM.app/Contents/
 | M2 | ✅ **已决**：EDK2 firmware 用 Linaro 官方预编译 `QEMU_EFI.fd`，由 `qemu-build.sh` 拉取；GPLv2 license 文本随包，commit SHA 写入 `MANIFEST.json`。 |
 | M3 | 显示：一期走 **`-display cocoa`**（QEMU 自己开窗口，与 HVM GUI 解耦）；后续若要嵌入 HVM 主窗口，再评估 SPICE/管道帧缓冲方案。 |
 | M4 | 网络：一期走 QEMU `-netdev user`（user-mode NAT），与 VZ 的 NAT 语义对齐；桥接审批通过后再做 `-netdev vmnet-bridged`（Apple 提供，无需 QEMU 桥接 helper）。 |
-| M5 | ✅ **已决（方案 B）**：本地/CI 构建产物落 `third_party/qemu/`，仓库 ignore；`scripts/qemu-build.sh` 一键复现，CI 缓存或本地 `make qemu` 都可。 |
+| M5 | ✅ **已决（方案 B）**：本地/CI 构建产物落 `third_party/qemu-stage/`，仓库 ignore；`scripts/qemu-build.sh` 一键复现，CI 缓存或本地 `make qemu` 都可。 |
 | M6 | GPL 合规：UI「关于」页面追加「开放源代码许可」入口，列 QEMU + EDK2 + swtpm/libtpms；目前以 `Resources/QEMU/LICENSE` + `MANIFEST.json` 满足强制要求。 |
 | M7 | ✅ **已决（双后端）**：Linux arm64 默认 VZ，高级模式可切 QEMU；Windows arm64 强制 QEMU；首版优先 Linux 通路验证 → 再做 Windows。 |
 

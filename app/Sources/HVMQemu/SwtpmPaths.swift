@@ -7,7 +7,7 @@
 //   1. 环境变量 HVM_SWTPM_PATH (CI / 开发期显式覆盖)
 //   2. QemuPaths.resolveRoot()/bin/swtpm — 涵盖:
 //      a) Bundle.main/Resources/QEMU (打包后 /Applications/HVM.app 或 build/HVM.app)
-//      b) 从 Bundle.main / cwd 向上找 third_party/qemu (swift run / swift test 兜底)
+//      b) 从 Bundle.main / cwd 向上找 third_party/qemu-stage (swift run / swift test 兜底)
 //
 // 缺则抛 .binaryMissing, 调用方负责引导 "make qemu / make build-all".
 
@@ -35,7 +35,7 @@ public enum SwtpmPaths {
         }
 
         // 2. 包内 (打包后 .app, 与 qemu-system-aarch64 同 bin/ 目录).
-        // QemuPaths.resolveRoot() 已涵盖 Bundle.main/Resources/QEMU + dev third_party/qemu 兜底,
+        // QemuPaths.resolveRoot() 已涵盖 Bundle.main/Resources/QEMU + dev third_party/qemu-stage 兜底,
         // 所以这里不再 brew fallback — 只信任包内副本, 防版本错位.
         if let qemuRoot = try? QemuPaths.resolveRoot() {
             let bundled = qemuRoot.appendingPathComponent("bin/swtpm")

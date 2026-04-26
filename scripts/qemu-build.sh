@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # scripts/qemu-build.sh
-# 一键: 装 Homebrew + 依赖 → 拉 QEMU v10.2.0 源码 → 应用补丁 → 构建 → 落 third_party/qemu/
+# 一键: 装 Homebrew + 依赖 → 拉 QEMU v10.2.0 源码 → 应用补丁 → 构建 →
+#       裁剪 + 嵌 swtpm + socket_vmnet → 写 LICENSE/MANIFEST → 直接落 third_party/qemu-stage/
+# 该 stage 即 bundle.sh 输入 (无中间 vendor 层, "编译后直接裁减进 .app").
 # 仅打包者跑; 最终用户机器不需要 (HVM.app 包内已带产物)
 # 详见 docs/QEMU_INTEGRATION.md 与 CLAUDE.md「QEMU 后端约束」
 
@@ -24,10 +26,13 @@ EDK2_VARS_URL="https://retrage.github.io/edk2-nightly/bin/RELEASEAARCH64_QEMU_VA
 BREW_PACKAGES=(meson ninja pkgconf glib pixman libslirp dtc capstone swtpm libtpms socket_vmnet)
 
 # ---- 路径 ----
+# qemu-src: git clone 源码 (~900M, gitignored)
+# qemu-stage: configure --prefix= 输出 + 裁剪 + 嵌 swtpm/socket_vmnet + LICENSE/MANIFEST 后的成品
+#             (~180M, gitignored, bundle.sh 直接从这里拷进 .app)
+# 不再有中间 third_party/qemu/ vendor 层 (取消 install_to_vendor 步骤)
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SRC_DIR="$ROOT/build/qemu-src"
-STAGING_DIR="$ROOT/build/qemu-stage"
-VENDOR_DIR="$ROOT/third_party/qemu"
+SRC_DIR="$ROOT/third_party/qemu-src"
+STAGING_DIR="$ROOT/third_party/qemu-stage"
 PATCHES_DIR="$ROOT/patches/qemu"
 
 NCPU="$(sysctl -n hw.ncpu)"
@@ -278,26 +283,18 @@ prune_share() {
     ok "裁剪完成 ($(du -sh "$share" 2>/dev/null | cut -f1))"
 }
 
-# ---- 9. 落入 third_party/qemu ----
-install_to_vendor() {
-    step "拷贝产物 → $VENDOR_DIR"
-    rm -rf "$VENDOR_DIR"
-    mkdir -p "$VENDOR_DIR"
-    for sub in bin share libexec lib; do
-        if [[ -d "$STAGING_DIR/$sub" ]]; then
-            cp -R "$STAGING_DIR/$sub" "$VENDOR_DIR/"
-        fi
-    done
-    # 清扩展属性: QEMU 上游 entitlement.sh 会给 qemu-system-aarch64 附
-    # com.apple.FinderInfo + com.apple.ResourceFork (来自 pc-bios/qemu.rsrc),
-    # 这些 xattr 会让后续 codesign 报 "resource fork ... not allowed".
-    # bundle.sh 也会再清一次防御; 此处先清掉避免污染 third_party/
-    find "$VENDOR_DIR" -type f -exec xattr -c {} + 2>/dev/null || true
-    ok "拷贝完成 + xattr 清理"
+# ---- 9. 清扩展属性 (直接在 stage 上做, 不再 cp 到中间 vendor 层) ----
+# QEMU 上游 entitlement.sh 会给 qemu-system-aarch64 附 com.apple.FinderInfo +
+# com.apple.ResourceFork (来自 pc-bios/qemu.rsrc), 这些 xattr 会让后续 codesign 报
+# "resource fork ... not allowed". bundle.sh 也会再清一次防御; 此处先清掉减少干扰.
+strip_xattrs() {
+    step "清 stage 内扩展属性 (codesign 前置)"
+    find "$STAGING_DIR" -type f -exec xattr -c {} + 2>/dev/null || true
+    ok "xattr 清理完成"
 }
 
 # ---- 9.5 嵌入 swtpm + 依赖 dylib (Win11 TPM 2.0 必需; 最终用户机零依赖) ----
-# 从 brew 装的 swtpm + libtpms 复制到 third_party/qemu/{bin,lib}, 用 install_name_tool
+# 从 brew 装的 swtpm + libtpms 复制到 stage/{bin,lib}, 用 install_name_tool
 # 把所有 /opt/homebrew/* 引用改成 @executable_path/../lib/*. 递归处理传递依赖.
 # 调用方: bundle.sh 后续 codesign 会签 bin/* 与 lib/*.dylib, 路径已重定向所以 AMFI 接受.
 bundle_swtpm() {
@@ -315,8 +312,8 @@ bundle_swtpm() {
         return
     fi
 
-    local bin_dir="$VENDOR_DIR/bin"
-    local lib_dir="$VENDOR_DIR/lib"
+    local bin_dir="$STAGING_DIR/bin"
+    local lib_dir="$STAGING_DIR/lib"
     mkdir -p "$bin_dir" "$lib_dir"
 
     local bin_dst="$bin_dir/swtpm"
@@ -366,8 +363,8 @@ bundle_socket_vmnet() {
         return
     fi
 
-    local bin_dir="$VENDOR_DIR/bin"
-    local lib_dir="$VENDOR_DIR/lib"
+    local bin_dir="$STAGING_DIR/bin"
+    local lib_dir="$STAGING_DIR/lib"
     mkdir -p "$bin_dir" "$lib_dir"
 
     local bin_dst="$bin_dir/socket_vmnet"
@@ -468,7 +465,7 @@ write_manifest() {
         fi
     fi
 
-    cat > "$VENDOR_DIR/MANIFEST.json" <<EOF
+    cat > "$STAGING_DIR/MANIFEST.json" <<EOF
 {
   "qemu_tag": "$QEMU_TAG",
   "qemu_commit": "$commit",
@@ -486,12 +483,15 @@ write_manifest() {
 }
 EOF
     # QEMU 上游 license 文本 (GPLv2 + LGPL 部分模块)
-    [[ -f "$SRC_DIR/COPYING"     ]] && cp "$SRC_DIR/COPYING"     "$VENDOR_DIR/LICENSE"
-    [[ -f "$SRC_DIR/COPYING.LIB" ]] && cp "$SRC_DIR/COPYING.LIB" "$VENDOR_DIR/LICENSE.LGPL"
+    [[ -f "$SRC_DIR/COPYING"     ]] && cp "$SRC_DIR/COPYING"     "$STAGING_DIR/LICENSE"
+    [[ -f "$SRC_DIR/COPYING.LIB" ]] && cp "$SRC_DIR/COPYING.LIB" "$STAGING_DIR/LICENSE.LGPL"
     ok "MANIFEST + LICENSE 写入"
 }
 
 # ---- main ----
+# 流程: 源码 → 编译 → install --prefix=stage → 裁剪 → 嵌 swtpm/socket_vmnet
+#       → 清 xattr → 写 MANIFEST/LICENSE
+# stage 即 bundle.sh 输入, 不再有中间 third_party/qemu/ vendor 层
 main() {
     preflight
     ensure_homebrew
@@ -501,17 +501,17 @@ main() {
     build_qemu
     fetch_edk2_firmware
     prune_share
-    install_to_vendor
     bundle_swtpm
     bundle_socket_vmnet
+    strip_xattrs
     write_manifest
     echo
     c_green "════════════════════════════════════════"
     c_green "  QEMU 构建完成"
     c_green "════════════════════════════════════════"
-    echo "  产物:    $VENDOR_DIR/bin/qemu-system-aarch64"
-    echo "  manifest: $VENDOR_DIR/MANIFEST.json"
-    echo "  下一步:  make build-all   (组装 .app 并嵌入 QEMU)"
+    echo "  产物:    $STAGING_DIR/bin/qemu-system-aarch64"
+    echo "  manifest: $STAGING_DIR/MANIFEST.json"
+    echo "  下一步:  make build-all   (组装 .app 并嵌入 QEMU, bundle.sh 直接从 stage 拷)"
 }
 
 main "$@"

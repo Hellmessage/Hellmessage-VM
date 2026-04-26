@@ -146,7 +146,7 @@ struct CreateVMDialog: View {
                             .font(HVMFont.small)
                             .foregroundStyle(HVMColor.textTertiary)
                     } else if !qemuBackendAvailable {
-                        Text("Windows 暂不可选 — third_party/qemu 未就绪 (需先 make qemu)")
+                        Text("Windows 暂不可选 — third_party/qemu-stage 未就绪 (需先 make qemu)")
                             .font(HVMFont.small)
                             .foregroundStyle(HVMColor.textTertiary)
                     }

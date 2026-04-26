@@ -83,12 +83,13 @@ make build              # release 模式, 出 build/HVM.app + build/hvm-cli + bu
 ### 含 QEMU 后端 (Linux 可选 + Windows 装机)
 
 ```bash
-make qemu               # 首次 10-30 分钟: 自动装 brew 依赖 + 拉 v10.2.0 源码 + 编译 + 嵌入
-                        # 产物落 third_party/qemu/{bin,lib,share}, 含 swtpm + 全部 dylib (重定向)
+make qemu               # 首次 10-30 分钟: 自动装 brew 依赖 + 拉 v10.2.0 源码 + 编译 + 裁剪 + 嵌 swtpm/socket_vmnet
+                        # 源码落 third_party/qemu-src/ (~900M)
+                        # 产物落 third_party/qemu-stage/{bin,lib,share} (~180M, 含 swtpm + dylib 重定向)
 make build-all          # = make qemu + make build (.app 自带 QEMU + swtpm + EDK2, 共 ~66MB)
 ```
 
-跑 `make qemu` 需要联网 + 几 GB 临时编译空间. 一次跑完后 `third_party/qemu/` 缓存在仓库内 (gitignored), 后续只需 `make build` 重新打包 (不重编译 QEMU)。
+跑 `make qemu` 需要联网 + 几 GB 临时编译空间. 一次跑完后 `third_party/qemu-{src,stage}/` 缓存在仓库内 (gitignored), 后续只需 `make build` 重新打包 (不重编译 QEMU)。
 
 ### 其他常用命令
 

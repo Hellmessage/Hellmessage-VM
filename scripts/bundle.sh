@@ -83,31 +83,32 @@ if [ -f "$ROOT/scripts/install-vmnet-helper.sh" ]; then
     chmod +x "$RESOURCES/scripts/install-vmnet-helper.sh"
 fi
 
-# 4.5 嵌入 QEMU 后端 (软模式: third_party/qemu/ 不存在则跳过, 仍出 .app)
+# 4.5 嵌入 QEMU 后端 (软模式: third_party/qemu-stage/ 不存在则跳过, 仍出 .app)
 #     完整发布走 make build-all (会先 make qemu); 此处 make build 不强制要求 QEMU 就绪
-QEMU_VENDOR_DIR="$ROOT/third_party/qemu"
-QEMU_BIN_SRC="$QEMU_VENDOR_DIR/bin/qemu-system-aarch64"
+#     stage 即 qemu-build.sh 的最终成品 (已裁剪 / 嵌 swtpm / 嵌 socket_vmnet / 清 xattr / 写 LICENSE+MANIFEST)
+QEMU_STAGE_DIR="$ROOT/third_party/qemu-stage"
+QEMU_BIN_SRC="$QEMU_STAGE_DIR/bin/qemu-system-aarch64"
 EMBED_QEMU=0
 if [ -x "$QEMU_BIN_SRC" ]; then
     QEMU_DST="$RESOURCES/QEMU"
     rm -rf "$QEMU_DST"
     mkdir -p "$QEMU_DST"
     for sub in bin share libexec lib; do
-        if [ -d "$QEMU_VENDOR_DIR/$sub" ]; then
-            cp -R "$QEMU_VENDOR_DIR/$sub" "$QEMU_DST/"
+        if [ -d "$QEMU_STAGE_DIR/$sub" ]; then
+            cp -R "$QEMU_STAGE_DIR/$sub" "$QEMU_DST/"
         fi
     done
-    [ -f "$QEMU_VENDOR_DIR/LICENSE"       ] && cp "$QEMU_VENDOR_DIR/LICENSE"       "$QEMU_DST/LICENSE"
-    [ -f "$QEMU_VENDOR_DIR/LICENSE.LGPL"  ] && cp "$QEMU_VENDOR_DIR/LICENSE.LGPL"  "$QEMU_DST/LICENSE.LGPL"
-    [ -f "$QEMU_VENDOR_DIR/MANIFEST.json" ] && cp "$QEMU_VENDOR_DIR/MANIFEST.json" "$QEMU_DST/MANIFEST.json"
+    [ -f "$QEMU_STAGE_DIR/LICENSE"       ] && cp "$QEMU_STAGE_DIR/LICENSE"       "$QEMU_DST/LICENSE"
+    [ -f "$QEMU_STAGE_DIR/LICENSE.LGPL"  ] && cp "$QEMU_STAGE_DIR/LICENSE.LGPL"  "$QEMU_DST/LICENSE.LGPL"
+    [ -f "$QEMU_STAGE_DIR/MANIFEST.json" ] && cp "$QEMU_STAGE_DIR/MANIFEST.json" "$QEMU_DST/MANIFEST.json"
     # 防御: 清扩展属性, 避免 codesign 报 "resource fork ... not allowed"
-    # (QEMU 上游 entitlement.sh 会给二进制附 com.apple.ResourceFork + FinderInfo)
+    # (qemu-build.sh strip_xattrs 已清过, 这里再清一次保 cp 期间不被打回)
     find "$QEMU_DST" -type f -exec xattr -c {} + 2>/dev/null || true
     EMBED_QEMU=1
     echo "✔ 已嵌入 QEMU 后端: $QEMU_DST"
 else
     cat <<'EOF'
-ℹ 跳过 QEMU 嵌入 (third_party/qemu/ 不存在)
+ℹ 跳过 QEMU 嵌入 (third_party/qemu-stage/ 不存在)
   - 此构建只含 VZ 后端, 不支持 Windows arm64
   - 需要 QEMU 后端: 跑 make build-all (首次会自动 make qemu, 耗时 10-30 分钟)
 EOF
