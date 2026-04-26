@@ -17,6 +17,7 @@
 import Foundation
 import Darwin
 import os.lock
+import HVMCore
 
 public final class QemuConsoleBridge: @unchecked Sendable {
 
@@ -71,33 +72,16 @@ public final class QemuConsoleBridge: @unchecked Sendable {
     public func connect() throws {
         try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
 
-        let f = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard f >= 0 else {
-            throw BridgeError.socketOpenFailed(errno: errno)
-        }
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = Array(socketPath.utf8)
-        guard pathBytes.count < MemoryLayout.size(ofValue: addr.sun_path) else {
-            Darwin.close(f)
+        // 走 HVMCore/UnixSocket helper, 失败映射到 BridgeError 保留语义.
+        let f: Int32
+        do {
+            f = try UnixSocket.connect(to: socketPath)
+        } catch UnixSocket.Error.openFailed(let e) {
+            throw BridgeError.socketOpenFailed(errno: e)
+        } catch UnixSocket.Error.pathTooLong {
             throw BridgeError.socketConnectFailed(reason: "socket path 太长", errno: 0)
-        }
-        withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
-            ptr.withMemoryRebound(to: CChar.self, capacity: pathBytes.count + 1) { cptr in
-                for (i, b) in pathBytes.enumerated() { cptr[i] = CChar(bitPattern: b) }
-                cptr[pathBytes.count] = 0
-            }
-        }
-        let addrLen = socklen_t(MemoryLayout<sockaddr_un>.size)
-        let rc = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                Darwin.connect(f, sa, addrLen)
-            }
-        }
-        guard rc == 0 else {
-            let saved = errno
-            Darwin.close(f)
-            throw BridgeError.socketConnectFailed(reason: "connect \(socketPath)", errno: saved)
+        } catch UnixSocket.Error.connectFailed(let reason, let e) {
+            throw BridgeError.socketConnectFailed(reason: reason, errno: e)
         }
 
         state.withLock { $0.fd = f }

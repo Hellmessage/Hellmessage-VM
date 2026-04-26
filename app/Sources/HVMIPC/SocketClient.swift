@@ -7,41 +7,17 @@ import HVMCore
 
 public final class SocketClient {
     public static func request(socketPath: String, request: IPCRequest, timeoutSec: Int = 10) throws -> IPCResponse {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else {
+        // 走 HVMCore/UnixSocket helper (含 SO_RCVTIMEO/SNDTIMEO + sockaddr_un 拼装 + connect).
+        // 失败映射成 IPC 语义错误 (socketNotFound 优先于 connectionRefused, 给客户端更准提示).
+        let fd: Int32
+        do {
+            fd = try UnixSocket.connect(to: socketPath, timeoutSec: timeoutSec)
+        } catch UnixSocket.Error.connectFailed(_, let errnoVal) where errnoVal == ENOENT {
+            throw HVMError.ipc(.socketNotFound(path: socketPath))
+        } catch {
             throw HVMError.ipc(.connectionRefused(path: socketPath))
         }
         defer { close(fd) }
-
-        // 超时 (读写各自 SO_RCVTIMEO / SO_SNDTIMEO)
-        var tv = timeval(tv_sec: timeoutSec, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = Array(socketPath.utf8)
-        guard pathBytes.count < MemoryLayout.size(ofValue: addr.sun_path) else {
-            throw HVMError.ipc(.connectionRefused(path: socketPath))
-        }
-        withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
-            ptr.withMemoryRebound(to: CChar.self, capacity: pathBytes.count + 1) { cptr in
-                for (i, b) in pathBytes.enumerated() { cptr[i] = CChar(bitPattern: b) }
-                cptr[pathBytes.count] = 0
-            }
-        }
-        let addrLen = socklen_t(MemoryLayout<sockaddr_un>.size)
-        let rc = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                connect(fd, sa, addrLen)
-            }
-        }
-        guard rc == 0 else {
-            if errno == ENOENT {
-                throw HVMError.ipc(.socketNotFound(path: socketPath))
-            }
-            throw HVMError.ipc(.connectionRefused(path: socketPath))
-        }
 
         let encoder = JSONEncoder()
         let data = try encoder.encode(request)

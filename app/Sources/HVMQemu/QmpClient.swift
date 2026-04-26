@@ -251,40 +251,17 @@ public final class QmpClient: @unchecked Sendable {
     // MARK: - 内部: socket 操作
 
     private func openAndConnectSocket() throws {
-        let f = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard f >= 0 else {
-            throw QmpError.socketError(reason: "socket() failed", errno: errno)
+        // 走 HVMCore/UnixSocket helper. 错误映射到 QmpError.socketError 保留语义.
+        let f: Int32
+        do {
+            f = try UnixSocket.connect(to: socketPath, timeoutSec: connectTimeoutSec)
+        } catch UnixSocket.Error.openFailed(let e) {
+            throw QmpError.socketError(reason: "socket() failed", errno: e)
+        } catch UnixSocket.Error.pathTooLong(let len) {
+            throw QmpError.socketError(reason: "socket path 太长 (\(len) bytes)", errno: 0)
+        } catch UnixSocket.Error.connectFailed(let reason, let e) {
+            throw QmpError.socketError(reason: reason, errno: e)
         }
-
-        // SO_RCVTIMEO 用于 connect 阶段的同步读 greeting; read loop 会清掉
-        var tv = timeval(tv_sec: connectTimeoutSec, tv_usec: 0)
-        setsockopt(f, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = Array(socketPath.utf8)
-        guard pathBytes.count < MemoryLayout.size(ofValue: addr.sun_path) else {
-            Darwin.close(f)
-            throw QmpError.socketError(reason: "socket path 太长 (\(pathBytes.count) bytes)", errno: 0)
-        }
-        withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
-            ptr.withMemoryRebound(to: CChar.self, capacity: pathBytes.count + 1) { cptr in
-                for (i, b) in pathBytes.enumerated() { cptr[i] = CChar(bitPattern: b) }
-                cptr[pathBytes.count] = 0
-            }
-        }
-        let addrLen = socklen_t(MemoryLayout<sockaddr_un>.size)
-        let rc = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                Darwin.connect(f, sa, addrLen)
-            }
-        }
-        guard rc == 0 else {
-            let saved = errno
-            Darwin.close(f)
-            throw QmpError.socketError(reason: "connect \(socketPath)", errno: saved)
-        }
-
         state.withLock { $0.fd = f }
     }
 
