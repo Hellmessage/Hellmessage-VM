@@ -74,13 +74,71 @@ if [ -f "$ROOT/app/Resources/embedded.provisionprofile" ]; then
     cp "$ROOT/app/Resources/embedded.provisionprofile" "$CONTENTS/embedded.provisionprofile"
 fi
 
-# 5. 签名: 先内部 binary, 再外层 .app, 最后 cli / dbg
-#    真实证书走 hardened runtime; ad-hoc 签名不叠加 --options runtime (VZ 仍接受 entitlement)
+# 4.5 嵌入 QEMU 后端 (软模式: third_party/qemu/ 不存在则跳过, 仍出 .app)
+#     完整发布走 make build-all (会先 make qemu); 此处 make build 不强制要求 QEMU 就绪
+QEMU_VENDOR_DIR="$ROOT/third_party/qemu"
+QEMU_BIN_SRC="$QEMU_VENDOR_DIR/bin/qemu-system-aarch64"
+EMBED_QEMU=0
+if [ -x "$QEMU_BIN_SRC" ]; then
+    QEMU_DST="$RESOURCES/QEMU"
+    rm -rf "$QEMU_DST"
+    mkdir -p "$QEMU_DST"
+    for sub in bin share libexec lib; do
+        if [ -d "$QEMU_VENDOR_DIR/$sub" ]; then
+            cp -R "$QEMU_VENDOR_DIR/$sub" "$QEMU_DST/"
+        fi
+    done
+    [ -f "$QEMU_VENDOR_DIR/LICENSE"       ] && cp "$QEMU_VENDOR_DIR/LICENSE"       "$QEMU_DST/LICENSE"
+    [ -f "$QEMU_VENDOR_DIR/LICENSE.LGPL"  ] && cp "$QEMU_VENDOR_DIR/LICENSE.LGPL"  "$QEMU_DST/LICENSE.LGPL"
+    [ -f "$QEMU_VENDOR_DIR/MANIFEST.json" ] && cp "$QEMU_VENDOR_DIR/MANIFEST.json" "$QEMU_DST/MANIFEST.json"
+    EMBED_QEMU=1
+    echo "✔ 已嵌入 QEMU 后端: $QEMU_DST"
+else
+    cat <<'EOF'
+ℹ 跳过 QEMU 嵌入 (third_party/qemu/ 不存在)
+  - 此构建只含 VZ 后端, 不支持 Windows arm64
+  - 需要 QEMU 后端: 跑 make build-all (首次会自动 make qemu, 耗时 10-30 分钟)
+EOF
+fi
+
+# 5. 签名
+#    QEMU 子进程使用独立 entitlement (com.apple.security.hypervisor, HVF 必需);
+#    HVM 主进程 entitlement 含 com.apple.security.virtualization, 二者不能混用
+#    真实证书走 hardened runtime; ad-hoc 签名不叠加 --options runtime
 SIGN_ARGS=(--force --sign "$SIGN" --entitlements "$ENTITLEMENTS" --timestamp=none)
 if [ "$SIGN" != "-" ]; then
     SIGN_ARGS+=(--options runtime)
 fi
 
+# 5.0 先签 QEMU (若已嵌入), 由内向外: dylib → libexec → bin
+if [ "$EMBED_QEMU" = "1" ]; then
+    QEMU_ENT="$ROOT/app/Resources/QEMU.entitlements"
+    QEMU_SIGN_ARGS=(--force --sign "$SIGN" --entitlements "$QEMU_ENT" --timestamp=none)
+    if [ "$SIGN" != "-" ]; then
+        QEMU_SIGN_ARGS+=(--options runtime)
+    fi
+    # dylib (lib/ 可能不存在, 取决于 configure 是否启用动态依赖)
+    if [ -d "$RESOURCES/QEMU/lib" ]; then
+        find "$RESOURCES/QEMU/lib" -type f \( -name '*.dylib' -o -name '*.so' \) -print0 \
+            | while IFS= read -r -d '' f; do
+                codesign "${QEMU_SIGN_ARGS[@]}" "$f" || true
+            done
+    fi
+    # libexec helper (qemu-bridge-helper 等)
+    if [ -d "$RESOURCES/QEMU/libexec" ]; then
+        find "$RESOURCES/QEMU/libexec" -type f -perm -u+x -print0 \
+            | while IFS= read -r -d '' f; do
+                codesign "${QEMU_SIGN_ARGS[@]}" "$f" || true
+            done
+    fi
+    # bin (qemu-system-aarch64 + 其他可执行) — 必须签成功
+    find "$RESOURCES/QEMU/bin" -type f -perm -u+x -print0 \
+        | while IFS= read -r -d '' f; do
+            codesign "${QEMU_SIGN_ARGS[@]}" "$f"
+        done
+fi
+
+# 5.1 签 HVM 自家 binary
 codesign "${SIGN_ARGS[@]}" "$MACOS/HVM"
 codesign "${SIGN_ARGS[@]}" "$MACOS/hvm-cli"
 codesign "${SIGN_ARGS[@]}" "$MACOS/hvm-dbg"
@@ -88,7 +146,7 @@ codesign "${SIGN_ARGS[@]}" "$APP"
 codesign "${SIGN_ARGS[@]}" "$BUILD/hvm-cli"
 codesign "${SIGN_ARGS[@]}" "$BUILD/hvm-dbg"
 
-# 6. 验证签名结构
+# 6. 验证签名结构 (--deep 会顺带验 Resources/QEMU/ 内 mach-o)
 codesign --verify --deep --strict "$APP" > /dev/null
 
 # 7. 通知 Launch Services 重新注册, 使 .hvmz 立即被识别为 package + 关联到 HVM.app

@@ -2,9 +2,23 @@
 
 ## 产品范围（已收敛）
 
-- QEMU 相关能力 **只考虑 guest 为 ARM64 的 Windows 与 Linux**。  
+- QEMU 相关能力 **只考虑 guest 为 ARM64 的 Windows 与 Linux**。
 - **不实现** x86_64、riscv 等其他 guest 架构，也不以「TCG 跨架构跑任意 ISO」为范围；包内可执行文件以 **`qemu-system-aarch64`（在 Apple Silicon 宿主机上跑 AArch64 虚拟机）** 为主线裁剪，不引入多架构 `qemu-system-*` 矩阵以控体积、签名与测试面。
-- 与现有 HVM 关系：VZ 仍负责已支持的 **macOS** 与 **Linux arm64** 主路径；QEMU 分支用于在 **不改动「VZ 能力边界」对外承诺** 的前提下，覆盖 **Windows arm64** 等 VZ 不承接的场景，以及产品决定是否对 **Linux arm64** 也走 QEMU（若走，则仍仅 arm64，见上条）。
+- 与现有 HVM 关系：VZ 仍负责已支持的 **macOS** 与 **Linux arm64** 主路径；QEMU 分支用于覆盖 **Windows arm64**（VZ 不承接），以及对 **Linux arm64** 提供 QEMU 备用后端（**M7 已决：双后端**，详见下「关键决策」）。
+- **首版优先级**：Linux arm64 走通 QEMU 通路 → 验证 EDK2/HVF/cocoa 链路 → 再做 Windows arm64（virtio-win 驱动注入 + swtpm + virtio-gpu BSOD 排雷）。
+
+## 关键决策（已锁）
+
+| 项 | 决策 | 备注 |
+|----|------|------|
+| **QEMU 版本** | `v10.2.0` (2025-12) | HVF 路径稳定 + virtio-scsi 多队列 + 5 个月 bake-in;v11.0 太新不赌 |
+| **产物来源** (M5) | **方案 B**: 本地/CI 构建产物落 `third_party/qemu/`, 不进 git | 详见 `scripts/qemu_build.sh` |
+| **Linux 后端** (M7) | **VZ + QEMU 双后端**: 默认 VZ, 高级模式可选 QEMU | UI 需提供切换;Windows 强制 QEMU |
+| **EDK2 firmware** | 从 Linaro 官方下载预编译 `QEMU_EFI.fd` | 由 `qemu_build.sh` 拉取, 不打包 EDK2 源码 |
+| **virtio-win 驱动 ISO** | **不入包**, 首次创建 Win VM 按需下载到 `~/Library/Application Support/HVM/cache/virtio-win/` | 体积约 700MB, 入包会让 .app 爆胀 |
+| **TPM** | `swtpm` + `libtpms` 由 brew 锁版本 | Win11 TPM 2.0 必需; QEMU 通过 unix socket 对接 swtpm daemon |
+| **补丁管理** | `patches/qemu/series` + 单文件 `.patch` | 禁止 fork 上游仓库;详见 `patches/qemu/README.md` |
+| **GPL 合规** | LICENSE 全文 + commit SHA 写入 `Resources/QEMU/`;HVM 仓库 GitHub 公开即满足源码可获取 | `MANIFEST.json` 由 `qemu_build.sh` 生成 |
 
 ## 目标
 
@@ -114,20 +128,38 @@ HVM.app/Contents/
 
 | 编号 | 内容 |
 |------|------|
-| M1 | **已决（范围收敛）**：包内只考虑带 `qemu-system-aarch64`；宿主机为 Apple Silicon，guest 仅 AArch64 的 **Windows 与 Linux**（见上文「产品范围」）。 |
-| M2 | 随包固件（EDK2 等，面向 Win/Linux **arm64**）版权、许可与体积上限？ |
-| M3 | 显示：SPICE / VNC / 管道帧缓冲 —— 与现有 `HVMDisplay` 的集成切分？ |
-| M4 | 网络：user 模式与现有 HVM 网络配置如何映射到 QEMU `-netdev`？ |
-| M5 | 产物进入仓库还是仅 CI 缓存（A vs B 的最终决策）？ |
-| M6 | GPL 合规在 UI 中的展示形式（仅 About / 独立「开放源代码许可」页）？ |
-| M7 | Linux arm64 是否提供 QEMU 入口、抑或 **仅 VZ**、QEMU 专供 Windows arm64？（产品决策，不影响「仅 arm64」工程边界） |
+| M1 | ✅ **已决（范围收敛）**：包内只考虑带 `qemu-system-aarch64`；宿主机为 Apple Silicon，guest 仅 AArch64 的 **Windows 与 Linux**。 |
+| M2 | ✅ **已决**：EDK2 firmware 用 Linaro 官方预编译 `QEMU_EFI.fd`，由 `qemu_build.sh` 拉取；GPLv2 license 文本随包，commit SHA 写入 `MANIFEST.json`。 |
+| M3 | 显示：一期走 **`-display cocoa`**（QEMU 自己开窗口，与 HVM GUI 解耦）；后续若要嵌入 HVM 主窗口，再评估 SPICE/管道帧缓冲方案。 |
+| M4 | 网络：一期走 QEMU `-netdev user`（user-mode NAT），与 VZ 的 NAT 语义对齐；桥接审批通过后再做 `-netdev vmnet-bridged`（Apple 提供，无需 QEMU 桥接 helper）。 |
+| M5 | ✅ **已决（方案 B）**：本地/CI 构建产物落 `third_party/qemu/`，仓库 ignore；`scripts/qemu_build.sh` 一键复现，CI 缓存或本地 `make qemu` 都可。 |
+| M6 | GPL 合规：UI「关于」页面追加「开放源代码许可」入口，列 QEMU + EDK2 + swtpm/libtpms；目前以 `Resources/QEMU/LICENSE` + `MANIFEST.json` 满足强制要求。 |
+| M7 | ✅ **已决（双后端）**：Linux arm64 默认 VZ，高级模式可切 QEMU；Windows arm64 强制 QEMU；首版优先 Linux 通路验证 → 再做 Windows。 |
+
+## 实施状态（2026-04-26）
+
+工程脚手架已就绪，等待跑通首次 `make qemu` 与首个 Linux arm64 QEMU VM。
+
+| 项目 | 状态 | 文件 |
+|------|------|------|
+| CLAUDE.md 例外条款 + 「QEMU 后端约束」章节 | ✅ | `CLAUDE.md` |
+| 一键构建脚本 (Homebrew + brew deps + clone + patch + configure + build + EDK2 + manifest) | ✅ | `scripts/qemu_build.sh` |
+| Makefile target (`qemu` / `qemu-clean` / `build-all`) | ✅ | `Makefile` |
+| `bundle.sh` 软模式嵌入 + QEMU.entitlements 签名 | ✅ | `scripts/bundle.sh`, `app/Resources/QEMU.entitlements` |
+| 补丁串行管理骨架 | ✅ (空 series) | `patches/qemu/` |
+| 仓库 ignore 规则 | ✅ | `.gitignore` |
+| Swift 侧 `HVMQemu` 模块 (后端进程编排 + QMP 客户端) | ⏳ 未开始 | `app/Sources/HVMQemu/` |
+| `VMConfig` 加 `engine: vz \| qemu` 字段 + 迁移 | ⏳ 未开始 | `app/Sources/HVMBundle/VMConfig.swift` |
+| `ConfigBuilder` 分支 (qemu 命令行构造) | ⏳ 未开始 | `app/Sources/HVMBackend/` |
+| Win 创建向导 (UI + 实验性标注) | ⏳ 未开始 | `app/Sources/HVM/UI/Dialogs/CreateVMDialog.swift` |
+| virtio-win 自动下载缓存 | ⏳ 未开始 | `app/Sources/HVMInstall/` |
 
 ## 相关文档
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 模块与进程模型，后续在「后端」章节增加 QEMU 分支。
-- [BUILD_SIGN.md](BUILD_SIGN.md) — `bundle.sh` 与签名顺序，实现嵌入后应追加 QEMU 步骤。
+- [BUILD_SIGN.md](BUILD_SIGN.md) — `bundle.sh` 与签名顺序，QEMU 嵌入步骤已落地。
 - [VM_BUNDLE.md](VM_BUNDLE.md) — `config.json` 若增加 `engine` 字段，在此文档演化 schema。
 
 ---
 
-**最后更新**: 2026-04-27
+**最后更新**: 2026-04-26

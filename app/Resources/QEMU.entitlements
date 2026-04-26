@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- QEMU 子进程使用 Apple Hypervisor.framework 加速 aarch64-on-aarch64 (HVF) 必需 -->
+    <!-- HVM 主进程的 com.apple.security.virtualization 不能给 QEMU, 二者职责不同 -->
+    <key>com.apple.security.hypervisor</key>
+    <true/>
+</dict>
+</plist>

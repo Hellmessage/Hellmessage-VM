@@ -8,8 +8,11 @@ SWIFTPM_DIR   := $(PKG_DIR)/.build
 # 签名身份: 空/auto = bundle.sh 自动探测 (Apple Development 优先, 否则 ad-hoc)
 SIGN_IDENTITY ?= auto
 ENTITLEMENTS  := $(PKG_DIR)/Resources/HVM.entitlements
+# QEMU 后端产物 (由 scripts/qemu_build.sh 生成, 仓库 ignore, 详见 docs/QEMU_INTEGRATION.md)
+QEMU_VENDOR   := third_party/qemu
+QEMU_BIN      := $(QEMU_VENDOR)/bin/qemu-system-aarch64
 
-.PHONY: all build bundle compile dev test verify clean help icon register-types
+.PHONY: all build bundle compile dev test verify clean help icon register-types qemu qemu-clean build-all
 
 # 默认: release 模式 + 完整 .app 签名
 all: build
@@ -18,12 +21,17 @@ build: bundle
 
 help:
 	@echo "HVM 构建命令:"
-	@echo "  make build   — release 模式, 组装 .app + 签名 (默认)"
-	@echo "  make dev     — debug 模式, 组装 .app + 签名"
-	@echo "  make test    — 跑 swift test"
-	@echo "  make verify  — smoke test, 验证 .app 可启动"
-	@echo "  make icon    — 从 app/Resources/AppIcon-src.png 生成 AppIcon.icns"
-	@echo "  make clean   — 清除 build/ 和 app/.build/"
+	@echo "  make build      — release 模式, 组装 .app + 签名 (默认; QEMU 缺则跳过嵌入)"
+	@echo "  make dev        — debug 模式, 组装 .app + 签名"
+	@echo "  make test       — 跑 swift test"
+	@echo "  make verify     — smoke test, 验证 .app 可启动"
+	@echo "  make icon       — 从 app/Resources/AppIcon-src.png 生成 AppIcon.icns"
+	@echo "  make clean      — 清除 build/ 和 app/.build/"
+	@echo
+	@echo "QEMU 后端 (Win arm64 / 可选 Linux arm64; 详见 docs/QEMU_INTEGRATION.md):"
+	@echo "  make qemu       — 装 brew 依赖 + 拉源码 + 编译 QEMU (10-30 分钟; 仅打包者跑)"
+	@echo "  make qemu-clean — 清除 third_party/qemu/, build/qemu-src/, build/qemu-stage/"
+	@echo "  make build-all  — make qemu + make build (发布完整流程)"
 
 # 1. SwiftPM 编译全部 executable
 compile:
@@ -52,6 +60,24 @@ verify:
 clean:
 	rm -rf $(BUILD_DIR) $(SWIFTPM_DIR)
 	@echo "✔ 已清除 build/ 与 $(SWIFTPM_DIR)/"
+
+# QEMU 后端构建 (仅打包者跑; 详见 scripts/qemu_build.sh 与 docs/QEMU_INTEGRATION.md)
+# 第一次跑会自动装 Homebrew + 一组锁定 brew 依赖, 拉 v10.2.0 源码, 编译 ~10-30 分钟
+qemu:
+	@bash scripts/qemu_build.sh
+
+# 仅清 QEMU 相关产物, 不动 SwiftPM 与 .app
+qemu-clean:
+	rm -rf $(QEMU_VENDOR) $(BUILD_DIR)/qemu-src $(BUILD_DIR)/qemu-stage
+	@echo "✔ 已清除 $(QEMU_VENDOR)/, $(BUILD_DIR)/qemu-src/, $(BUILD_DIR)/qemu-stage/"
+
+# 完整发布: 确保 QEMU 已就绪 (不存在则触发 make qemu) + 组装 .app 嵌入 QEMU
+build-all:
+	@if [ ! -x "$(QEMU_BIN)" ]; then \
+		echo "ℹ QEMU 产物不存在 ($(QEMU_BIN)), 先跑 make qemu"; \
+		$(MAKE) qemu; \
+	fi
+	@$(MAKE) build
 
 # 让 Finder 立刻识别 .hvmz 为 package. 仅当 Finder 图标未更新时手动跑一次
 register-types: build

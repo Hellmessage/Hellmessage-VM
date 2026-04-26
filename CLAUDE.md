@@ -22,7 +22,9 @@
 - 代码变更后必须 `make build` 验证
 - `make build` 通过才算任务完成, 否则视为未完成
 - 空白 Mac 上 `make build` 一条命令跑通, 除 Xcode Command Line Tools 和 Apple Developer 证书外**零手动依赖**
-- 不引入 Homebrew / Vendor / 编译外部 C 项目等重依赖, 所有逻辑走 Swift + Apple framework
+- **HVM 主体**不引入 Homebrew / Vendor / 编译外部 C 项目等重依赖, 所有逻辑走 Swift + Apple framework
+- **QEMU 后端例外**(详见下「QEMU 后端约束」): 打包者机器允许 `scripts/qemu_build.sh` 自动安装 Homebrew 与一组锁定 brew 包, 仅用于编译 QEMU 源码; **最终用户机器**仍零依赖, 所有运行时产物随 `.app` 包内分发
+- `make build` 自身**不**编译 QEMU; 缺 QEMU 产物时 `.app` 仍可构建但不嵌入 QEMU 后端; 完整发布走 `make build-all`(先 `make qemu` 再 `make build`)
 
 ## 构建约束
 
@@ -51,22 +53,43 @@
 - **弹窗只能通过点击右上角 X 按钮关闭**, 禁止点击遮罩层关闭
 - 所有错误对话框走统一 ErrorDialog, 禁止用 `NSAlert`
 - 主窗口默认深色, 不跟随系统主题
+- VM 创建向导中 Windows 选项必须标注「**实验性 (QEMU 后端)**」, 与 macOS / Linux 视觉区分
 
 ## VZ 能力边界约束 **必须遵守**
 
 以下能力 **VZ 不支持**, 即使用户要求也不得尝试实现, 直接提示用户能力边界:
 
 - **x86_64 / riscv64 guest** — VZ 只支持原生 arm64, 无 TCG 翻译
-- **Windows guest** — VZ 无 TPM 给 Windows, Win11 无法装。Win10 ARM 虽能启动但 Apple 已停供 ISO。**不实现 Windows 支持**, 向导里不出现 Windows 选项
+- **VZ 后端不支持 Windows guest** — VZ 无 TPM, Win11 无法装; Win10 ARM 已无 ISO 来源。**Windows arm64 由 QEMU 后端承载**, 详见 `docs/QEMU_INTEGRATION.md`
 - **host USB 设备直通** — VZ API 不支持 `usb-host` 类语义, 只支持虚拟 USB mass storage。若用户要求插 U 盘直通, 明确告知做不到, 建议 `dd` 成 image 再 `VZUSBMassStorageDevice` 挂载
 - **多 VM 共享同一 bundle** — 一个 `.hvmz` 同时只能被一个进程打开, 用 fcntl flock 互斥
 - **热插拔 CPU/内存** — VZ 不支持运行时改 CPU/mem 数量, 必须停机重配
 
 ## 支持的 Guest OS 约束
 
-- **macOS** — Apple Silicon only, 通过 IPSW + `VZMacOSInstaller` 装机
-- **Linux** — arm64 ISO 启动安装, 装完切 `bootFromDiskOnly` 直走硬盘
+- **macOS** — Apple Silicon only, 通过 IPSW + `VZMacOSInstaller` 装机, **仅 VZ 后端**
+- **Linux** — arm64 ISO 启动安装, 装完切 `bootFromDiskOnly` 直走硬盘; **默认 VZ 后端**, 可选 QEMU 后端 (双后端)
+- **Windows** — arm64 only, **仅 QEMU 后端** (VZ 不支持), 配置 `engine=qemu` 强制
 - **其他** — 不支持, 配置不允许保存其他 `GuestOSType`
+
+## QEMU 后端约束 **必须遵守**
+
+QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场景, 详见 `docs/QEMU_INTEGRATION.md`。
+
+- **架构限定**: 仅 `qemu-system-aarch64`(Apple Silicon 宿主机 + AArch64 guest), 不打包 x86_64 / riscv 等其他 `qemu-system-*` 目标
+- **版本锁定**: 包内 QEMU 与 `scripts/qemu_build.sh` 中的 `QEMU_TAG` (当前 `v10.2.0`) 严格绑定; 升级 QEMU 必须同步改 tag + 重跑 `make qemu` + 重 commit
+- **构建参数固定**: `--target-list=aarch64-softmmu --enable-cocoa --enable-hvf`, 其他 UI / 加速器目标全部 disable, 控体积与签名面
+- **补丁串行管理**: 所有 QEMU 上游补丁放 `patches/qemu/*.patch`, 顺序由 `patches/qemu/series` 决定; 任一 patch apply 失败立即中断; **禁止 fork 上游仓库**以避免 rebase 黑盒
+- **产物路径**: 编译产物落 `third_party/qemu/{bin,share,lib,libexec}` (仓库 ignore), 由 `scripts/bundle.sh` 拷至 `HVM.app/Contents/Resources/QEMU/`
+- **依赖配套**:
+  - EDK2 aarch64 firmware (`QEMU_EFI.fd`) 由 `qemu_build.sh` 从 Linaro 官方下载并固化版本
+  - `swtpm` + `libtpms` 由 brew 锁版本 (Win11 TPM 2.0 必需)
+  - **virtio-win 驱动 ISO 不入包** (体积约 700MB), 首次创建 Win VM 时按需下载到 `~/Library/Application Support/HVM/cache/virtio-win/`
+- **签名闭环**: `Resources/QEMU/bin/*` 与 `Resources/QEMU/lib/*.dylib` 必须逐文件 codesign; QEMU 二进制使用单独的 `app/Resources/QEMU.entitlements` (含 `com.apple.security.hypervisor`, HVF 必需), **不**与 HVM 主进程共用 entitlement; 整包再 `codesign --deep` 包裹
+- **GPL 合规**: QEMU 上游 commit SHA + tag + license 全文写入 `Resources/QEMU/MANIFEST.json` 与 `Resources/QEMU/LICENSE`; HVM 自身仓库 GitHub 公开即满足"对应版本源码可获取"要求
+- **进程模型**: HVM 主进程通过 `Process` 启动包内 `qemu-system-aarch64`, **不**链接 `libqemu`; QMP 控制 socket 仅监听 unix domain socket (`run/<vm-id>.qmp`), **严禁 TCP 监听**
+- **Bundle 互斥**: QEMU 后端 VM 与 VZ 后端 VM 同样遵守"单 `.hvmz` 单进程"原则, 复用现有 fcntl flock
+- **首版优先级**: Linux arm64 跑通通路后再做 Windows arm64; Linux QEMU 通路是 Windows 集成的前置验证
 
 ## 调试/诊断工作方式约束 **必须遵守**
 
@@ -88,5 +111,5 @@
 
 - 格式: `type(scope): 中文描述 [English summary]`
 - type 取值: `feat` / `fix` / `refactor` / `docs` / `chore` / `test`
-- scope 取值: 模块名小写(`core` / `bundle` / `storage` / `backend` / `display` / `app` / `cli` / `probe`)
+- scope 取值: 模块名小写(`core` / `bundle` / `storage` / `backend` / `display` / `app` / `cli` / `probe` / `qemu`)
 - 每次 commit 前必须 `make build` 通过

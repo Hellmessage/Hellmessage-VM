@@ -25,8 +25,13 @@ DerivedData/
 
 # provisioning profile (bridged entitlement 审批通过后才放入,
 # 但不应进 git, 因为含 Apple 颁发的设备/证书信息)
-Resources/embedded.provisionprofile
+app/Resources/embedded.provisionprofile
 
 
 *.log
 .cursor/rules/commit.mdc
+
+# QEMU 后端 (随 .app 嵌入, 由 scripts/qemu_build.sh 产出, 不进 git)
+third_party/qemu/
+build/qemu-src/
+build/qemu-stage/
