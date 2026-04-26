@@ -1,8 +1,9 @@
 // HVMApp.swift (M2 AppKit shell + menu bar)
 //
 // X 关闭按钮不退出 app: hide window + 切到 NSApplication.activationPolicy(.accessory),
-// Dock 图标隐藏, 系统右上角状态栏出现 HVM 图标 (NSStatusItem). 点 status item 弹出菜单
-// 选 "Show HVM" 重新显示主窗口, 同时切回 .regular activation policy.
+// Dock 图标隐藏. menu bar 图标 (NSStatusItem) 在 applicationDidFinishLaunching 就创建,
+// 与窗口可见性无关 — 用户启动 App 时 menu bar 立刻能看到 HVM 图标, 关闭主窗口后图标继续在.
+// 点 status item 弹出菜单选 "Show HVM" 重新显示主窗口, 同时切回 .regular activation policy.
 //
 // 这样用户关闭主窗口后, sessions 里运行中的 VM 仍然在跑 (后台), 通过状态栏图标随时唤回.
 
@@ -33,6 +34,9 @@ final class HVMAppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
 
         installMainMenu()
+
+        // menu bar 图标启动即创建, 跟主窗口可见性独立 — 用户打开 App 立刻能在右上角看到
+        createStatusItem()
 
         let wc = MainWindowController(model: model, errors: errors, confirms: confirms)
         wc.onCloseRequested = { [weak self] in
@@ -133,23 +137,15 @@ final class HVMAppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - menu bar mode
 
     private func enterAccessoryMode() {
-        // 1. 切到 .accessory: Dock 图标隐藏, app 不显示在 cmd+tab
+        // 切到 .accessory: Dock 图标隐藏, app 不显示在 cmd+tab.
+        // status item 在 applicationDidFinishLaunching 已经建好, 这里不重复.
         NSApp.setActivationPolicy(.accessory)
-        // 2. 创建状态栏图标 (idempotent)
-        if statusItem == nil {
-            createStatusItem()
-        }
     }
 
     private func exitAccessoryMode() {
-        // 1. 切回 .regular: Dock 图标显示
+        // 1. 切回 .regular: Dock 图标显示 (status item 保持存在, 不动)
         NSApp.setActivationPolicy(.regular)
-        // 2. 移除状态栏图标
-        if let item = statusItem {
-            NSStatusBar.system.removeStatusItem(item)
-            statusItem = nil
-        }
-        // 3. 显示主窗口并 activate
+        // 2. 显示主窗口并 activate
         NSApp.activate(ignoringOtherApps: true)
         mainController?.showWindow(nil)
         mainController?.window?.makeKeyAndOrderFront(nil)
