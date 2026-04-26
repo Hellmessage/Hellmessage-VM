@@ -34,6 +34,9 @@ let package = Package(
         .target(name: "HVMInstall", dependencies: ["HVMCore", "HVMBundle", "HVMStorage", "HVMBackend"]),
         .target(name: "HVMIPC",     dependencies: ["HVMCore"]),
 
+        // QEMU 后端: 进程编排 + argv 构造 + QMP 客户端 (与 HVMBackend 平行, 不依赖 VZ)
+        .target(name: "HVMQemu",    dependencies: ["HVMCore", "HVMBundle"]),
+
         // 可执行 target
         .executableTarget(
             name: "HVM",
@@ -79,6 +82,10 @@ let package = Package(
         .testTarget(
             name: "HVMIPCTests",
             dependencies: ["HVMIPC", "HVMCore"]
+        ),
+        .testTarget(
+            name: "HVMQemuTests",
+            dependencies: ["HVMQemu", "HVMBundle", "HVMCore"]
         ),
     ]
 )
