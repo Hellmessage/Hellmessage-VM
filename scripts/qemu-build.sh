@@ -209,37 +209,38 @@ build_qemu() {
 # (空 vars 32/64-bit 通用; 我们自己 build 的 EDK2 也产 QEMU_VARS.fd, 优先用那个).
 # 用 python truncate (BSD/GNU 都没有 `truncate` 命令的兼容写法), 不依赖 brew coreutils.
 fetch_edk2_firmware() {
-    step "准备 EDK2 aarch64 firmware (优先 third_party/edk2-stage/, 否则 QEMU 自带)"
+    step "准备 EDK2 aarch64 firmware (Linux 用 QEMU 自带 kraxel; Win11 用 edk2-stage patched)"
     local fw_dir="$STAGING_DIR/share/qemu"
-    local fw_dst="$fw_dir/edk2-aarch64-code.fd"
+    local fw_dst_linux="$fw_dir/edk2-aarch64-code.fd"           # Linux: QEMU 自带 kraxel
+    local fw_dst_win11="$fw_dir/edk2-aarch64-code-win11.fd"     # Windows: 自家 build patched
     local vars_dst="$fw_dir/edk2-aarch64-vars.fd"
     local arm_vars="$fw_dir/edk2-arm-vars.fd"
-    local edk2_stage="$ROOT/third_party/edk2-stage"
-    local edk2_stage_code="$edk2_stage/edk2-aarch64-code.fd"
-    local edk2_build_vars="$ROOT/third_party/edk2-src/Build/ArmVirtQemu-AARCH64/RELEASE_GCC5/FV/QEMU_VARS.fd"
+    local edk2_stage_code="$ROOT/third_party/edk2-stage/edk2-aarch64-code.fd"
     [[ -d "$fw_dir" ]] || err "$fw_dir 不存在 (make install 应生成)"
 
-    # 1. code.fd: 优先 patched EDK2 (Win11 兼容); 否则降级 QEMU 自带 (Linux 够用)
+    # 1. Linux firmware: QEMU make install 已落 share/qemu/edk2-aarch64-code.fd (kraxel build).
+    #    检查存在 + 合理大小, 不动它.
+    [[ -f "$fw_dst_linux" ]] || err "$fw_dst_linux 缺失 (QEMU make install 异常?)"
+    local linux_sz; linux_sz=$(stat -f %z "$fw_dst_linux" 2>/dev/null || stat -c %s "$fw_dst_linux")
+    [[ "$linux_sz" -gt 1048576 ]] || err "$fw_dst_linux 大小异常: $linux_sz < 1MB"
+    ok "EDK2 code (Linux): kraxel build 来自 QEMU $QEMU_TAG 源码"
+
+    # 2. Win11 firmware: 必须由 scripts/edk2-build.sh 自家 build (含 patches/edk2/0001
+    #    extra-RAM-region patch, Win11 ARM64 bootmgfw 0x10000000 兼容). 没有则 fail-soft
+    #    跳过 — make build 仍可出 .app, 只是 Win11 VM 启动失败时报 missing firmware.
     if [[ -f "$edk2_stage_code" ]]; then
-        cp -f "$edk2_stage_code" "$fw_dst"
-        ok "EDK2 code: 用 third_party/edk2-stage/ (patched, Win11 ARM64 兼容)"
+        cp -f "$edk2_stage_code" "$fw_dst_win11"
+        ok "EDK2 code (Windows): 用 third_party/edk2-stage/ (自家 build, edk2-stable202408 + HVM patch)"
     else
-        warn "third_party/edk2-stage/ 不存在 (没跑 scripts/edk2-build.sh), 用 QEMU 自带 firmware"
-        warn "  Linux arm64 装机 ok; Win11 ARM64 bootmgr 会 stuck (缺 0x10000000 RAM 孔)"
-        [[ -f "$fw_dst" ]] || err "$fw_dst 缺失 (QEMU make install 异常?)"
-        local code_sz; code_sz=$(stat -f %z "$fw_dst" 2>/dev/null || stat -c %s "$fw_dst")
-        [[ "$code_sz" -gt 1048576 ]] || err "$fw_dst 大小异常: $code_sz < 1MB"
+        warn "third_party/edk2-stage/edk2-aarch64-code.fd 不存在"
+        warn "  没跑 scripts/edk2-build.sh, Win11 ARM64 装机会失败 (缺 patched firmware)."
+        warn "  跑: make edk2  (或: bash scripts/edk2-build.sh)"
     fi
 
-    # 2. vars.fd: 优先 patched EDK2 build 出来的; 否则 32-bit 空 vars 兜底 (空 vars 通用)
-    if [[ -f "$edk2_build_vars" ]]; then
-        cp -f "$edk2_build_vars" "$vars_dst"
-        ok "EDK2 vars: 用 patched EDK2 build 出来的 QEMU_VARS.fd"
-    else
-        [[ -f "$arm_vars" ]] || err "$arm_vars 缺失 (期望 QEMU 自带)"
-        cp -f "$arm_vars" "$vars_dst"
-        warn "EDK2 vars: fallback 32-bit edk2-arm-vars.fd (空 vars 通用)"
-    fi
+    # 3. vars.fd: QEMU 不带 64-bit, 用 32-bit edk2-arm-vars.fd (空 vars 通用), padding 到 64MB.
+    [[ -f "$arm_vars" ]] || err "$arm_vars 缺失 (期望 QEMU 自带)"
+    cp -f "$arm_vars" "$vars_dst"
+    ok "EDK2 vars 模板: 用 QEMU 自带 edk2-arm-vars.fd (空 vars 通用)"
 
     # QEMU virt 机器 pflash device 固定 64MB; 必须 padding, 否则启动报
     # "device requires 67108864 bytes, pflash0 block backend provides X bytes"
@@ -257,10 +258,14 @@ elif sz > target:
     raise SystemExit('file %s already larger than 64MB: %d' % (p, sz))
 " "$1"
     }
-    pad_to_64m "$fw_dst"
+    pad_to_64m "$fw_dst_linux"
+    [[ -f "$fw_dst_win11" ]] && pad_to_64m "$fw_dst_win11"
     pad_to_64m "$vars_dst"
-    ok "EDK2 firmware: $fw_dst (64MB)"
-    ok "EDK2 vars 模板: $vars_dst (64MB; 创建 Win VM 时拷贝到 bundle/nvram/efi-vars.fd)"
+    ok "EDK2 Linux firmware:  $fw_dst_linux (64MB)"
+    if [[ -f "$fw_dst_win11" ]]; then
+        ok "EDK2 Win11 firmware:  $fw_dst_win11 (64MB)"
+    fi
+    ok "EDK2 vars 模板:       $vars_dst (64MB; 创建 Win VM 时拷贝到 bundle/nvram/efi-vars.fd)"
 }
 
 # ---- 8. 裁剪 share (删非 aarch64 用不上的固件) ----

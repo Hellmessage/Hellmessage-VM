@@ -94,19 +94,19 @@
 QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场景, 详见 `docs/QEMU_INTEGRATION.md`。
 
 - **架构限定**: 仅 `qemu-system-aarch64`(Apple Silicon 宿主机 + AArch64 guest), 不打包 x86_64 / riscv 等其他 `qemu-system-*` 目标
-- **版本锁定**: 包内 QEMU 与 `scripts/qemu-build.sh` 中的 `QEMU_TAG` (当前 `v10.2.0`), EDK2 与 `scripts/edk2-build.sh` 中的 `EDK2_TAG` (当前 `edk2-stable202508`) 严格绑定; 升级任一组件必须同步改 tag + 重跑 build + 重 commit
+- **版本锁定**: 包内 QEMU 与 `scripts/qemu-build.sh` 中的 `QEMU_TAG` (当前 `v10.2.0`), EDK2 与 `scripts/edk2-build.sh` 中的 `EDK2_TAG` (当前 `edk2-stable202408`) 严格绑定; 升级任一组件必须同步改 tag + 重跑 build + 重 commit. **EDK2 用 stable202408 不是 202508**: 上游 202508 改了 `OvmfPkg/Library/PlatformBootManagerLibLight` 行为 (无 NV BootOrder 时落 EFI Shell, 不再自动 boot first device), 切到 202508 必须额外 patch 改用 PlatformBootManagerLib full 才能装机.
 - **构建参数固定**: QEMU `--target-list=aarch64-softmmu --enable-cocoa --enable-hvf`; EDK2 `-p ArmVirtPkg/ArmVirtQemu.dsc -a AARCH64 -t GCC5 -b RELEASE` (cross compile via brew aarch64-elf-gcc), 控体积与签名面
 - **补丁串行管理**: 所有 QEMU 上游补丁放 `patches/qemu/*.patch` 顺序由 `patches/qemu/series` 决定; 所有 EDK2 上游补丁放 `patches/edk2/*.patch` 顺序由 `patches/edk2/series` 决定; 任一 patch apply 失败立即中断; **禁止 fork 上游仓库**以避免 rebase 黑盒
 - **patches/qemu/0001-hvm-win11-lowram.patch** + **patches/edk2/0001-armvirt-extra-ram-region-for-win11.patch** 配对启用 Win11 ARM64 装机: QEMU 加 opt-in `-machine virt,hvm-win11-lowram=on` 在 0x10000000 挂 16MB RAM 孔, EDK2 ArmVirtPkg 按 PcdSystemMemoryBase 选主 RAM + 把额外 /memory 节点注册成 SYSTEM_MEMORY/MMU. 两者必须同时打 (单打 QEMU 那个 stock EDK2 看到额外 /memory 节点会 ASSERT 挂死).
 - **产物路径**: 都在仓库 ignore:
   - `third_party/qemu-src/`: 上游 v10.2.0 git clone 源码 (~900M)
   - `third_party/qemu-stage/`: 编译 + 裁剪 + 嵌 swtpm/socket_vmnet + 清 xattr + LICENSE/MANIFEST 后的最终成品 (~180M)
-  - `third_party/edk2-src/`: 上游 edk2-stable202508 git clone 源码 (含 submodules, ~700M)
+  - `third_party/edk2-src/`: 上游 edk2-stable202408 git clone 源码 (含 submodules, ~700M)
   - `third_party/edk2-stage/`: EDK2 编译 + padding 到 64MB 的 `edk2-aarch64-code.fd` (Win11 patched)
-  - `scripts/qemu-build.sh` 优先把 `third_party/edk2-stage/edk2-aarch64-code.fd` 拷进 qemu-stage 的 `share/qemu/`, 没有则降级用 QEMU 自带 firmware
+  - `scripts/qemu-build.sh` 把 `third_party/edk2-stage/edk2-aarch64-code.fd` 拷进 qemu-stage 的 `share/qemu/edk2-aarch64-code-win11.fd` (Windows guest 专用); Linux guest 用 QEMU 自带 kraxel firmware (`edk2-aarch64-code.fd`)
   - `scripts/bundle.sh` 直接从 `third_party/qemu-stage` 拷至 `HVM.app/Contents/Resources/QEMU/`, **不再有中间 `third_party/qemu/` vendor 层**(已废弃)
 - **依赖配套**:
-  - EDK2 aarch64 firmware: `scripts/edk2-build.sh` 自己 build (clone edk2-stable202508 + apply patches/edk2/* + cross compile RELEASE_GCC AARCH64 via brew aarch64-elf-gcc), 产物给 Win11 ARM64 装机; 跑 `make qemu` 时若没 EDK2 stage 则降级用 QEMU 自带 kraxel firmware (Linux 够用, Win11 boot 会 stuck); vars 模板优先用 patched EDK2 build 出来的 `QEMU_VARS.fd`, 否则用 QEMU 自带 `edk2-arm-vars.fd` 兜底
+  - EDK2 aarch64 firmware: 双 firmware 策略 — Linux 用 QEMU 自带 kraxel firmware (`edk2-aarch64-code.fd`, 跟 brew QEMU 同源); Windows 用 `scripts/edk2-build.sh` 自家 build (clone edk2-stable202408 + apply patches/edk2/0001-armvirt-extra-ram-region-for-win11.patch + cross compile RELEASE_GCC AARCH64 via brew aarch64-elf-gcc), 落 `share/qemu/edk2-aarch64-code-win11.fd`; vars 模板用 QEMU 自带 `edk2-arm-vars.fd` (空 vars 通用)
   - `swtpm` + `libtpms` 由 brew 锁版本 (Win11 TPM 2.0 必需), 由 `qemu-build.sh` 打包入 `Resources/QEMU/bin/swtpm` + dylib 重定向
   - `socket_vmnet` 由 brew 锁版本 (QEMU 走 vmnet bridged/shared 网络的非 root 桥接), 同模式打包入包内
   - **virtio-win 驱动 ISO 不入包** (体积约 700MB), 首次创建 Win VM 时按需下载到 `~/Library/Application Support/HVM/cache/virtio-win/`

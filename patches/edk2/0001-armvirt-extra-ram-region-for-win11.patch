@@ -12,10 +12,10 @@ index 6aa5ea0..f20c36e 100644
  [PcdsFeatureFlag]
    #
 diff --git a/ArmVirtPkg/Library/ArmVirtMemoryInitPeiLib/ArmVirtMemoryInitPeiLib.c b/ArmVirtPkg/Library/ArmVirtMemoryInitPeiLib/ArmVirtMemoryInitPeiLib.c
-index 72e5c65..ce1c879 100644
+index 72e5c65..f083c03 100644
 --- a/ArmVirtPkg/Library/ArmVirtMemoryInitPeiLib/ArmVirtMemoryInitPeiLib.c
 +++ b/ArmVirtPkg/Library/ArmVirtMemoryInitPeiLib/ArmVirtMemoryInitPeiLib.c
-@@ -99,6 +99,35 @@ MemoryPeim (
+@@ -99,6 +99,34 @@ MemoryPeim (
        );
    }
  
@@ -23,7 +23,6 @@ index 72e5c65..ce1c879 100644
 +  // HVM: 若 QemuVirtMemInfoPeiLibConstructor 收集到额外 RAM 节点 (Win11 ARM64
 +  // bootmgfw 用的 0x10000000 区), 这里也注册成 EFI_RESOURCE_SYSTEM_MEMORY 让 GCD
 +  // 知道; 不然 bootmgr 调 ConvertPages 在这块地址会因为 GCD 不识别报错失败.
-+  // 主 RAM HOB 已上面建好, 这里追加额外 HOB.
 +  //
 +  {
 +    typedef struct {
@@ -52,10 +51,10 @@ index 72e5c65..ce1c879 100644
    InitMmu ();
  
 diff --git a/ArmVirtPkg/Library/ArmVirtMemoryInitPeiLib/ArmVirtMemoryInitPeiLib.inf b/ArmVirtPkg/Library/ArmVirtMemoryInitPeiLib/ArmVirtMemoryInitPeiLib.inf
-index 6292347..869c786 100644
+index 48d9c66..8fc9bf2 100644
 --- a/ArmVirtPkg/Library/ArmVirtMemoryInitPeiLib/ArmVirtMemoryInitPeiLib.inf
 +++ b/ArmVirtPkg/Library/ArmVirtMemoryInitPeiLib/ArmVirtMemoryInitPeiLib.inf
-@@ -37,6 +37,7 @@
+@@ -36,6 +36,7 @@
  [Guids]
    gArmVirtSystemMemorySizeGuid
    gEfiMemoryTypeInformationGuid
@@ -122,10 +121,10 @@ index 6acad8b..340b5ed 100644
  [Pcd]
    gArmTokenSpaceGuid.PcdFvBaseAddress
 diff --git a/ArmVirtPkg/Library/QemuVirtMemInfoLib/QemuVirtMemInfoPeiLib.inf b/ArmVirtPkg/Library/QemuVirtMemInfoLib/QemuVirtMemInfoPeiLib.inf
-index 091e37c..21753b9 100644
+index da957cf..e2c8c90 100644
 --- a/ArmVirtPkg/Library/QemuVirtMemInfoLib/QemuVirtMemInfoPeiLib.inf
 +++ b/ArmVirtPkg/Library/QemuVirtMemInfoLib/QemuVirtMemInfoPeiLib.inf
-@@ -38,6 +38,7 @@
+@@ -37,6 +37,7 @@
  
  [Guids]
    gArmVirtSystemMemorySizeGuid
@@ -134,18 +133,18 @@ index 091e37c..21753b9 100644
  [Pcd]
    gArmTokenSpaceGuid.PcdSystemMemorySize
 diff --git a/ArmVirtPkg/Library/QemuVirtMemInfoLib/QemuVirtMemInfoPeiLibConstructor.c b/ArmVirtPkg/Library/QemuVirtMemInfoLib/QemuVirtMemInfoPeiLibConstructor.c
-index b0948ef..f3cc06f 100644
+index 1bcc2e2..0b83179 100644
 --- a/ArmVirtPkg/Library/QemuVirtMemInfoLib/QemuVirtMemInfoPeiLibConstructor.c
 +++ b/ArmVirtPkg/Library/QemuVirtMemInfoLib/QemuVirtMemInfoPeiLibConstructor.c
-@@ -13,23 +13,41 @@
- #include <Library/FdtLib.h>
+@@ -12,23 +12,41 @@
  #include <Library/HobLib.h>
+ #include <libfdt.h>
  
 +//
-+// HVM: 额外低地址 RAM 区描述 (跟主 RAM 不连续, 由 QEMU virt machine 在
-+// hvm-win11-lowram=on 时通过 DTB 第二个 /memory 节点广播; Win11 ARM64
-+// bootmgfw 在 0x10000000 附近调 ConvertPages/SetMemoryAttributes 必需).
-+// 通过 GUID HOB 传给 ArmVirtMemoryInitPeiLib + QemuVirtMemInfoLib 消费.
++// HVM: 额外低地址 RAM 区描述 HOB. Win11 ARM64 bootmgfw 假设 0x10000000 处有 RAM,
++// QEMU virt machine 在 hvm-win11-lowram=on 时通过 DTB 第二个 /memory 节点广播.
++// 本 lib 把它收进 GUID HOB; ArmVirtMemoryInitPeiLib + QemuVirtMemInfoLib 消费 HOB
++// 注册成 EFI_RESOURCE_SYSTEM_MEMORY + 加 MMU 页表.
 +//
 +typedef struct {
 +  UINT64    Base;
@@ -190,8 +189,8 @@ index b0948ef..f3cc06f 100644
  
    DeviceTreeBase = (VOID *)(UINTN)PcdGet64 (PcdDeviceTreeInitialBaseAddress);
    ASSERT (DeviceTreeBase != NULL);
-@@ -40,7 +58,13 @@ QemuVirtMemInfoPeiLibConstructor (
-   ASSERT (FdtCheckHeader (DeviceTreeBase) == 0);
+@@ -39,7 +57,13 @@ QemuVirtMemInfoPeiLibConstructor (
+   ASSERT (fdt_check_header (DeviceTreeBase) == 0);
  
    //
 -  // Look for the lowest memory node
@@ -204,8 +203,8 @@ index b0948ef..f3cc06f 100644
 +  // QemuVirtMemInfoLib 注册成 EFI_RESOURCE_SYSTEM_MEMORY + 加进 MMU 页表.
    //
    for (Prev = 0; ; Prev = Node) {
-     Node = FdtNextNode (DeviceTreeBase, Prev, NULL);
-@@ -70,9 +94,21 @@ QemuVirtMemInfoPeiLibConstructor (
+     Node = fdt_next_node (DeviceTreeBase, Prev, NULL);
+@@ -69,9 +93,21 @@ QemuVirtMemInfoPeiLibConstructor (
            CurBase + CurSize - 1
            ));
  
@@ -228,7 +227,7 @@ index b0948ef..f3cc06f 100644
          }
        } else {
          DEBUG ((
-@@ -87,7 +123,7 @@ QemuVirtMemInfoPeiLibConstructor (
+@@ -86,7 +122,7 @@ QemuVirtMemInfoPeiLibConstructor (
    //
    // Make sure the start of DRAM matches our expectation
    //
@@ -237,13 +236,12 @@ index b0948ef..f3cc06f 100644
  
    Hob = BuildGuidDataHob (
            &gArmVirtSystemMemorySizeGuid,
-@@ -96,6 +132,19 @@ QemuVirtMemInfoPeiLibConstructor (
+@@ -95,6 +131,18 @@ QemuVirtMemInfoPeiLibConstructor (
            );
    ASSERT (Hob != NULL);
  
 +  //
-+  // HVM: 若发现额外 RAM 节点, 也建一个 HOB 给后续 PEIM 消费 (注册成 SYSTEM_MEMORY
-+  // + 加 MMU 页表). MemoryPeim/QemuVirtMemInfoLib 会通过 GetFirstGuidHob 找到它.
++  // HVM: 若发现额外 RAM 节点, 也建一个 HOB 给后续 PEIM 消费.
 +  //
 +  if (ExtraMem.Size != 0) {
 +    Hob = BuildGuidDataHob (
