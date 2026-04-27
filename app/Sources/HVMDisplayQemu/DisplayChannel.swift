@@ -169,12 +169,15 @@ public final class DisplayChannel: @unchecked Sendable {
 
     private func receivePeerHello() throws -> HDP.Hello {
         let hdr: HDP.Header
+        let strayFD: Int32
         do {
-            hdr = try recvHeader()
+            (hdr, strayFD) = try recvHeader()
         } catch {
             forceClose()
             throw ConnectError.helloReceiveFailed
         }
+        // HELLO 不应带 fd; 收到也安全关闭, 不报错 (向前兼容)
+        if strayFD >= 0 { Darwin.close(strayFD) }
         guard hdr.type == HDP.MessageType.hello.rawValue,
               hdr.payloadLen >= UInt32(HDP.Hello.byteSize) else {
             forceClose()
@@ -182,7 +185,7 @@ public final class DisplayChannel: @unchecked Sendable {
         }
         let payload: Data
         do {
-            (payload, _) = try recvPayload(length: Int(hdr.payloadLen))
+            payload = try recvPayload(length: Int(hdr.payloadLen))
         } catch {
             forceClose()
             throw ConnectError.helloReceiveFailed
@@ -242,23 +245,28 @@ public final class DisplayChannel: @unchecked Sendable {
         case multipleFDs
     }
 
-    /// 收 8 字节 header. 不期望附带 fd (header 流不带 SCM_RIGHTS).
-    private func recvHeader() throws -> HDP.Header {
+    /// 收 8 字节 header, **顺带可能附的单个 SCM_RIGHTS fd**.
+    /// QEMU 端用 `sendmsg(iov={hdr,payload}, cmsg={fd})` 一次 syscall 把 hdr+payload+fd
+    /// 一起发, 所以 fd 跟 header 的字节一同到达接收方 (cmsg 跟 sendmsg 调用绑定,
+    /// 第一次 recv 拿到部分字节时一并收 cmsg, 之后再 recv 后续字节不再有 cmsg).
+    /// 因此**必须**在 recvHeader 阶段接收 fd, 不能延到 recvPayload.
+    private func recvHeader() throws -> (HDP.Header, Int32) {
         var buf = Data(count: HDP.Header.byteSize)
-        try recvIntoBuffer(&buf, length: HDP.Header.byteSize, fdSink: nil)
+        var fd: Int32 = -1
+        try recvIntoBuffer(&buf, length: HDP.Header.byteSize, fdSink: &fd)
         guard let hdr = HDP.Header.decode(buf) else {
+            if fd >= 0 { Darwin.close(fd) }
             throw RecvError.ioError(errno: EINVAL)
         }
-        return hdr
+        return (hdr, fd)
     }
 
-    /// 收 payload, 顺带可能附的单个 SCM_RIGHTS fd. 多 fd 是协议错误.
-    private func recvPayload(length: Int) throws -> (Data, Int32) {
-        if length == 0 { return (Data(), -1) }
+    /// 收 payload only. fd 已在 recvHeader 阶段收完 (见上方注释).
+    private func recvPayload(length: Int) throws -> Data {
+        if length == 0 { return Data() }
         var buf = Data(count: length)
-        var fd: Int32 = -1
-        try recvIntoBuffer(&buf, length: length, fdSink: &fd)
-        return (buf, fd)
+        try recvIntoBuffer(&buf, length: length, fdSink: nil)
+        return buf
     }
 
     /// 把 length 字节读入 buf, 同时将首个 cmsg fd 写入 fdSink (若提供).
@@ -315,29 +323,29 @@ public final class DisplayChannel: @unchecked Sendable {
     private func readLoopBody() {
         while sockFD >= 0 {
             let hdr: HDP.Header
+            var fd: Int32 = -1
             do {
-                hdr = try recvHeader()
+                (hdr, fd) = try recvHeader()
             } catch {
                 return
             }
 
             // sanity guard, 跟 ui/iosurface.m 里的 16MB 上限一致
             if hdr.payloadLen > 16 * 1024 * 1024 {
+                if fd >= 0 { Darwin.close(fd) }
                 return
             }
 
             var payload = Data()
-            var fd: Int32 = -1
             if hdr.payloadLen > 0 {
                 do {
-                    (payload, fd) = try recvPayload(length: Int(hdr.payloadLen))
+                    payload = try recvPayload(length: Int(hdr.payloadLen))
                 } catch {
+                    if fd >= 0 { Darwin.close(fd) }
                     return
                 }
             }
 
-            // 协议规范 §4: 不识别的 flag bit 必须 ignore.
-            // 我们只关注 hasFD: SURFACE_NEW 必带, 其他不带.
             // dispatch 内部消费/关闭 fd.
             if !dispatchMessage(hdr: hdr, payload: payload, attachedFD: fd) {
                 return

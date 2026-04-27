@@ -17,8 +17,11 @@
 
 import Foundation
 import AppKit
+import OSLog
 import HVMCore
 import HVMDisplayQemu
+
+private let log = Logger(subsystem: "com.hellmessage.vm", category: "QemuEmbed")
 
 @MainActor
 final class QemuEmbeddedSession {
@@ -42,24 +45,27 @@ final class QemuEmbeddedSession {
 
     /// 启动连接 + 事件循环. 不阻塞调用线程.
     func start() {
+        log.info("start: connecting forwarder + retry channel")
         forwarder.connect()
 
         // HDP socket 可能未就绪 (QEMU 还没 bind listener), 重试连接.
         let channel = self.channel
         connectTask = Task.detached(priority: .userInitiated) { [weak self] in
-            for _ in 0..<50 {
+            for attempt in 0..<50 {
                 do {
                     try channel.connect()
+                    log.info("HDP channel connect OK on attempt \(attempt)")
                     await MainActor.run { self?.startEventLoop() }
                     return
                 } catch {
+                    if attempt == 0 || attempt == 10 {
+                        log.info("HDP connect attempt \(attempt) failed: \(String(describing: error))")
+                    }
                     try? await Task.sleep(nanoseconds: 100_000_000)
                     if Task.isCancelled { return }
                 }
             }
-            // 5 秒仍失败, 写到 stderr; UI 留 view 空白 (黑屏), 用户可重试 stop/start
-            FileHandle.standardError.write(Data(
-                "QemuEmbeddedSession: HDP connect timed out after 5s\n".utf8))
+            log.error("HDP connect timed out after 5s")
         }
     }
 
@@ -85,25 +91,32 @@ final class QemuEmbeddedSession {
     private func startEventLoop() {
         let stream = channel.events
         eventLoopTask = Task { [weak view] in
+            log.info("event loop started")
             for await event in stream {
-                guard let view = view else { return }
+                guard let view = view else {
+                    log.info("event loop: view dropped, exit")
+                    return
+                }
                 switch event {
+                case .helloDone(let caps):
+                    log.info("event helloDone caps=0x\(String(caps.rawValue, radix: 16))")
                 case .surfaceNew(let arrival):
+                    log.info("event surfaceNew \(arrival.info.width)x\(arrival.info.height) stride=\(arrival.info.stride) shm_size=\(arrival.info.shmSize) fd=\(arrival.shmFD)")
                     view.bindSurface(arrival)
+                    log.info("surface bound to renderer")
+                case .surfaceDamage(let d):
+                    log.debug("event surfaceDamage \(d.x),\(d.y) \(d.w)x\(d.h)")
                 case .ledState(let leds):
+                    log.info("event ledState caps=\(leds.capsLock) num=\(leds.numLock) scroll=\(leds.scrollLock)")
                     view.updateGuestLEDState(leds)
-                case .helloDone,
-                     .surfaceDamage,
-                     .cursorDefine,
-                     .cursorPos:
-                    // helloDone 不需处理; damage 我们用全屏 shader 重绘, 也不必逐区
-                    // (Phase 5 性能调优时可以加局部 invalidate). cursor 系列暂走 host
-                    // 系统光标 (NSCursor.hide on enter); 后期可加自绘硬件光标层.
+                case .cursorDefine, .cursorPos:
                     break
-                case .disconnected:
+                case .disconnected(let reason):
+                    log.info("event disconnected reason=\(String(describing: reason))")
                     return
                 }
             }
+            log.info("event loop ended (stream finished)")
         }
     }
 }
