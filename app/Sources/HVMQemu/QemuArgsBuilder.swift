@@ -210,9 +210,14 @@ public enum QemuArgsBuilder {
 
         // ---- 显示 + 输入 ----
         // QEMU virt 机器默认无显卡, 只有 serial/parallel console; 必须显式加 GPU 才能出 graphical UEFI/OS UI.
-        // virtio-gpu-pci: 现代 virtio GPU, Linux 内核自带 driver; Windows arm64 装机界面要从 ISO 加载
-        // virtio GPU driver (virtio-win.iso 提供) 才能跳出 1080p, 装机阶段会先以 EDK2 GOP 出图.
-        args += ["-device", "virtio-gpu-pci"]
+        // Linux: virtio-gpu-pci (内核自带 driver, 加速); Windows ARM64: 必须只挂 ramfb,
+        // 因为 bootmgfw.efi 跟 virtio-gpu-pci GOP 实测有冲突会 hang (hell-vm 同款约束).
+        // ramfb 是 sysbus framebuffer, EDK2 通过 fw_cfg 暴露给 GOP, Win bootmgr 兼容.
+        if cfg.guestOS == .windows {
+            args += ["-device", "ramfb"]
+        } else {
+            args += ["-device", "virtio-gpu-pci"]
+        }
         // USB 键盘 + USB tablet (xhci controller 已在 ISO 之前定义, 避免 bus=xhci.0 forward ref).
         // tablet 给绝对坐标鼠标 (hvm-dbg mouse abs 注入也走它).
         args += ["-device", "usb-kbd,bus=xhci.0"]
