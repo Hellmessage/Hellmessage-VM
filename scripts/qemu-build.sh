@@ -176,6 +176,7 @@ build_qemu() {
             --target-list=aarch64-softmmu \
             --enable-cocoa \
             --enable-hvf \
+            --enable-iosurface \
             --disable-docs \
             --disable-gtk \
             --disable-sdl \
@@ -565,7 +566,8 @@ write_manifest() {
   "build_options": [
     "--target-list=aarch64-softmmu",
     "--enable-cocoa",
-    "--enable-hvf"
+    "--enable-hvf",
+    "--enable-iosurface"
   ],
   "patches": $patches_json,
   "edk2_firmware_source": "QEMU $QEMU_TAG 源码自带 pc-bios/edk2-aarch64-code.fd.bz2 (kraxel build)",

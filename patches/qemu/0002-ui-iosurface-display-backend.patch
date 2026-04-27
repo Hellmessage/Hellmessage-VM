@@ -1,0 +1,905 @@
+diff --git a/include/ui/hvm_display_proto.h b/include/ui/hvm_display_proto.h
+new file mode 100644
+index 0000000..667d749
+--- /dev/null
++++ b/include/ui/hvm_display_proto.h
+@@ -0,0 +1,119 @@
++/*
++ * HVM-QEMU display backend protocol (HDP) — version 1.0.0
++ *
++ * AF_UNIX SOCK_STREAM transport, little-endian wire format.
++ * Canonical specification: docs/QEMU_DISPLAY_PROTOCOL.md (in HVM repo).
++ *
++ * This header is the C-side mirror of the spec.  Modifying either side
++ * REQUIRES updating the other, plus appending an entry to §13 of the spec.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++#ifndef HVM_DISPLAY_PROTO_H
++#define HVM_DISPLAY_PROTO_H
++
++#include <stdint.h>
++
++/* ---- protocol version -------------------------------------------------- */
++#define HVM_DISP_PROTO_MAJOR  1
++#define HVM_DISP_PROTO_MINOR  0
++#define HVM_DISP_PROTO_PATCH  0
++#define HVM_DISP_PROTO_VERSION                                          \
++    (((uint32_t)HVM_DISP_PROTO_MAJOR << 16) |                           \
++     ((uint32_t)HVM_DISP_PROTO_MINOR <<  8) |                           \
++      (uint32_t)HVM_DISP_PROTO_PATCH)
++
++/* ---- header (8 bytes, little-endian on the wire) ----------------------- */
++struct hvm_disp_hdr {
++    uint16_t type;
++    uint16_t flags;
++    uint32_t payload_len;
++} __attribute__((packed));
++
++/* ---- flags bits (header.flags) ----------------------------------------- */
++#define HVM_DISP_FLAG_HAS_FD   0x0001u  /* SCM_RIGHTS fd attached */
++#define HVM_DISP_FLAG_URGENT   0x0002u  /* delivery hint, optional */
++
++/* ---- capability_flags bits (HELLO payload) ----------------------------- */
++#define HVM_DISP_CAP_CURSOR_BGRA      0x00000001u
++#define HVM_DISP_CAP_LED_STATE        0x00000002u
++#define HVM_DISP_CAP_VDAGENT_RESIZE   0x00000004u
++
++/* ---- pixel formats (SURFACE_NEW.format) -------------------------------- */
++#define HVM_DISP_PIXFMT_BGRA8  0x00000001u
++
++/* ---- message type IDs (header.type) ------------------------------------ */
++enum {
++    HVM_DISP_MSG_HELLO          = 0x0001,
++    HVM_DISP_MSG_SURFACE_NEW    = 0x0002,
++    HVM_DISP_MSG_SURFACE_DAMAGE = 0x0003,
++    HVM_DISP_MSG_CURSOR_DEFINE  = 0x0010,
++    HVM_DISP_MSG_CURSOR_POS     = 0x0011,
++    HVM_DISP_MSG_LED_STATE      = 0x0020,
++    HVM_DISP_MSG_RESIZE_REQUEST = 0x0080,
++    HVM_DISP_MSG_GOODBYE        = 0x00FF,
++};
++
++/* ---- payload structs (all little-endian, packed) ----------------------- */
++
++struct hvm_disp_hello {
++    uint32_t proto_version;       /* HVM_DISP_PROTO_VERSION */
++    uint32_t capability_flags;    /* see HVM_DISP_CAP_* */
++} __attribute__((packed));
++
++/* SURFACE_NEW: header.flags MUST include HVM_DISP_FLAG_HAS_FD;
++ * payload is followed in the same sendmsg(2) by exactly one SCM_RIGHTS fd
++ * referencing the framebuffer shm object. */
++struct hvm_disp_surface_new {
++    uint32_t width;
++    uint32_t height;
++    uint32_t stride;              /* bytes per row, may exceed width*bpp */
++    uint32_t format;              /* HVM_DISP_PIXFMT_* */
++    uint64_t shm_size;            /* mmap length in bytes */
++} __attribute__((packed));
++
++struct hvm_disp_surface_damage {
++    uint32_t x;
++    uint32_t y;
++    uint32_t w;
++    uint32_t h;
++} __attribute__((packed));
++
++/* CURSOR_DEFINE: payload struct followed by (width * height * 4) BGRA bytes
++ * (premultiplied alpha).  Spec caps width,height <= 256. */
++struct hvm_disp_cursor_define {
++    uint16_t width;
++    uint16_t height;
++    int16_t  hot_x;
++    int16_t  hot_y;
++    /* uint8_t pixels[width * height * 4]; */
++} __attribute__((packed));
++
++struct hvm_disp_cursor_pos {
++    int32_t  x;
++    int32_t  y;
++    uint32_t visible;             /* 0 = hidden, 1 = visible */
++} __attribute__((packed));
++
++struct hvm_disp_led_state {
++    uint32_t caps_lock;
++    uint32_t num_lock;
++    uint32_t scroll_lock;
++} __attribute__((packed));
++
++struct hvm_disp_resize_request {
++    uint32_t width;
++    uint32_t height;
++} __attribute__((packed));
++
++struct hvm_disp_goodbye {
++    uint32_t reason;              /* see HVM_DISP_GOODBYE_* */
++} __attribute__((packed));
++
++/* GOODBYE reason codes */
++#define HVM_DISP_GOODBYE_NORMAL            0u
++#define HVM_DISP_GOODBYE_VERSION_MISMATCH  1u
++#define HVM_DISP_GOODBYE_PROTOCOL_ERROR    2u
++#define HVM_DISP_GOODBYE_INTERNAL_ERROR    3u
++
++#endif /* HVM_DISPLAY_PROTO_H */
+diff --git a/meson.build b/meson.build
+index d929329..e7af767 100644
+--- a/meson.build
++++ b/meson.build
+@@ -1219,6 +1219,11 @@ cocoa = dependency('appleframeworks',
+                    modules: ['Cocoa', 'CoreVideo', 'QuartzCore'],
+                    required: get_option('cocoa'))
+ 
++iosurface = get_option('iosurface') \
++  .require(host_os == 'darwin',
++           error_message: 'iosurface display backend is only supported on macOS') \
++  .allowed()
++
+ vmnet = dependency('appleframeworks', modules: 'vmnet', required: get_option('vmnet'))
+ if vmnet.found() and not cc.has_header_symbol('vmnet/vmnet.h',
+                                               'VMNET_BRIDGED_MODE',
+@@ -2454,6 +2459,7 @@ config_host_data.set('CONFIG_BSD', host_os in bsd_oses)
+ config_host_data.set('CONFIG_FREEBSD', host_os == 'freebsd')
+ config_host_data.set('CONFIG_CAPSTONE', capstone.found())
+ config_host_data.set('CONFIG_COCOA', cocoa.found())
++config_host_data.set('CONFIG_IOSURFACE', iosurface)
+ config_host_data.set('CONFIG_DARWIN', host_os == 'darwin')
+ config_host_data.set('CONFIG_FDT', fdt.found())
+ config_host_data.set('CONFIG_FUZZ', get_option('fuzzing'))
+@@ -4874,6 +4880,7 @@ summary(summary_info, bool_yn: true, section: 'Crypto')
+ summary_info = {}
+ if host_os == 'darwin'
+   summary_info += {'Cocoa support':           cocoa}
++  summary_info += {'iosurface display':       iosurface}
+ endif
+ summary_info += {'D-Bus display':     dbus_display}
+ summary_info += {'SDL support':       sdl}
+diff --git a/meson_options.txt b/meson_options.txt
+index 2836156..2a2494b 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -152,6 +152,8 @@ option('bpf', type : 'feature', value : 'auto',
+         description: 'eBPF support')
+ option('cocoa', type : 'feature', value : 'auto',
+        description: 'Cocoa user interface (macOS only)')
++option('iosurface', type : 'feature', value : 'auto',
++       description: 'HVM iosurface display backend (macOS only)')
+ option('curl', type : 'feature', value : 'auto',
+        description: 'CURL block device driver')
+ option('gio', type : 'feature', value : 'auto',
+diff --git a/qapi/ui.json b/qapi/ui.json
+index e3da776..b68563d 100644
+--- a/qapi/ui.json
++++ b/qapi/ui.json
+@@ -1478,6 +1478,21 @@
+ { 'struct'  : 'DisplaySDL',
+   'data'    : { '*grab-mod'   : 'HotKeyMod' } }
+ 
++##
++# @DisplayIOSurface:
++#
++# HVM iosurface display options (AF_UNIX framebuffer transport,
++# see docs/QEMU_DISPLAY_PROTOCOL.md in the HVM repository).
++#
++# @socket: filesystem path of the AF_UNIX socket the backend should
++#     bind and listen on; the HVM host process connects to this path.
++#
++# Since: 10.2
++##
++{ 'struct'  : 'DisplayIOSurface',
++  'data'    : { 'socket'       : 'str' },
++  'if'      : 'CONFIG_IOSURFACE' }
++
+ ##
+ # @DisplayType:
+ #
+@@ -1513,6 +1528,10 @@
+ #
+ # @dbus: Start a D-Bus service for the display.  (Since 7.0)
+ #
++# @iosurface: HVM iosurface backend; pushes framebuffer pixels to a
++#     host process over AF_UNIX + POSIX shm + SCM_RIGHTS.  See
++#     docs/QEMU_DISPLAY_PROTOCOL.md in the HVM repo.  (Since 10.2)
++#
+ # Since: 2.12
+ ##
+ { 'enum'    : 'DisplayType',
+@@ -1525,7 +1544,8 @@
+     { 'name': 'curses', 'if': 'CONFIG_CURSES' },
+     { 'name': 'cocoa', 'if': 'CONFIG_COCOA' },
+     { 'name': 'spice-app', 'if': 'CONFIG_SPICE' },
+-    { 'name': 'dbus', 'if': 'CONFIG_DBUS_DISPLAY' }
++    { 'name': 'dbus', 'if': 'CONFIG_DBUS_DISPLAY' },
++    { 'name': 'iosurface', 'if': 'CONFIG_IOSURFACE' }
+   ]
+ }
+ 
+@@ -1563,7 +1583,8 @@
+       'egl-headless': { 'type': 'DisplayEGLHeadless',
+                         'if': 'CONFIG_OPENGL' },
+       'dbus': { 'type': 'DisplayDBus', 'if': 'CONFIG_DBUS_DISPLAY' },
+-      'sdl': { 'type': 'DisplaySDL', 'if': 'CONFIG_SDL' }
++      'sdl': { 'type': 'DisplaySDL', 'if': 'CONFIG_SDL' },
++      'iosurface': { 'type': 'DisplayIOSurface', 'if': 'CONFIG_IOSURFACE' }
+   }
+ }
+ 
+diff --git a/ui/iosurface.m b/ui/iosurface.m
+new file mode 100644
+index 0000000..f2dee1c
+--- /dev/null
++++ b/ui/iosurface.m
+@@ -0,0 +1,660 @@
++/*
++ * HVM iosurface display backend
++ *
++ * AF_UNIX SOCK_STREAM transport carrying:
++ *   - framebuffer pixels via POSIX shm + SCM_RIGHTS (BGRA8, zero-copy
++ *     on the host side using mmap + Metal MTLBuffer.bytesNoCopy);
++ *   - cursor / damage / LED notifications;
++ *   - host-initiated RESIZE_REQUEST (translated to dpy_set_ui_info,
++ *     EDID is updated and a vdagent-equipped guest auto-resizes).
++ *
++ * Wire protocol: docs/QEMU_DISPLAY_PROTOCOL.md (HVM repo) v1.0.0.
++ * Header: include/ui/hvm_display_proto.h.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/error-report.h"
++#include "qemu/main-loop.h"
++#include "qemu/atomic.h"
++#include "qapi/error.h"
++#include "qapi/qapi-types-ui.h"
++#include "qapi/qapi-commands-ui.h"
++#include "ui/console.h"
++#include "ui/surface.h"
++#include "ui/hvm_display_proto.h"
++
++#include <sys/socket.h>
++#include <sys/un.h>
++#include <sys/mman.h>
++#include <sys/uio.h>
++#include <fcntl.h>
++#include <unistd.h>
++#include <pthread.h>
++#include <signal.h>
++#include <errno.h>
++
++#define IOS_LOG  "iosurface: "
++
++/* Host advertises these capabilities in HELLO. */
++#define IOS_HOST_CAPS  (HVM_DISP_CAP_CURSOR_BGRA  | \
++                        HVM_DISP_CAP_LED_STATE    | \
++                        HVM_DISP_CAP_VDAGENT_RESIZE)
++
++typedef struct IOSurfaceClient {
++    int      fd;                  /* connected client socket, -1 = none */
++    bool     hello_done;          /* peer HELLO accepted */
++    uint32_t peer_caps;           /* HELLO.capability_flags from peer */
++    uint32_t neg_caps;            /* peer_caps & IOS_HOST_CAPS */
++    pthread_mutex_t send_lock;    /* serialize sendmsg(2) */
++} IOSurfaceClient;
++
++typedef struct IOSurfaceDisplay {
++    DisplayChangeListener dcl;
++
++    /* options */
++    char    *socket_path;
++
++    /* listener */
++    int      listen_fd;
++    pthread_t listen_thr;
++    bool     shutting_down;       /* qatomic */
++
++    /* one client at a time */
++    IOSurfaceClient client;
++
++    /* current framebuffer shm (touched on QEMU iothread) */
++    int      shm_fd;              /* held to allow resend after re-accept */
++    char     shm_name[64];
++    void    *shm_ptr;
++    size_t   shm_size;
++    uint32_t width;
++    uint32_t height;
++    uint32_t stride;
++    uint16_t shm_seq;
++} IOSurfaceDisplay;
++
++/* singleton */
++static IOSurfaceDisplay g_iosurface;
++
++/* ====================================================================== */
++/*  Low-level I/O                                                         */
++/* ====================================================================== */
++
++static int write_all(int fd, const void *buf, size_t n)
++{
++    const uint8_t *p = buf;
++    while (n > 0) {
++        ssize_t r = send(fd, p, n, 0);
++        if (r < 0) {
++            if (errno == EINTR) continue;
++            return -1;
++        }
++        if (r == 0) {
++            errno = EPIPE;
++            return -1;
++        }
++        p += r;
++        n -= (size_t)r;
++    }
++    return 0;
++}
++
++static int read_all(int fd, void *buf, size_t n)
++{
++    uint8_t *p = buf;
++    while (n > 0) {
++        ssize_t r = recv(fd, p, n, 0);
++        if (r < 0) {
++            if (errno == EINTR) continue;
++            return -1;
++        }
++        if (r == 0) return -1;       /* EOF */
++        p += r;
++        n -= (size_t)r;
++    }
++    return 0;
++}
++
++/* ====================================================================== */
++/*  Protocol send (caller may attach a single SCM_RIGHTS fd)              */
++/* ====================================================================== */
++
++static int send_message_locked(IOSurfaceClient *c, uint16_t type,
++                               uint16_t flags, const void *payload,
++                               uint32_t payload_len, int fd_to_send)
++{
++    if (c->fd < 0) {
++        errno = ENOTCONN;
++        return -1;
++    }
++
++    struct hvm_disp_hdr hdr = {
++        .type        = type,
++        .flags       = flags,
++        .payload_len = payload_len,
++    };
++
++    if (fd_to_send >= 0) {
++        /* sendmsg with cmsg in a single syscall so the fd is correlated
++         * with this header. */
++        struct iovec iov[2];
++        int          iovcnt = 1;
++        iov[0].iov_base = &hdr;
++        iov[0].iov_len  = sizeof(hdr);
++        if (payload_len > 0) {
++            iov[1].iov_base = (void *)payload;
++            iov[1].iov_len  = payload_len;
++            iovcnt = 2;
++        }
++
++        union {
++            struct cmsghdr cmsg;
++            char           pad[CMSG_SPACE(sizeof(int))];
++        } cbuf;
++        memset(&cbuf, 0, sizeof(cbuf));
++
++        struct msghdr msg = {0};
++        msg.msg_iov        = iov;
++        msg.msg_iovlen     = iovcnt;
++        msg.msg_control    = cbuf.pad;
++        msg.msg_controllen = sizeof(cbuf.pad);
++
++        struct cmsghdr *cm = CMSG_FIRSTHDR(&msg);
++        cm->cmsg_level = SOL_SOCKET;
++        cm->cmsg_type  = SCM_RIGHTS;
++        cm->cmsg_len   = CMSG_LEN(sizeof(int));
++        memcpy(CMSG_DATA(cm), &fd_to_send, sizeof(int));
++
++        ssize_t r;
++        do { r = sendmsg(c->fd, &msg, 0); } while (r < 0 && errno == EINTR);
++        if (r < 0) return -1;
++        if ((size_t)r != sizeof(hdr) + payload_len) {
++            errno = EIO;
++            return -1;
++        }
++        return 0;
++    }
++
++    if (write_all(c->fd, &hdr, sizeof(hdr)) != 0) return -1;
++    if (payload_len > 0 && write_all(c->fd, payload, payload_len) != 0) {
++        return -1;
++    }
++    return 0;
++}
++
++static int send_message(IOSurfaceClient *c, uint16_t type, uint16_t flags,
++                        const void *payload, uint32_t payload_len, int fd)
++{
++    pthread_mutex_lock(&c->send_lock);
++    int rc = send_message_locked(c, type, flags, payload, payload_len, fd);
++    pthread_mutex_unlock(&c->send_lock);
++    return rc;
++}
++
++static int send_hello(IOSurfaceClient *c)
++{
++    struct hvm_disp_hello h = {
++        .proto_version    = HVM_DISP_PROTO_VERSION,
++        .capability_flags = IOS_HOST_CAPS,
++    };
++    return send_message(c, HVM_DISP_MSG_HELLO, 0, &h, sizeof(h), -1);
++}
++
++static int send_surface_new(IOSurfaceClient *c, uint32_t w, uint32_t h,
++                            uint32_t stride, uint64_t shm_size, int fd)
++{
++    struct hvm_disp_surface_new sn = {
++        .width    = w,
++        .height   = h,
++        .stride   = stride,
++        .format   = HVM_DISP_PIXFMT_BGRA8,
++        .shm_size = shm_size,
++    };
++    return send_message(c, HVM_DISP_MSG_SURFACE_NEW,
++                        HVM_DISP_FLAG_HAS_FD, &sn, sizeof(sn), fd);
++}
++
++static int send_damage(IOSurfaceClient *c, uint32_t x, uint32_t y,
++                       uint32_t w, uint32_t h)
++{
++    struct hvm_disp_surface_damage d = {
++        .x = x, .y = y, .w = w, .h = h,
++    };
++    return send_message(c, HVM_DISP_MSG_SURFACE_DAMAGE, 0,
++                        &d, sizeof(d), -1);
++}
++
++static int send_cursor_pos(IOSurfaceClient *c, int x, int y, bool visible)
++{
++    struct hvm_disp_cursor_pos p = {
++        .x = x, .y = y, .visible = visible ? 1 : 0,
++    };
++    return send_message(c, HVM_DISP_MSG_CURSOR_POS,
++                        HVM_DISP_FLAG_URGENT, &p, sizeof(p), -1);
++}
++
++static int send_cursor_define(IOSurfaceClient *c, QEMUCursor *cur)
++{
++    if (!cur) return 0;
++    if (cur->width == 0 || cur->height == 0) return 0;
++    if (cur->width > 256 || cur->height > 256) return 0; /* spec cap */
++
++    size_t pix_bytes = (size_t)cur->width * (size_t)cur->height * 4;
++    size_t total     = sizeof(struct hvm_disp_cursor_define) + pix_bytes;
++    char  *buf       = g_malloc(total);
++
++    struct hvm_disp_cursor_define cd = {
++        .width  = cur->width,
++        .height = cur->height,
++        .hot_x  = cur->hot_x,
++        .hot_y  = cur->hot_y,
++    };
++    memcpy(buf, &cd, sizeof(cd));
++    memcpy(buf + sizeof(cd), cur->data, pix_bytes);
++
++    int rc = send_message(c, HVM_DISP_MSG_CURSOR_DEFINE, 0,
++                          buf, (uint32_t)total, -1);
++    g_free(buf);
++    return rc;
++}
++
++static int send_goodbye(IOSurfaceClient *c, uint32_t reason)
++{
++    struct hvm_disp_goodbye g = { .reason = reason };
++    return send_message(c, HVM_DISP_MSG_GOODBYE, 0, &g, sizeof(g), -1);
++}
++
++/* ====================================================================== */
++/*  shm lifecycle                                                         */
++/* ====================================================================== */
++
++static void release_shm(IOSurfaceDisplay *d)
++{
++    if (d->shm_ptr) {
++        munmap(d->shm_ptr, d->shm_size);
++        d->shm_ptr = NULL;
++    }
++    if (d->shm_fd >= 0) {
++        close(d->shm_fd);
++        d->shm_fd = -1;
++    }
++    d->shm_size = 0;
++    d->shm_name[0] = '\0';
++}
++
++static int create_shm(IOSurfaceDisplay *d, size_t size)
++{
++    /* darwin shm name limit = 31 bytes including the leading '/'.
++     * "/qemu-hvm-XXXXX-XXXX" = 1+9+5+1+4 = 20 chars, well within limit. */
++    int seq = (int)d->shm_seq++ & 0xFFFF;
++    snprintf(d->shm_name, sizeof(d->shm_name),
++             "/qemu-hvm-%05d-%04x", (int)getpid() & 0x7FFFF, seq);
++
++    int fd = shm_open(d->shm_name, O_RDWR | O_CREAT | O_EXCL, 0600);
++    if (fd < 0) {
++        error_report(IOS_LOG "shm_open(%s): %s",
++                     d->shm_name, strerror(errno));
++        return -1;
++    }
++    /* unlink immediately: name table entry gone, fd still maps the
++     * OS-managed memory; on host or QEMU crash the OS reaps it. */
++    shm_unlink(d->shm_name);
++
++    if (ftruncate(fd, (off_t)size) != 0) {
++        error_report(IOS_LOG "ftruncate: %s", strerror(errno));
++        close(fd);
++        return -1;
++    }
++    void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
++    if (p == MAP_FAILED) {
++        error_report(IOS_LOG "mmap: %s", strerror(errno));
++        close(fd);
++        return -1;
++    }
++    d->shm_fd   = fd;
++    d->shm_ptr  = p;
++    d->shm_size = size;
++    return 0;
++}
++
++/* ====================================================================== */
++/*  DisplayChangeListener ops (called on QEMU iothread)                   */
++/* ====================================================================== */
++
++static bool ios_check_format(DisplayChangeListener *dcl,
++                             pixman_format_code_t format)
++{
++    /* On a little-endian host PIXMAN_x8r8g8b8 / a8r8g8b8 are byte-order
++     * BGRA — exactly the format we promise to the wire. */
++    return format == PIXMAN_x8r8g8b8 || format == PIXMAN_a8r8g8b8;
++}
++
++static void ios_gfx_switch(DisplayChangeListener *dcl,
++                           DisplaySurface *new_surface)
++{
++    IOSurfaceDisplay *d = container_of(dcl, IOSurfaceDisplay, dcl);
++    IOSurfaceClient  *c = &d->client;
++
++    int w      = surface_width(new_surface);
++    int h      = surface_height(new_surface);
++    int stride = surface_stride(new_surface);
++    size_t need = (size_t)stride * (size_t)h;
++
++    release_shm(d);
++
++    if (w <= 0 || h <= 0 || stride <= 0 || need == 0) {
++        d->width = d->height = d->stride = 0;
++        return;
++    }
++    if (create_shm(d, need) != 0) {
++        d->width = d->height = d->stride = 0;
++        return;
++    }
++    d->width  = (uint32_t)w;
++    d->height = (uint32_t)h;
++    d->stride = (uint32_t)stride;
++
++    /* prime shm with the current frame; subsequent gfx_update calls copy
++     * dirty rectangles incrementally. */
++    memcpy(d->shm_ptr, surface_data(new_surface), need);
++
++    if (c->fd >= 0 && c->hello_done) {
++        if (send_surface_new(c, d->width, d->height, d->stride,
++                             d->shm_size, d->shm_fd) != 0) {
++            error_report(IOS_LOG "send_surface_new: %s", strerror(errno));
++        }
++    }
++}
++
++static void ios_gfx_update(DisplayChangeListener *dcl,
++                           int x, int y, int w, int h)
++{
++    IOSurfaceDisplay *d = container_of(dcl, IOSurfaceDisplay, dcl);
++    IOSurfaceClient  *c = &d->client;
++
++    if (!d->shm_ptr || d->width == 0) return;
++    if (x < 0 || y < 0 || w <= 0 || h <= 0) return;
++    if ((uint32_t)(x + w) > d->width || (uint32_t)(y + h) > d->height) return;
++
++    DisplaySurface *src = qemu_console_surface(dcl->con);
++    if (!src) return;
++    const uint8_t *src_base = surface_data(src);
++    uint8_t       *dst_base = d->shm_ptr;
++    size_t         row_b    = (size_t)w * 4;
++
++    for (int row = 0; row < h; ++row) {
++        size_t off = (size_t)(y + row) * (size_t)d->stride + (size_t)x * 4;
++        memcpy(dst_base + off, src_base + off, row_b);
++    }
++
++    if (c->fd >= 0 && c->hello_done) {
++        send_damage(c, (uint32_t)x, (uint32_t)y,
++                    (uint32_t)w, (uint32_t)h);
++    }
++}
++
++static void ios_mouse_set(DisplayChangeListener *dcl, int x, int y, bool on)
++{
++    IOSurfaceDisplay *d = container_of(dcl, IOSurfaceDisplay, dcl);
++    IOSurfaceClient  *c = &d->client;
++    if (c->fd >= 0 && c->hello_done) {
++        send_cursor_pos(c, x, y, on);
++    }
++}
++
++static void ios_cursor_define(DisplayChangeListener *dcl, QEMUCursor *cur)
++{
++    IOSurfaceDisplay *d = container_of(dcl, IOSurfaceDisplay, dcl);
++    IOSurfaceClient  *c = &d->client;
++    if (c->fd >= 0 && c->hello_done) {
++        send_cursor_define(c, cur);
++    }
++}
++
++static const DisplayChangeListenerOps dcl_ops = {
++    .dpy_name             = "iosurface",
++    .dpy_gfx_update       = ios_gfx_update,
++    .dpy_gfx_switch       = ios_gfx_switch,
++    .dpy_gfx_check_format = ios_check_format,
++    .dpy_mouse_set        = ios_mouse_set,
++    .dpy_cursor_define    = ios_cursor_define,
++};
++
++/* ====================================================================== */
++/*  Inbound message dispatch (listener thread)                            */
++/* ====================================================================== */
++
++static void resend_current_surface(IOSurfaceDisplay *d)
++{
++    if (!d->shm_ptr || d->shm_fd < 0) return;
++    if (send_surface_new(&d->client, d->width, d->height, d->stride,
++                         d->shm_size, d->shm_fd) != 0) {
++        error_report(IOS_LOG "resend_current_surface: %s", strerror(errno));
++    }
++}
++
++/* Returns 0 to keep the connection, -1 to close it. */
++static int handle_message(IOSurfaceDisplay *d, uint16_t type,
++                          uint16_t flags, const void *payload,
++                          uint32_t payload_len)
++{
++    (void)flags;
++    IOSurfaceClient *c = &d->client;
++
++    switch (type) {
++    case HVM_DISP_MSG_HELLO: {
++        if (payload_len < sizeof(struct hvm_disp_hello)) {
++            send_goodbye(c, HVM_DISP_GOODBYE_PROTOCOL_ERROR);
++            return -1;
++        }
++        const struct hvm_disp_hello *h = payload;
++        uint32_t peer_major = (h->proto_version >> 16) & 0xFFFF;
++        if (peer_major != HVM_DISP_PROTO_MAJOR) {
++            error_report(IOS_LOG "peer major %u != %u",
++                         peer_major, HVM_DISP_PROTO_MAJOR);
++            send_goodbye(c, HVM_DISP_GOODBYE_VERSION_MISMATCH);
++            return -1;
++        }
++        c->peer_caps  = h->capability_flags;
++        c->neg_caps   = c->peer_caps & IOS_HOST_CAPS;
++        c->hello_done = true;
++        /* push current state to the freshly-attached client */
++        resend_current_surface(d);
++        return 0;
++    }
++
++    case HVM_DISP_MSG_RESIZE_REQUEST: {
++        if (!(c->neg_caps & HVM_DISP_CAP_VDAGENT_RESIZE)) return 0;
++        if (payload_len < sizeof(struct hvm_disp_resize_request)) return 0;
++        const struct hvm_disp_resize_request *r = payload;
++        if (r->width  < 640  || r->height < 480)  return 0;
++        if (r->width  > 7680 || r->height > 4320) return 0;
++        QemuUIInfo info = {0};
++        info.width  = r->width;
++        info.height = r->height;
++        if (d->dcl.con) {
++            dpy_set_ui_info(d->dcl.con, &info, false);
++        }
++        return 0;
++    }
++
++    case HVM_DISP_MSG_GOODBYE:
++        return -1;
++
++    default:
++        /* unknown type — spec §5.4(1): skip payload, keep connection. */
++        return 0;
++    }
++}
++
++static int read_and_dispatch(IOSurfaceDisplay *d)
++{
++    struct hvm_disp_hdr hdr;
++    if (read_all(d->client.fd, &hdr, sizeof(hdr)) != 0) return -1;
++
++    /* sanity guard against runaway alloc */
++    if (hdr.payload_len > 16 * 1024 * 1024) {
++        error_report(IOS_LOG "payload too big: %u", hdr.payload_len);
++        return -1;
++    }
++    if (hdr.payload_len == 0) {
++        return handle_message(d, hdr.type, hdr.flags, NULL, 0);
++    }
++
++    if (hdr.payload_len <= 4096) {
++        uint8_t buf[4096];
++        if (read_all(d->client.fd, buf, hdr.payload_len) != 0) return -1;
++        return handle_message(d, hdr.type, hdr.flags, buf, hdr.payload_len);
++    }
++
++    uint8_t *buf = g_malloc(hdr.payload_len);
++    int rc = read_all(d->client.fd, buf, hdr.payload_len);
++    if (rc == 0) {
++        rc = handle_message(d, hdr.type, hdr.flags, buf, hdr.payload_len);
++    }
++    g_free(buf);
++    return rc;
++}
++
++static void close_client(IOSurfaceDisplay *d)
++{
++    if (d->client.fd >= 0) {
++        close(d->client.fd);
++        d->client.fd = -1;
++    }
++    d->client.hello_done = false;
++    d->client.peer_caps  = 0;
++    d->client.neg_caps   = 0;
++}
++
++/* ====================================================================== */
++/*  Listener thread                                                       */
++/* ====================================================================== */
++
++static void *listener_main(void *arg)
++{
++    IOSurfaceDisplay *d = arg;
++    pthread_setname_np("hvm-iosurface");
++
++    while (!qatomic_read(&d->shutting_down)) {
++        struct sockaddr_un peer;
++        socklen_t          plen = sizeof(peer);
++        int fd = accept(d->listen_fd, (struct sockaddr *)&peer, &plen);
++        if (fd < 0) {
++            if (errno == EINTR) continue;
++            if (qatomic_read(&d->shutting_down)) break;
++            error_report(IOS_LOG "accept: %s", strerror(errno));
++            break;
++        }
++
++        /* one client at a time */
++        d->client.fd         = fd;
++        d->client.hello_done = false;
++
++        /* greet the peer; spec lets either side send HELLO first */
++        if (send_hello(&d->client) != 0) {
++            close_client(d);
++            continue;
++        }
++
++        while (!qatomic_read(&d->shutting_down)) {
++            if (read_and_dispatch(d) != 0) break;
++        }
++        close_client(d);
++    }
++    return NULL;
++}
++
++/* ====================================================================== */
++/*  Init / registration                                                   */
++/* ====================================================================== */
++
++static int setup_listen_socket(IOSurfaceDisplay *d, const char *path,
++                               Error **errp)
++{
++    if (strlen(path) >= sizeof(((struct sockaddr_un *)0)->sun_path)) {
++        error_setg(errp, "iosurface: socket path too long: %s", path);
++        return -1;
++    }
++
++    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
++    if (fd < 0) {
++        error_setg_errno(errp, errno, "iosurface: socket()");
++        return -1;
++    }
++
++    struct sockaddr_un addr = {0};
++    addr.sun_family = AF_UNIX;
++    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
++
++    /* unlink stale leftover from a previous crashed run */
++    unlink(path);
++
++    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
++        error_setg_errno(errp, errno, "iosurface: bind(%s)", path);
++        close(fd);
++        return -1;
++    }
++    if (listen(fd, 1) != 0) {
++        error_setg_errno(errp, errno, "iosurface: listen()");
++        close(fd);
++        return -1;
++    }
++    d->listen_fd = fd;
++    return 0;
++}
++
++static void iosurface_display_init(DisplayState *ds, DisplayOptions *opts)
++{
++    /* don't let host disconnect kill us */
++    struct sigaction sa = {0};
++    sa.sa_handler = SIG_IGN;
++    sigaction(SIGPIPE, &sa, NULL);
++
++    IOSurfaceDisplay *d = &g_iosurface;
++    memset(d, 0, sizeof(*d));
++    d->client.fd = -1;
++    d->shm_fd    = -1;
++    pthread_mutex_init(&d->client.send_lock, NULL);
++
++    const char *path = opts->u.iosurface.socket;
++    if (!path || path[0] == '\0') {
++        error_report(IOS_LOG "missing 'socket' option");
++        exit(1);
++    }
++    d->socket_path = g_strdup(path);
++
++    Error *err = NULL;
++    if (setup_listen_socket(d, path, &err) != 0) {
++        error_report_err(err);
++        exit(1);
++    }
++
++    QemuConsole *con = qemu_console_lookup_default();
++    if (!con) {
++        error_report(IOS_LOG "no graphical console available");
++        exit(1);
++    }
++    d->dcl.con = con;
++    d->dcl.ops = &dcl_ops;
++    register_displaychangelistener(&d->dcl);
++
++    if (pthread_create(&d->listen_thr, NULL, listener_main, d) != 0) {
++        error_report(IOS_LOG "pthread_create: %s", strerror(errno));
++        exit(1);
++    }
++}
++
++static QemuDisplay qemu_display_iosurface = {
++    .type = DISPLAY_TYPE_IOSURFACE,
++    .init = iosurface_display_init,
++};
++
++static void register_iosurface(void)
++{
++    qemu_display_register(&qemu_display_iosurface);
++}
++
++type_init(register_iosurface);
+diff --git a/ui/meson.build b/ui/meson.build
+index 6371422..d25ae14 100644
+--- a/ui/meson.build
++++ b/ui/meson.build
+@@ -27,6 +27,7 @@ if host_os == 'linux'
+   system_ss.add(files('input-linux.c', 'udmabuf.c'))
+ endif
+ system_ss.add(when: cocoa, if_true: files('cocoa.m'))
++system_ss.add(when: iosurface, if_true: files('iosurface.m'))
+ 
+ vnc_ss = ss.source_set()
+ vnc_ss.add(files(

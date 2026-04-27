@@ -1,3 +1,6 @@
 # QEMU 补丁应用顺序; 一行一个文件名; # 开头为注释; 空行忽略
 # 0001: opt-in 16MB RAM 孔 (0x10000000), Win11 ARM64 bootmgfw 兼容 (要求配套 EDK2 patch)
 0001-hvm-win11-lowram.patch
+# 0002: HVM iosurface display backend (-display iosurface,socket=...), AF_UNIX + POSIX shm + SCM_RIGHTS
+#       配套协议规范: docs/QEMU_DISPLAY_PROTOCOL.md v1.0.0
+0002-ui-iosurface-display-backend.patch
