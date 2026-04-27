@@ -179,9 +179,15 @@ build_armvirt_qemu() {
         cd "$SRC_DIR"
         export WORKSPACE="$SRC_DIR"
         export PACKAGES_PATH="$SRC_DIR"
+        export EDK_TOOLS_PATH="$SRC_DIR/BaseTools"
+        export CONF_PATH="$SRC_DIR/Conf"
         export GCC5_AARCH64_PREFIX="aarch64-elf-"
+        # edksetup.sh 内部裸 dereference $EDK_TOOLS_PATH (line 80) + $PACKAGES_PATH 等,
+        # 在 set -u 下未 export 时崩. 上面已显式 export 全部依赖, 仍 set +u source 防御.
+        set +u
         # shellcheck disable=SC1091
         source ./edksetup.sh BaseTools >/dev/null
+        set -u
         build -p ArmVirtPkg/ArmVirtQemu.dsc \
               -a AARCH64 \
               -t GCC5 \
