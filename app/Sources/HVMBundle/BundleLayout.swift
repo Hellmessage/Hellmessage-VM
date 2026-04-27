@@ -88,6 +88,24 @@ public enum BundleLayout {
         bundle.appendingPathComponent("run", isDirectory: true).appendingPathComponent("console.sock")
     }
 
+    /// QEMU `-display iosurface,socket=...` 用的 HDP socket 路径
+    /// (host HVMDisplayQemu.DisplayChannel 连接此 socket 拿 framebuffer 推送).
+    public static func iosurfaceSocketURL(_ bundle: URL) -> URL {
+        bundle.appendingPathComponent("run", isDirectory: true).appendingPathComponent("iosurface.sock")
+    }
+
+    /// 输入专用 QMP socket (`-qmp unix:...`), 跟控制 QMP 分离避免 accept 争抢.
+    /// host HVMDisplayQemu.InputForwarder 走此 socket 发 `input-send-event`.
+    public static func qmpInputSocketURL(_ bundle: URL) -> URL {
+        bundle.appendingPathComponent("run", isDirectory: true).appendingPathComponent("qmp-input.sock")
+    }
+
+    /// spice-vdagent 用的 virtio-serial chardev socket. host 端不连接,
+    /// 仅留 socket 给 guest 内 spice-vdagent agent 监听 EDID 变化用.
+    public static func vdagentSocketURL(_ bundle: URL) -> URL {
+        bundle.appendingPathComponent("run", isDirectory: true).appendingPathComponent("vdagent.sock")
+    }
+
     /// swtpm 持久化 TPM 状态目录 (Win11 NVRAM 表征, 跨重启保留 SecureBoot 信任根)
     public static func tpmStateDir(_ bundle: URL) -> URL {
         bundle.appendingPathComponent("tpm", isDirectory: true)

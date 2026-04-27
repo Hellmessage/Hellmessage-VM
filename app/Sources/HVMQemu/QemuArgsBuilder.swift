@@ -52,6 +52,17 @@ public enum QemuArgsBuilder {
         /// AutoUnattend ISO 绝对路径 (仅 windows + bypassInstallChecks 时由调用方注入).
         /// 由 WindowsUnattend.ensureISO 启动前生成. nil 不挂第二 cdrom.
         public let unattendISOPath: String?
+        /// HDP iosurface 显示后端的 host socket 路径 (BundleLayout.iosurfaceSocketURL).
+        /// 非 nil 时 argv 用 `-display iosurface,socket=...` 替代 cocoa, host 端
+        /// HVMDisplayQemu.DisplayChannel 连此 socket 拉 framebuffer.
+        public let iosurfaceSocketPath: String?
+        /// 输入专用 QMP socket. 非 nil 时额外加一个 `-qmp unix:...,server=on,wait=off`,
+        /// 给 HVMDisplayQemu.InputForwarder 用 (跟 control QMP 分离, 避免 accept 争抢).
+        public let qmpInputSocketPath: String?
+        /// spice-vdagent virtio-serial chardev socket. 非 nil 时 argv 加
+        /// virtio-serial-pci + chardev + virtserialport 三件套, guest 内安装
+        /// spice-vdagent 后即可响应 host 的 RESIZE_REQUEST → EDID 变化做动态分辨率.
+        public let vdagentSocketPath: String?
 
         public init(
             config: VMConfig,
@@ -61,7 +72,10 @@ public enum QemuArgsBuilder {
             virtioWinISOPath: String? = nil,
             swtpmSocketPath: String? = nil,
             consoleSocketPath: String? = nil,
-            unattendISOPath: String? = nil
+            unattendISOPath: String? = nil,
+            iosurfaceSocketPath: String? = nil,
+            qmpInputSocketPath: String? = nil,
+            vdagentSocketPath: String? = nil
         ) {
             self.config = config
             self.bundleURL = bundleURL
@@ -71,6 +85,9 @@ public enum QemuArgsBuilder {
             self.swtpmSocketPath = swtpmSocketPath
             self.consoleSocketPath = consoleSocketPath
             self.unattendISOPath = unattendISOPath
+            self.iosurfaceSocketPath = iosurfaceSocketPath
+            self.qmpInputSocketPath = qmpInputSocketPath
+            self.vdagentSocketPath = vdagentSocketPath
         }
     }
 
@@ -272,12 +289,30 @@ public enum QemuArgsBuilder {
         // tablet 给绝对坐标鼠标 (hvm-dbg mouse abs 注入也走它).
         args += ["-device", "usb-kbd,bus=xhci.0"]
         args += ["-device", "usb-tablet,bus=xhci.0"]
-        // cocoa: QEMU 自开 NSWindow. 与 HVMDisplay 嵌入主窗口的集成留给后续 commit
-        args += ["-display", "cocoa"]
+        // -display 后端: 优先 iosurface (HDP, 嵌入主窗口零拷贝), 否则回退 cocoa
+        // (调试用, 自开独立 NSWindow). 由 inputs.iosurfaceSocketPath 是否注入决定.
+        if let iosurfaceSocket = inputs.iosurfaceSocketPath {
+            args += ["-display", "iosurface,socket=\(iosurfaceSocket)"]
+        } else {
+            args += ["-display", "cocoa"]
+        }
+
+        // spice-vdagent virtio-serial 通道: 给 guest 内 spice-vdagent agent 用,
+        // host 端不连接此 socket. 装了 vdagent 的 guest 收到 EDID 变化会自动改
+        // 分辨率, 配合 HDP RESIZE_REQUEST 实现动态分辨率.
+        if let vdagentSocket = inputs.vdagentSocketPath {
+            args += ["-device", "virtio-serial-pci,id=vsp0"]
+            args += ["-chardev", "socket,id=vdagent,path=\(vdagentSocket),server=on,wait=off"]
+            args += ["-device", "virtserialport,bus=vsp0.0,chardev=vdagent,name=com.redhat.spice.0"]
+        }
 
         // ---- QMP 控制 ----
         // server=on: QEMU 监听 socket; wait=off: 不阻塞 QEMU 启动等客户端
         args += ["-qmp", "unix:\(inputs.qmpSocketPath),server=on,wait=off"]
+        // 输入专用 QMP (HVMDisplayQemu.InputForwarder 用, 走 input-send-event)
+        if let qmpInputSocket = inputs.qmpInputSocketPath {
+            args += ["-qmp", "unix:\(qmpInputSocket),server=on,wait=off"]
+        }
 
         // ---- Win11 TPM 2.0 (仅 windows + tpmEnabled + 调用方已启 swtpm) ----
         // swtpm daemon 由 SwtpmRunner 在外部先启起, socket 路径由调用方注入 (避免硬编码 bug).
