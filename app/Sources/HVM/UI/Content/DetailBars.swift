@@ -69,13 +69,16 @@ struct DetailTopBar: View {
 
     var body: some View {
         let session = model.sessions[item.id]
+        // QEMU 后端走 host 子进程, 主 GUI 无本地 session — fallback 到 item.runState
+        // (model.list 里来自 BundleLock 探测) 而不是死写 .starting.
+        let displayState = session?.state ?? (item.runState == "running" ? .running : .stopped)
         HStack(spacing: HVMSpace.md) {
             GuestBadge(os: item.guestOS, size: 32)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.displayName)
                     .font(HVMFont.title)
                     .foregroundStyle(HVMColor.textPrimary)
-                StatusBadge(state: session?.state ?? .starting)
+                StatusBadge(state: displayState)
             }
             Spacer()
         }
@@ -94,7 +97,9 @@ struct DetailBottomBar: View {
     let item: AppModel.VMListItem
 
     private var sessionState: RunState {
-        model.sessions[item.id]?.state ?? .stopped
+        // QEMU 后端走 host 子进程, 主 GUI 无本地 session — fallback 走 item.runState
+        if let s = model.sessions[item.id]?.state { return s }
+        return item.runState == "running" ? .running : .stopped
     }
 
     var body: some View {
