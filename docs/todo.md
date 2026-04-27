@@ -124,6 +124,19 @@
 - **现状**: 跑 `make qemu` 第一次要拉源码 + 编译 30 分钟; 想确认 brew deps / 路径配置正确不带编译
 - **要做**: `--dry-run` 只跑 preflight + ensure_homebrew + ensure_brew_packages
 
+### P-4 · GUI + host 子进程 menu bar 双 status item 重复
+- **现状**: GUI 启动 QEMU/VZ host 子进程后, 主 GUI 与 host 子进程各自注册 NSStatusItem, menu bar 同时出现 2 个 HVM 图标
+  - 主 GUI: `app/Sources/HVM/HVMApp.swift` (`HVM //0 running` 弹出)
+  - 子进程 QEMU host: `app/Sources/HVM/QemuHostEntry.swift:434-474` `installStatusItem` (`HVM · <name> (qemu)` 弹出)
+  - 子进程 VZ host: `app/Sources/HVM/HVMHostEntry.swift:~277` 同款
+- **设计意图**: host 进程能独立运行 (`hvm-cli start` 起的 VM 无 GUI), 给用户独立 Stop/Kill 入口; 跟主 GUI 共存时是冗余
+- **方案候选**:
+  - **A** (推荐): GUI `spawnExternalHost` 给子进程加 env `HVM_HIDE_STATUS_ITEM=1`, host entry 启动时检测该 env 跳过 `installStatusItem`. 优点改动最小, hvm-cli 起的 host (无 env) 仍显图标
+    - 副作用: GUI 中途退出但 host 子进程仍跑时, menu bar 入口消失. 可加退出 hook 给所有派生 host 发"恢复 status item" IPC, 或退出时一并 stop 所有派生 host
+  - **B**: host 进程永远不注册 status item; hvm-cli 用户从终端控制 (彻底简化, hvm-cli 用户体验回退)
+  - **C**: GUI ↔ host IPC 协调动态隐藏/恢复 (语义最优, 工程量大)
+- **工作量**: ~20 行 (方案 A)
+
 ---
 
 ## ✅ 最近完成 (供历史追溯, 滚动清理)
@@ -144,4 +157,4 @@
 
 ---
 
-**最后更新**: 2026-04-26 (M-1 / M-2 / M-4 + GUI QEMU 启动派发 bug fix 完成; 剩 M-3 / L 系列 / Polish)
+**最后更新**: 2026-04-27 (新增 P-4: GUI + host 双 status item 重复)
