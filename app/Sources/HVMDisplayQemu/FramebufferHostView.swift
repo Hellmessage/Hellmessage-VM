@@ -25,10 +25,10 @@ public final class FramebufferHostView: NSView, MTKViewDelegate {
     /// 输入转发器, 由 attach 方法注入. weak 防循环.
     public weak var inputForwarder: InputForwarder?
 
-    /// guest 最近上报的 LED 状态; CapsLock 同步用.
-    private var guestLEDState = HDP.LedState(capsLock: false,
-                                              numLock: false,
-                                              scrollLock: false)
+    /// 我们预期 guest CapsLock 当前状态. 每次发 caps_lock toggle 翻转;
+    /// 收到 LED_STATE 时用 ground truth 校正. 这是单一 source 避免 LED_STATE
+    /// 回传延迟造成的双重 toggle race.
+    private var expectedGuestCaps: Bool = false
 
     /// 上一次 NSEvent.modifierFlags 全量, 用于 flagsChanged 算 diff (修饰键 down/up)
     private var lastHostFlags: NSEvent.ModifierFlags = []
@@ -64,9 +64,9 @@ public final class FramebufferHostView: NSView, MTKViewDelegate {
         renderer.bindShm(fd: arrival.shmFD, info: arrival.info)
     }
 
-    /// 接 LED_STATE 事件: 更新 guest LED 状态缓存.
+    /// 接 LED_STATE 事件: 用 ground truth 校正 expectedGuestCaps.
     public func updateGuestLEDState(_ leds: HDP.LedState) {
-        guestLEDState = leds
+        expectedGuestCaps = leds.capsLock
     }
 
     // MARK: - first responder
@@ -162,17 +162,13 @@ public final class FramebufferHostView: NSView, MTKViewDelegate {
         let prev = lastHostFlags
         lastHostFlags = cur
 
-        // CapsLock 是 toggle 类: NSEvent 不发 keyDown/keyUp, 只 flagsChanged.
-        // 仅当 host CapsLock bit 翻转时, 让 guest toggle 一次.
-        if cur.contains(.capsLock) != prev.contains(.capsLock) {
-            inputForwarder?.keyDown(qcode: "caps_lock")
-            inputForwarder?.keyUp(qcode: "caps_lock")
-        }
+        // 注: CapsLock 不在 flagsChanged 里发 toggle 给 guest. 因为发了
+        // toggle 后 guest LED state 异步回传更新, 紧接着 keyDown 路径上的
+        // syncCapsLockIfNeeded 又看 host bit vs guest LED 不一致 → 重复 toggle
+        // 抵消. 单一 source: keyDown 时统一查 expectedGuestCaps 同步.
 
         // Shift / Control / Option / Command: 普通 down/up modifier.
         // NSEvent.ModifierFlags 不区分左右, 我们都映射到左侧 qcode (shift/ctrl/alt/meta_l).
-        // 如未来要左右独立, 可走 NSEvent.modifierFlags.contains(.deviceIndependentFlagsMask)
-        // 加 deviceMask 区分.
         let map: [(NSEvent.ModifierFlags, String)] = [
             (.shift,   "shift"),
             (.control, "ctrl"),
@@ -187,15 +183,16 @@ public final class FramebufferHostView: NSView, MTKViewDelegate {
         }
     }
 
-    /// CapsLock 双端同步: host 与 guest LED 状态不一致时, 给 guest 补一次
-    /// caps_lock toggle 让对齐. 防止 "host 大写, guest 小写" 的输入混乱.
+    /// CapsLock 双端同步: host 与 expectedGuestCaps 不一致时给 guest 发一次
+    /// caps_lock toggle 让对齐, 同步翻转 expectedGuestCaps 不等 LED_STATE 回传 (避免
+    /// 异步回传延迟造成的双重 toggle race). LED_STATE 仍会校正 expectedGuestCaps
+    /// 处理乱序场景 (例如 guest 内用户用屏幕键盘改了 caps).
     private func syncCapsLockIfNeeded(modifierFlags: NSEvent.ModifierFlags) {
-        let hostOn  = modifierFlags.contains(.capsLock)
-        let guestOn = guestLEDState.capsLock
-        if hostOn != guestOn {
+        let hostOn = modifierFlags.contains(.capsLock)
+        if hostOn != expectedGuestCaps {
             inputForwarder?.keyDown(qcode: "caps_lock")
             inputForwarder?.keyUp(qcode: "caps_lock")
-            // 不立即 set guestLEDState — 等下个 LED_STATE 消息回传刷新.
+            expectedGuestCaps = hostOn
         }
     }
 
