@@ -162,6 +162,20 @@ public final class FramebufferHostView: NSView, MTKViewDelegate {
         let prev = lastHostFlags
         lastHostFlags = cur
 
+        // VZ 风格快捷键: 同时按下 Cmd + Control → 释放 first responder,
+        // 把键盘焦点交回 window, 后续事件不再被 framebuffer 拦截 (跟 HVMView /
+        // VZVirtualMachineView 一致). 重新捕获: 点击 framebuffer 任意位置.
+        // 释放时清掉所有 stuck guest modifier 防止 guest 卡在 cmd/ctrl down 状态.
+        let release: NSEvent.ModifierFlags = [.command, .control]
+        let bothNow = cur.intersection(release) == release
+        let bothPrev = prev.intersection(release) == release
+        if bothNow && !bothPrev {
+            sendModifierUpAll(prev)
+            window?.makeFirstResponder(nil)
+            NSCursor.unhide()
+            return
+        }
+
         // 注: CapsLock 不在 flagsChanged 里发 toggle 给 guest. 因为发了
         // toggle 后 guest LED state 异步回传更新, 紧接着 keyDown 路径上的
         // syncCapsLockIfNeeded 又看 host bit vs guest LED 不一致 → 重复 toggle
@@ -181,6 +195,15 @@ public final class FramebufferHostView: NSView, MTKViewDelegate {
             if !was && now { inputForwarder?.keyDown(qcode: qcode) }
             if  was && !now { inputForwarder?.keyUp(qcode: qcode) }
         }
+    }
+
+    /// 释放 first responder 时给 guest 补 keyUp, 防止 stuck modifier (例如
+    /// 用户按住 ctrl 按 cmd 触发 release, 没补 keyUp 的话 guest 会卡在 ctrl down).
+    private func sendModifierUpAll(_ flags: NSEvent.ModifierFlags) {
+        if flags.contains(.shift)   { inputForwarder?.keyUp(qcode: "shift") }
+        if flags.contains(.control) { inputForwarder?.keyUp(qcode: "ctrl") }
+        if flags.contains(.option)  { inputForwarder?.keyUp(qcode: "alt") }
+        if flags.contains(.command) { inputForwarder?.keyUp(qcode: "meta_l") }
     }
 
     /// CapsLock 双端同步: host 与 expectedGuestCaps 不一致时给 guest 发一次
