@@ -81,6 +81,20 @@ public enum HVMPaths {
     public static func swtpmPidPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).swtpm.pid")
     }
+    /// QEMU `-display iosurface,socket=...` 的 HDP socket 路径
+    /// (host HVMDisplayQemu.DisplayChannel 连此 socket 拉 framebuffer).
+    public static func iosurfaceSocketPath(for id: UUID) -> URL {
+        runDir.appendingPathComponent("\(id.uuidString.lowercased()).iosurface.sock")
+    }
+    /// 输入专用 QMP socket (`-qmp unix:...`), 跟控制 QMP 分离避免 accept 争抢.
+    /// host HVMDisplayQemu.InputForwarder 走此 socket 发 input-send-event.
+    public static func qmpInputSocketPath(for id: UUID) -> URL {
+        runDir.appendingPathComponent("\(id.uuidString.lowercased()).qmp.input.sock")
+    }
+    /// spice-vdagent virtio-serial chardev socket; host 不连, 仅留给 guest agent.
+    public static func vdagentSocketPath(for id: UUID) -> URL {
+        runDir.appendingPathComponent("\(id.uuidString.lowercased()).vdagent.sock")
+    }
     // vmnetSocketPath / vmnetPidPath 已废弃: socket_vmnet 改成系统级 launchd daemon
     // (路径见 HVMQemu/VmnetDaemonPaths), 不再 per-VM 起 sidecar.
 

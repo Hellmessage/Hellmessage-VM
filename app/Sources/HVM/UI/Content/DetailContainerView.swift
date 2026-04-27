@@ -15,6 +15,7 @@ import SwiftUI
 import Observation
 import HVMBundle
 import HVMDisplay
+import HVMDisplayQemu
 
 @MainActor
 final class DetailContainerView: NSView {
@@ -31,6 +32,10 @@ final class DetailContainerView: NSView {
 
     // 当前挂载的 HVMView (引用 session.attachment.view, 不 retain)
     private weak var currentHVMView: HVMView?
+
+    // QEMU 嵌入 session (HDP socket → FramebufferHostView). 仅 .runningRemote
+    // + engine == .qemu 时存在; transition 时 stop + 重建.
+    private var currentQemuSession: QemuEmbeddedSession?
 
     // 顶部"运行中 VM" tab 栏, 跟 sub-state UI 解耦, 一直存在;
     // 高度由 runningTabsBarHeight 约束动态控制 (0 个运行中 VM → 0 高度).
@@ -189,6 +194,11 @@ final class DetailContainerView: NSView {
         currentTopBar?.removeFromSuperview(); currentTopBar = nil
         currentBottomBar?.removeFromSuperview(); currentBottomBar = nil
         currentHVMView?.removeFromSuperview(); currentHVMView = nil
+        if let qs = currentQemuSession {
+            qs.stop()
+            qs.view.removeFromSuperview()
+            currentQemuSession = nil
+        }
 
         switch state {
         case .empty:
@@ -302,10 +312,20 @@ final class DetailContainerView: NSView {
         session.bindVMToView()
     }
 
-    /// runState=running 但本进程无 session 时的占位 (QEMU 后端: cocoa 窗口在 QEMU 进程内独立显示;
-    /// hvm-cli 起的 VM: GUI 进程没接管). 不嵌入 HVMView, 仅给状态 + Stop/Kill 控制走 IPC fallback.
+    /// runState=running 但本进程无 session 时的展示分支:
+    ///   - engine == .qemu: 嵌入 FramebufferHostView, 走 HDP socket 拉 framebuffer
+    ///     (跟 buildRunning 同布局, 但 view 是 Metal-backed Framebuffer 而非 VZView)
+    ///   - 其他 (例如 hvm-cli 起的 VZ VM, 主 GUI 后绑定): RemoteRunningContentView 占位
     private func buildRemoteRunning(id: UUID) {
         guard let item = model.list.first(where: { $0.id == id }) else { buildEmpty(); return }
+        if item.config.engine == .qemu {
+            buildQemuEmbedded(id: id, item: item)
+        } else {
+            buildRemoteHosting(id: id, item: item)
+        }
+    }
+
+    private func buildRemoteHosting(id: UUID, item: AppModel.VMListItem) {
         let host = NSHostingView(rootView: RemoteRunningContentView(model: model, errors: errors, item: item))
         host.translatesAutoresizingMaskIntoConstraints = false
         host.sizingOptions = .minSize
@@ -317,6 +337,68 @@ final class DetailContainerView: NSView {
             host.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
         currentRemoteRunningHost = host
+    }
+
+    private func buildQemuEmbedded(id: UUID, item: AppModel.VMListItem) {
+        let session = QemuEmbeddedSession(vmID: id)
+
+        let topBar = NSHostingView(rootView: DetailTopBar(model: model, item: item))
+        topBar.translatesAutoresizingMaskIntoConstraints = false
+        topBar.sizingOptions = .intrinsicContentSize
+        topBar.setContentHuggingPriority(.required, for: .vertical)
+        topBar.setContentCompressionResistancePriority(.required, for: .vertical)
+
+        let bottomBar = NSHostingView(rootView: DetailBottomBar(model: model, errors: errors, item: item))
+        bottomBar.translatesAutoresizingMaskIntoConstraints = false
+        bottomBar.sizingOptions = .intrinsicContentSize
+        bottomBar.setContentHuggingPriority(.required, for: .vertical)
+        bottomBar.setContentCompressionResistancePriority(.required, for: .vertical)
+
+        let topDivider = makeHorizontalDivider()
+        let bottomDivider = makeHorizontalDivider()
+
+        let fbView = session.view
+        fbView.translatesAutoresizingMaskIntoConstraints = false
+        fbView.setContentHuggingPriority(.defaultLow, for: .vertical)
+        fbView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+
+        addSubview(topBar)
+        addSubview(topDivider)
+        addSubview(fbView)
+        addSubview(bottomDivider)
+        addSubview(bottomBar)
+
+        NSLayoutConstraint.activate([
+            topBar.topAnchor.constraint(equalTo: runningTabsBar.bottomAnchor),
+            topBar.leadingAnchor.constraint(equalTo: leadingAnchor),
+            topBar.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+            topDivider.topAnchor.constraint(equalTo: topBar.bottomAnchor),
+            topDivider.leadingAnchor.constraint(equalTo: leadingAnchor),
+            topDivider.trailingAnchor.constraint(equalTo: trailingAnchor),
+            topDivider.heightAnchor.constraint(equalToConstant: 1),
+
+            fbView.topAnchor.constraint(equalTo: topDivider.bottomAnchor),
+            fbView.bottomAnchor.constraint(equalTo: bottomDivider.topAnchor),
+            fbView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            fbView.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+            bottomDivider.bottomAnchor.constraint(equalTo: bottomBar.topAnchor),
+            bottomDivider.leadingAnchor.constraint(equalTo: leadingAnchor),
+            bottomDivider.trailingAnchor.constraint(equalTo: trailingAnchor),
+            bottomDivider.heightAnchor.constraint(equalToConstant: 1),
+
+            bottomBar.bottomAnchor.constraint(equalTo: bottomAnchor),
+            bottomBar.leadingAnchor.constraint(equalTo: leadingAnchor),
+            bottomBar.trailingAnchor.constraint(equalTo: trailingAnchor),
+        ])
+
+        currentTopBar = topBar
+        currentBottomBar = bottomBar
+        currentQemuSession = session
+
+        // 启动连接 + 事件循环 (异步重试 socket connect, 不阻塞 UI)
+        session.start()
     }
 
     private func makeHorizontalDivider() -> NSView {

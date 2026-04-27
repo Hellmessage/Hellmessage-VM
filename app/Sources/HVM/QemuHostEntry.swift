@@ -125,6 +125,17 @@ public enum QemuHostEntry {
         }
 
         // 4. 构造 argv
+        // 4.1 HDP / 输入 QMP / spice-vdagent socket 路径 (跟现有 console / qmp 同 runDir).
+        // 这些 socket 启动后由 QEMU bind, host (主 GUI / hvm-cli detach 后再 attach 的客户端)
+        // 通过 DisplayChannel + InputForwarder 连接. argv 注入这些路径会触发 patch 0002 的
+        // ui/iosurface backend 起 listener pthread + 额外 -qmp + virtio-serial-pci.
+        let iosurfaceSocketURL  = HVMPaths.iosurfaceSocketPath(for: config.id)
+        let qmpInputSocketURL   = HVMPaths.qmpInputSocketPath(for: config.id)
+        let vdagentSocketURL    = HVMPaths.vdagentSocketPath(for: config.id)
+        try? FileManager.default.removeItem(at: iosurfaceSocketURL)
+        try? FileManager.default.removeItem(at: qmpInputSocketURL)
+        try? FileManager.default.removeItem(at: vdagentSocketURL)
+
         let buildResult: QemuArgsBuilder.BuildResult
         do {
             let inputs = QemuArgsBuilder.Inputs(
@@ -133,7 +144,10 @@ public enum QemuHostEntry {
                 virtioWinISOPath: virtioWinPath,
                 swtpmSocketPath: swtpmSockPath,
                 consoleSocketPath: consoleSocketURL.path,
-                unattendISOPath: unattendISOPath
+                unattendISOPath: unattendISOPath,
+                iosurfaceSocketPath: iosurfaceSocketURL.path,
+                qmpInputSocketPath: qmpInputSocketURL.path,
+                vdagentSocketPath: vdagentSocketURL.path
             )
             buildResult = try QemuArgsBuilder.build(inputs)
         } catch {
