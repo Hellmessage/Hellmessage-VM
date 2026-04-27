@@ -139,16 +139,32 @@ public enum QemuArgsBuilder {
         // Windows ISO 走 usb-storage cdrom (Win11 EFI bootloader 必需), Linux 也保留 (键鼠 USB).
         args += ["-device", "qemu-xhci,id=xhci"]
 
-        // ---- 磁盘 (virtio-blk, 顺序与 cfg.disks 一致). format 直接读 disk.format 字段, 不推断: ----
+        // ---- 磁盘 (按 guestOS 分总线类型, 顺序与 cfg.disks 一致). format 直接读 disk.format, 不推断: ----
         //   DiskFormat.qcow2 → qcow2 (新建 QEMU VM 默认)
         //   DiskFormat.raw   → raw   (VZ 后端格式; 老 raw QEMU VM 仍可跑)
-        for disk in cfg.disks {
+        // 总线分流:
+        //   Windows: -drive if=none + -device nvme (Win11 ARM PE 内置 NVMe 驱动, 装机器直接看见盘.
+        //            virtio-blk 在 PE 阶段需要手动加载 viostor.inf, 体验差; hell-vm 已验证 NVMe 路线.)
+        //   Linux:   -drive if=virtio (内核 virtio-blk 驱动稳, 不切换避免回归)
+        for (idx, disk) in cfg.disks.enumerated() {
             let pathStr = inputs.bundleURL.appendingPathComponent(disk.path).path
-            var spec = "file=\(pathStr),if=virtio,format=\(disk.format.rawValue),cache=none"
+            let driveId = "disk\(idx)"
+            var spec = "file=\(pathStr),id=\(driveId),format=\(disk.format.rawValue),cache=none"
             if disk.readOnly {
                 spec += ",readonly=on"
             }
-            args += ["-drive", spec]
+            switch cfg.guestOS {
+            case .windows:
+                spec += ",if=none"
+                args += ["-drive", spec]
+                args += ["-device", "nvme,drive=\(driveId),serial=hvm-\(driveId)"]
+            case .linux:
+                spec += ",if=virtio"
+                args += ["-drive", spec]
+            case .macOS:
+                // 上面已 throw, 此处仅穷尽 switch
+                break
+            }
         }
 
         // ---- 安装 ISO + 周边 cdrom ----
