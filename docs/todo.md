@@ -22,56 +22,6 @@
 
 ---
 
-## 🟢 用户参与 (实测验证, AI 做不了)
-
-### U-1 · Linux arm64 ISO 真装机
-- **目的**: 验证 QEMU 后端 + HVF 在真实 Linux installer 上的稳定性
-- **步骤**:
-  ```bash
-  make build-all
-  build/hvm-cli create --name ubuntu --os linux --engine qemu \
-      --cpu 4 --memory 4 --disk 32 \
-      --iso ~/Downloads/ubuntu-24.04-live-server-arm64.iso
-  build/hvm-cli start ubuntu
-  # 观察 cocoa 窗口 GRUB / installer 流程
-  ```
-- **关注**:
-  - QEMU 进程稳定性 (无随机崩溃)
-  - virtio-blk 性能 (装机吞吐)
-  - virtio-net NAT 出网正常
-  - hvm-dbg screenshot/key/mouse 在装机界面真能注入 (E4a/E4b 已做未实测)
-
-### U-2 · Win11 arm64 ISO 真装机
-- **目的**: 验证 swtpm + virtio-win + EDK2 SecureBoot 完整闭环
-- **步骤**:
-  ```bash
-  make build-all
-  open build/HVM.app   # GUI 创建向导选 Windows (实验性) → 填 Win11 ARM ISO 路径
-  # → 自动下 virtio-win.iso (~700MB modal) → Create
-  # → 选中 VM → Start
-  # → 装机 Browse 驱动 → E:\amd64\w11 → viostor.sys → 看到磁盘 → 继续装
-  ```
-- **关注**:
-  - swtpm 真被 Win11 信任 (TPM 检查通过)
-  - SecureBoot NVRAM 跨重启持久 (pflash 双 drive)
-  - virtio-win driver 注入成功 (装机能见盘)
-  - 装完重启 OS 不蓝屏
-
-### U-3 · socket_vmnet bridged 真出网
-- **前置**: 跑过 `scripts/install-vmnet-helper.sh` 一次配 sudoers
-- **步骤**:
-  ```bash
-  build/hvm-cli create --name foo --os linux --engine qemu \
-      --network bridged:en0 ...
-  build/hvm-cli start foo
-  # guest 内验证 IP 是物理 LAN 段, 跨机 ping / ssh 通
-  ```
-- **顺便验**: `hvm-dbg qemu-launch` (调试路径) 也走 socket_vmnet sidecar
-  (代码已就位 `QemuLaunchCommand.swift:79-99,300-348`, 与生产 `QemuHostEntry` 共用 `SocketVmnetRunner`,
-  逻辑等价, 只差实测)
-
----
-
 ## 🟠 中期 (中等工程, 200-500 行)
 
 ### M-3 · GUI Snapshot 操作
@@ -161,6 +111,7 @@
 
 ## ✅ 最近完成 (供历史追溯, 滚动清理)
 
+- (2026-04-27) **U-1 / U-2 / U-3**: 三项实测全部验证通过 — Linux arm64 装机 (QEMU+HVF) 稳定 / Win11 arm64 装机 (swtpm+virtio-win+EDK2) 闭环 / socket_vmnet bridged 真出网
 - (2026-04-26) **M-1**: NetworkMode 加 .shared (跨 HVMBundle/HVMNet/HVMQemu/CLI 同步); GUI CreateVMDialog 加 Engine 选择器 (Linux 专用) + Network 段 (NAT/Bridged/Shared) + 接口枚举 + sudoers 检测 + osascript+复制 helper; EditConfigDialog 同步加 Network 编辑; install-vmnet-helper.sh 打包入 .app
 - (2026-04-26) **M-2**: GUI Disks section 列表 + DiskAddDialog / DiskResizeDialog + 数据盘 delete 走 ConfirmPresenter
 - (2026-04-26) **M-4**: QEMU host 进程加 thumbnail 10s 定时器 (与 VZ 同周期); HVMBundle 抽 ThumbnailWriter atomic 写盘 helper, VZ 与 QEMU 路径共用
@@ -177,4 +128,4 @@
 
 ---
 
-**最后更新**: 2026-04-27 (新增 L-4: vmnet daemon 热重装时 QMP 热重连)
+**最后更新**: 2026-04-27 (U-1 / U-2 / U-3 实测通过, 移入完成区)
