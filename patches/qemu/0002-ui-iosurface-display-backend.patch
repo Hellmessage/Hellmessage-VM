@@ -225,6 +225,39 @@ index e3da776..b68563d 100644
    }
  }
  
+diff --git a/scripts/meson-buildoptions.sh b/scripts/meson-buildoptions.sh
+index 3d0d132..13fb141 100644
+--- a/scripts/meson-buildoptions.sh
++++ b/scripts/meson-buildoptions.sh
+@@ -66,9 +66,9 @@ meson_options_help() {
+   printf "%s\n" '  --libdir=VALUE           Library directory [system default]'
+   printf "%s\n" '  --libexecdir=VALUE       Library executable directory [libexec]'
+   printf "%s\n" '  --localedir=VALUE        Locale data directory [share/locale]'
+-  printf "%s\n" '  --localstatedir=VALUE    Localstate data directory [/var/local]'
++  printf "%s\n" '  --localstatedir=VALUE    Localstate data directory [/opt/homebrew/var]'
+   printf "%s\n" '  --mandir=VALUE           Manual page directory [share/man]'
+-  printf "%s\n" '  --prefix=VALUE           Installation prefix [/usr/local]'
++  printf "%s\n" '  --prefix=VALUE           Installation prefix [/opt/homebrew]'
+   printf "%s\n" '  --qemu-ga-distro=VALUE   second path element in qemu-ga registry entries'
+   printf "%s\n" '                           [Linux]'
+   printf "%s\n" '  --qemu-ga-manufacturer=VALUE'
+@@ -132,6 +132,7 @@ meson_options_help() {
+   printf "%s\n" '  hvf             HVF acceleration support'
+   printf "%s\n" '  iconv           Font glyph conversion support'
+   printf "%s\n" '  igvm            Independent Guest Virtual Machine (IGVM) file support'
++  printf "%s\n" '  iosurface       HVM iosurface display backend (macOS only)'
+   printf "%s\n" '  jack            JACK sound support'
+   printf "%s\n" '  keyring         Linux keyring support'
+   printf "%s\n" '  kvm             KVM acceleration support'
+@@ -357,6 +358,8 @@ _meson_option_parse() {
+     --enable-install-blobs) printf "%s" -Dinstall_blobs=true ;;
+     --disable-install-blobs) printf "%s" -Dinstall_blobs=false ;;
+     --interp-prefix=*) quote_sh "-Dinterp_prefix=$2" ;;
++    --enable-iosurface) printf "%s" -Diosurface=enabled ;;
++    --disable-iosurface) printf "%s" -Diosurface=disabled ;;
+     --enable-jack) printf "%s" -Djack=enabled ;;
+     --disable-jack) printf "%s" -Djack=disabled ;;
+     --enable-keyring) printf "%s" -Dkeyring=enabled ;;
 diff --git a/ui/iosurface.m b/ui/iosurface.m
 new file mode 100644
 index 0000000..f2dee1c

@@ -170,16 +170,18 @@ build_qemu() {
     #                 我们不需要把 QEMU 镜像导出成 FUSE 文件系统给 host
     # 其他 disable: 都是 Win/Linux arm64 guest 用不到的远程块/显示后端,
     #               关掉可缩短编译时间 + 缩小产物 + 避免环境探测引入的脆弱性
-    # 注: --enable-iosurface 是自家 patch 0002 引入的新 feature, QEMU configure
-    # 包装层只识别 hardcoded 的 --enable-XX 列表, 不会自动从 meson_options.txt
-    # 派生; 改用 meson 风格 -Diosurface=enabled 直接透传给 meson 后端绕开 configure 校验.
+    # 注: --enable-iosurface 是自家 patch 0002 引入的新 feature. configure 通过
+    # scripts/meson-buildoptions.sh 自动派生 --enable-X 选项; 该 .sh 由 .py 从
+    # meson_options.txt 生成. patch 0002 同时把生成后的 .sh 打进去, 让 reset
+    # --hard + apply 后 configure 即可识别 --enable-iosurface (跟 --enable-cocoa
+    # 同风格).
     ( cd "$build_dir" && \
         ../configure \
             --prefix="$STAGING_DIR" \
             --target-list=aarch64-softmmu \
             --enable-cocoa \
             --enable-hvf \
-            -Diosurface=enabled \
+            --enable-iosurface \
             --disable-docs \
             --disable-gtk \
             --disable-sdl \
@@ -570,7 +572,7 @@ write_manifest() {
     "--target-list=aarch64-softmmu",
     "--enable-cocoa",
     "--enable-hvf",
-    "-Diosurface=enabled"
+    "--enable-iosurface"
   ],
   "patches": $patches_json,
   "edk2_firmware_source": "QEMU $QEMU_TAG 源码自带 pc-bios/edk2-aarch64-code.fd.bz2 (kraxel build)",
