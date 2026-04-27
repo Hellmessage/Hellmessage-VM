@@ -25,6 +25,7 @@ final class DetailContainerView: NSView {
     // 当前展示的 hosting view, 根据状态重建
     private var currentEmptyHost: NSHostingView<DetailEmptyState>?
     private var currentStoppedHost: NSHostingView<StoppedContentView>?
+    private var currentRemoteRunningHost: NSHostingView<RemoteRunningContentView>?
     private var currentTopBar: NSHostingView<DetailTopBar>?
     private var currentBottomBar: NSHostingView<DetailBottomBar>?
 
@@ -41,7 +42,11 @@ final class DetailContainerView: NSView {
     private enum ShowState: Equatable {
         case empty
         case stopped(UUID)
+        /// 本进程内有 session 的 running (VZ embedded display 路径)
         case running(UUID)
+        /// runState=running 但本进程内无 session (QEMU 后端 / hvm-cli 起的 VM):
+        /// detail 改用 RemoteRunningContentView 占位, 控制按钮走 model.stop/.kill 的 IPC fallback
+        case runningRemote(UUID)
     }
 
     init(model: AppModel, errors: ErrorPresenter, confirms: ConfirmPresenter) {
@@ -79,7 +84,12 @@ final class DetailContainerView: NSView {
                 _ = self.model.embeddedID
                 _ = self.model.list.count
                 _ = self.model.sessions.count
-                // 同时订阅当前 session.state (若 running)
+                // 订阅当前选中 VM 的 runState (QEMU 后端无 session, 状态切换只能从 list.runState 看)
+                if let sel = self.model.selectedID,
+                   let item = self.model.list.first(where: { $0.id == sel }) {
+                    _ = item.runState
+                }
+                // 同时订阅当前 session.state (若 running 且本进程持有 session)
                 if let sel = self.model.selectedID, let s = self.model.sessions[sel] {
                     _ = s.state
                 }
@@ -122,9 +132,14 @@ final class DetailContainerView: NSView {
 
     private func computeState() -> ShowState {
         guard let sel = model.selectedID else { return .empty }
-        guard model.list.contains(where: { $0.id == sel }) else { return .empty }
-        if model.sessions[sel] != nil {
-            return .running(sel)
+        guard let item = model.list.first(where: { $0.id == sel }) else { return .empty }
+        // 唯一 source of truth: list.runState (来自 BundleLock 探测), sidebar / statusbar 同源.
+        // session 是否存在仅决定 running 走 embedded view (.running) 还是 remote 占位 (.runningRemote).
+        if item.runState == "running" {
+            if model.sessions[sel] != nil {
+                return .running(sel)
+            }
+            return .runningRemote(sel)
         }
         return .stopped(sel)
     }
@@ -133,6 +148,7 @@ final class DetailContainerView: NSView {
         // 清掉旧
         currentEmptyHost?.removeFromSuperview(); currentEmptyHost = nil
         currentStoppedHost?.removeFromSuperview(); currentStoppedHost = nil
+        currentRemoteRunningHost?.removeFromSuperview(); currentRemoteRunningHost = nil
         currentTopBar?.removeFromSuperview(); currentTopBar = nil
         currentBottomBar?.removeFromSuperview(); currentBottomBar = nil
         currentHVMView?.removeFromSuperview(); currentHVMView = nil
@@ -144,6 +160,8 @@ final class DetailContainerView: NSView {
             buildStopped(id: id)
         case .running(let id):
             buildRunning(id: id)
+        case .runningRemote(let id):
+            buildRemoteRunning(id: id)
         }
     }
 
@@ -245,6 +263,23 @@ final class DetailContainerView: NSView {
 
         // 让 session 绑定 VM 到 view (view 已在 window hierarchy 就会立即创建 Metal drawable)
         session.bindVMToView()
+    }
+
+    /// runState=running 但本进程无 session 时的占位 (QEMU 后端: cocoa 窗口在 QEMU 进程内独立显示;
+    /// hvm-cli 起的 VM: GUI 进程没接管). 不嵌入 HVMView, 仅给状态 + Stop/Kill 控制走 IPC fallback.
+    private func buildRemoteRunning(id: UUID) {
+        guard let item = model.list.first(where: { $0.id == id }) else { buildEmpty(); return }
+        let host = NSHostingView(rootView: RemoteRunningContentView(model: model, errors: errors, item: item))
+        host.translatesAutoresizingMaskIntoConstraints = false
+        host.sizingOptions = .minSize
+        addSubview(host)
+        NSLayoutConstraint.activate([
+            host.topAnchor.constraint(equalTo: topAnchor),
+            host.bottomAnchor.constraint(equalTo: bottomAnchor),
+            host.leadingAnchor.constraint(equalTo: leadingAnchor),
+            host.trailingAnchor.constraint(equalTo: trailingAnchor),
+        ])
+        currentRemoteRunningHost = host
     }
 
     private func makeHorizontalDivider() -> NSView {

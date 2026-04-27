@@ -9,7 +9,7 @@ struct HVMStatusBar: View {
 
     private var stats: (total: Int, running: Int) {
         var r = 0
-        for item in model.list where model.sessions[item.id] != nil || item.runState == "running" {
+        for item in model.list where item.runState == "running" {
             r += 1
         }
         return (model.list.count, r)

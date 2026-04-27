@@ -789,3 +789,71 @@ struct DetailEmptyState: View {
         }
     }
 }
+
+// MARK: - Remote Running 占位
+// QEMU 后端 / hvm-cli 起的 VM: BundleLock 显示 running 但本 GUI 进程无 session.
+// QEMU 后端的 cocoa 窗口由 QEMU 进程独立展示, HVM 主窗口的 detail 区不嵌入画面,
+// 只给一个状态卡片 + Stop/Kill 控制 (model.stop / .kill 内部已对外部 host 进程走 IPC fallback).
+
+struct RemoteRunningContentView: View {
+    @Bindable var model: AppModel
+    @Bindable var errors: ErrorPresenter
+    let item: AppModel.VMListItem
+
+    var body: some View {
+        VStack(spacing: HVMSpace.lg) {
+            Spacer(minLength: HVMSpace.xl)
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(HVMColor.bgCard)
+                    .frame(width: 88, height: 88)
+                Image(systemName: "play.rectangle.fill")
+                    .font(.system(size: 38, weight: .light))
+                    .foregroundStyle(HVMColor.statusRunning)
+            }
+
+            VStack(spacing: HVMSpace.sm) {
+                HStack(spacing: HVMSpace.sm) {
+                    GuestBadge(os: item.guestOS, size: 24)
+                    Text(item.displayName)
+                        .font(HVMFont.title)
+                        .foregroundStyle(HVMColor.textPrimary)
+                }
+                StatusBadge(state: .running)
+                Text(subText)
+                    .font(HVMFont.body)
+                    .foregroundStyle(HVMColor.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 460)
+            }
+
+            HStack(spacing: HVMSpace.md) {
+                Button("Stop") {
+                    do { try model.stop(item.id) } catch { errors.present(error) }
+                }
+                .buttonStyle(GhostButtonStyle())
+                .help("请求 guest 优雅关机 (走 IPC)")
+
+                Button("Kill") {
+                    Task { do { try await model.kill(item.id) } catch { errors.present(error) } }
+                }
+                .buttonStyle(GhostButtonStyle(destructive: true))
+                .help("强制结束 host 进程 (走 IPC)")
+            }
+
+            Spacer(minLength: HVMSpace.xl)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(HVMColor.bgBase)
+    }
+
+    private var subText: String {
+        switch item.guestOS {
+        case .windows, .linux:
+            return "QEMU 后端的画面在独立的 QEMU 窗口中。如果窗口被遮挡, 在 Dock 找 qemu-system-aarch64 切回前台。"
+        case .macOS:
+            return "VM 由其他进程接管中 (本 GUI 不持有 session)。"
+        }
+    }
+}

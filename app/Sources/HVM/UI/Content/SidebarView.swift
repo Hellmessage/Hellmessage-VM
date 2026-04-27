@@ -48,7 +48,7 @@ struct SidebarView: View {
                     ForEach(model.list) { item in
                         Row(item: item,
                             isSelected: model.selectedID == item.id,
-                            isRunning: model.sessions[item.id] != nil || item.runState == "running")
+                            isRunning: item.runState == "running")
                             .contentShape(Rectangle())
                             .onTapGesture { model.selectedID = item.id }
                     }
