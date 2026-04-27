@@ -50,10 +50,22 @@ let package = Package(
         // QEMU 后端: 进程编排 + argv 构造 + QMP 客户端 (与 HVMBackend 平行, 不依赖 VZ)
         .target(name: "HVMQemu",    dependencies: ["HVMCore", "HVMBundle"]),
 
+        // SCM_RIGHTS fd 接收 helper (POSIX recvmsg + cmsg). 单独 C target 因
+        // Swift 不能直接调 CMSG_FIRSTHDR / CMSG_DATA / CMSG_LEN 等宏.
+        // 仅给 HVMDisplayQemu 用 (接 HDP SURFACE_NEW 携带的 shm fd).
+        .target(name: "HVMScmRecv"),
+
+        // QEMU iosurface 显示嵌入: HDP v1.0.0 协议 (docs/QEMU_DISPLAY_PROTOCOL.md)
+        // socket 客户端 + Metal 零拷贝渲染 + QMP 输入转发. 配套 patch 0002.
+        .target(
+            name: "HVMDisplayQemu",
+            dependencies: ["HVMCore", "HVMBundle", "HVMQemu", "HVMScmRecv"]
+        ),
+
         // 可执行 target
         .executableTarget(
             name: "HVM",
-            dependencies: ["HVMBackend", "HVMInstall", "HVMIPC", "HVMDisplay", "HVMStorage", "HVMQemu"]
+            dependencies: ["HVMBackend", "HVMInstall", "HVMIPC", "HVMDisplay", "HVMStorage", "HVMQemu", "HVMDisplayQemu"]
         ),
         .executableTarget(
             name: "hvm-cli",
