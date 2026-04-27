@@ -687,9 +687,17 @@ final class QemuHostState {
             case "double-click":
                 let (x, y) = try parseXY(req)
                 try await QemuInput.mouseDoubleClick(x: x, y: y, button: button, guestSize: guestSize, via: client)
+            case "drag":
+                // hvm-dbg MouseCommand 把 --from x,y --to x,y 编进 (x,y) 起点 + (x2,y2) 终点
+                let (fx, fy) = try parseXY(req)
+                let (tx, ty) = try parseXY2(req)
+                try await QemuInput.mouseDrag(
+                    fromX: fx, fromY: fy, toX: tx, toY: ty,
+                    button: button, guestSize: guestSize, via: client
+                )
             default:
                 return .failure(id: req.id, code: "config.invalid_enum",
-                                message: "args.op 应为 move / click / double-click")
+                                message: "args.op 应为 move / click / double-click / drag")
             }
             return .success(id: req.id)
         } catch let QemuInput.InputError.invalidPoint(reason) {
@@ -707,6 +715,15 @@ final class QemuHostState {
         guard let xs = req.args["x"], let ys = req.args["y"],
               let x = Int(xs), let y = Int(ys) else {
             throw QemuInput.InputError.invalidPoint(reason: "args.x / args.y 必须是整数")
+        }
+        return (x, y)
+    }
+
+    /// args.x2 / args.y2 解析 (drag 终点). 缺/格式错抛 invalidPoint.
+    private func parseXY2(_ req: IPCRequest) throws -> (Int, Int) {
+        guard let xs = req.args["x2"], let ys = req.args["y2"],
+              let x = Int(xs), let y = Int(ys) else {
+            throw QemuInput.InputError.invalidPoint(reason: "args.x2 / args.y2 必须是整数 (drag 终点)")
         }
         return (x, y)
     }

@@ -76,6 +76,42 @@ public enum QemuInput {
         try await mouseClick(x: x, y: y, button: button, guestSize: guestSize, via: client)
     }
 
+    /// 拖拽: move 到起点 → 按下 → N 步线性插值 move → 释放.
+    /// 中间步数固定 8 (含起点 + 终点共 10 帧), 每帧间隔 20ms, 模拟人类拖拽节奏.
+    /// guest 内 GUI (Win/Linux) 一般要求"按下后有移动事件"才认 drag, 所以中间步是必须的.
+    public static func mouseDrag(
+        fromX: Int, fromY: Int,
+        toX: Int, toY: Int,
+        button: String = "left",
+        guestSize: CGSize,
+        via client: QmpClient
+    ) async throws {
+        guard ["left", "right", "middle"].contains(button) else {
+            throw InputError.unsupportedButton(button)
+        }
+
+        // 1. 先 move 到起点 + 按下 (合一帧发, 减少 RTT)
+        var startEvents = absMoveEvents(x: fromX, y: fromY, guestSize: guestSize)
+        startEvents.append(["type": "btn", "data": ["button": button, "down": true]])
+        try await client.inputSendEvent(events: startEvents)
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        // 2. 中间线性插值 (闭区间 [fromX,toX] 上的 8 个内部点 + 终点); 不含起点 (已在 1 发过)
+        let steps = 8
+        for i in 1...steps {
+            let t = Double(i) / Double(steps)
+            let x = fromX + Int((Double(toX - fromX) * t).rounded())
+            let y = fromY + Int((Double(toY - fromY) * t).rounded())
+            try await client.inputSendEvent(events: absMoveEvents(x: x, y: y, guestSize: guestSize))
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        // 3. 终点释放
+        try await client.inputSendEvent(events: [
+            ["type": "btn", "data": ["button": button, "down": false]]
+        ])
+    }
+
     // MARK: - 内部
 
     /// QEMU input-send-event abs 坐标范围是 0..32767 (规约值, 与像素无关).
