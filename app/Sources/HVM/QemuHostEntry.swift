@@ -185,6 +185,17 @@ public enum QemuHostEntry {
             QemuHostState.shared.qmpClient = client
             fputs("HVMHost(qemu): QMP 已连接\n", stderr)
 
+            // 6.0 EFI Shell 自动注入 (仅 windows 装机阶段). EDK2 patched firmware 启动后落到
+            // EFI Shell, 自动注入 fs0:\efi\boot\bootaa64.efi 让 Win11 ISO 直接启动到 Setup.
+            // 装完后 bootFromDiskOnly=true, ISO 不挂, EDK2 自动 boot Windows from disk, 不需注入.
+            if config.guestOS == .windows, !config.bootFromDiskOnly {
+                fputs("HVMHost(qemu): Win11 装机模式, 启动 EFI Shell 自动注入 (后台 30s 后开始)\n", stderr)
+                Task { @MainActor in
+                    await EFIShellAutoboot.injectBootISO(via: client)
+                    fputs("HVMHost(qemu): EFI Shell 自动注入完成\n", stderr)
+                }
+            }
+
             // 6.1 thumbnail 抓帧定时器 (M-4): 与 VZ 路径周期一致, 抓 → 写 bundle/meta/thumbnail.png
             QemuHostState.shared.startThumbnailTimer()
 

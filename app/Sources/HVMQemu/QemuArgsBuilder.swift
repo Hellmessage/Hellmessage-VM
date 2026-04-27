@@ -111,15 +111,21 @@ public enum QemuArgsBuilder {
         }
 
         // ---- UEFI firmware ----
-        // Linux: 单 -bios; Windows: 双 pflash (RW NVRAM 才能保 SecureBoot 状态)
-        let edk2Code = inputs.qemuRoot.appendingPathComponent("share/qemu/edk2-aarch64-code.fd").path
+        // Linux: 用 stock kraxel firmware (QEMU 自带, 跟 Ubuntu/Linux ISO 兼容良好), 单 -bios.
+        // Windows: 必须用 patched EDK2 firmware (含 ArmVirtPkg extra-RAM-region patch, Win11
+        //          ARM64 bootmgfw 在 0x10000000 的 ConvertPages 才能成功). 走双 pflash:
+        //          RO code (firmware) + RW vars (nvram, SecureBoot 状态持久).
+        //          Win11 firmware 文件名 edk2-aarch64-code-win11.fd, 由 scripts/edk2-build.sh
+        //          自家 build (可能), 暂时 vendor hell-vm 项目同源 binary (GPL 兼容, 出处声明).
+        let stockEdk2 = inputs.qemuRoot.appendingPathComponent("share/qemu/edk2-aarch64-code.fd").path
+        let win11Edk2 = inputs.qemuRoot.appendingPathComponent("share/qemu/edk2-aarch64-code-win11.fd").path
         switch cfg.guestOS {
         case .linux:
-            args += ["-bios", edk2Code]
+            args += ["-bios", stockEdk2]
         case .windows:
-            // RO code + RW vars (vars 文件由 BundleLayout.nvramURL 持久化)
+            // RW vars (vars 文件由 BundleLayout.nvramURL 持久化)
             let nvramPath = inputs.bundleURL.appendingPathComponent("nvram/efi-vars.fd").path
-            args += ["-drive", "if=pflash,format=raw,readonly=on,file=\(edk2Code)"]
+            args += ["-drive", "if=pflash,format=raw,readonly=on,file=\(win11Edk2)"]
             args += ["-drive", "if=pflash,format=raw,file=\(nvramPath)"]
         case .macOS:
             // 上面已 throw, 此处仅穷尽 switch
