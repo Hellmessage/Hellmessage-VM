@@ -174,6 +174,10 @@ public final class FramebufferRenderer: NSObject {
     // MARK: - draw
 
     /// 在 MTKView 当前 drawable 上绘. 在 MTKViewDelegate.draw(in:) 里调.
+    /// MTKView.currentDrawable / currentRenderPassDescriptor 是 @MainActor isolated,
+    /// 因此本函数也标 @MainActor (调用方 FramebufferHostView 的 MTKViewDelegate
+    /// draw(in:) 已在 main actor 上, 无 hop 开销).
+    @MainActor
     public func draw(in view: MTKView) {
         guard let drawable = view.currentDrawable,
               let descriptor = view.currentRenderPassDescriptor,
