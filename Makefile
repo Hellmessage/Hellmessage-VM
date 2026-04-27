@@ -14,7 +14,7 @@ ENTITLEMENTS  := $(PKG_DIR)/Resources/HVM.entitlements
 QEMU_STAGE    := third_party/qemu-stage
 QEMU_BIN      := $(QEMU_STAGE)/bin/qemu-system-aarch64
 
-.PHONY: all build bundle compile dev test verify clean help icon register-types qemu qemu-clean edk2 edk2-clean build-all xed install uninstall
+.PHONY: all build bundle compile dev test verify clean help icon register-types qemu qemu-clean edk2 edk2-clean build-all xed install uninstall run-app
 
 # 默认: release 模式 + 完整 .app 签名
 all: build
@@ -31,6 +31,7 @@ help:
 	@echo "  make xed        — Xcode 打开 SwiftPM 包 (开发期辅助, 非权威构建路径)"
 	@echo "  make install    — 把 build/HVM.app 安装到 /Applications/ (覆盖旧版)"
 	@echo "  make uninstall  — 从 /Applications/ 卸载 HVM.app"
+	@echo "  make run-app    — build + install + 重启 GUI 主进程 (开发期 dev loop; 不动正在运行的 VM host 子进程)"
 	@echo "  make clean      — 清除 build/ 和 app/.build/"
 	@echo
 	@echo "QEMU 后端 (Win arm64 / 可选 Linux arm64; 详见 docs/QEMU_INTEGRATION.md):"
@@ -121,6 +122,20 @@ install: build
 	@LSREG="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"; \
 		"$$LSREG" -f /Applications/HVM.app 2>/dev/null || true
 	@echo "✔ 已安装: /Applications/HVM.app"
+
+# 开发期 dev loop: 编译 + 安装 + 重启 GUI 主进程 (保留运行中的 VM host 子进程).
+# 关键过滤: 主 GUI 进程 cmdline 只有一个 token (binary 路径), host 子进程
+# 多个 (--host-mode-bundle ...). awk NF == 2 严格匹配只杀主 GUI, 不动 host.
+# open .app 让 LaunchServices 起新 GUI; 老 host 子进程持有的 VM 继续运行.
+run-app: install
+	@OLDPID=$$(ps -axo pid,command | awk 'NF == 2 && $$2 ~ /MacOS\/HVM$$/ {print $$1}'); \
+	if [ -n "$$OLDPID" ]; then \
+		echo "ℹ 重启 GUI 主进程 pid=$$OLDPID (host 子进程不动)"; \
+		kill $$OLDPID 2>/dev/null || true; \
+		sleep 1; \
+	fi
+	@open /Applications/HVM.app
+	@echo "✔ 已启动 /Applications/HVM.app"
 
 # 从 /Applications/ 卸载 (用户数据 ~/Library/Application Support/HVM/ 不动)
 uninstall:
