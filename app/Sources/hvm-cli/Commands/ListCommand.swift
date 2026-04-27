@@ -1,7 +1,9 @@
 // ListCommand.swift
 // hvm-cli list — 列出所有 VM
+// --watch / -w 持续刷新; Ctrl+C 退出.
 
 import ArgumentParser
+import Dispatch
 import Foundation
 import HVMBundle
 import HVMCore
@@ -9,6 +11,14 @@ import HVMStorage
 
 private func pad(_ s: String, _ w: Int) -> String {
     s.count >= w ? s : s + String(repeating: " ", count: w - s.count)
+}
+
+/// SIGINT flag 跨线程传递盒. DispatchSource 在 .global() queue 上 set, 主 async 循环读.
+private final class StopBox: @unchecked Sendable {
+    private var v = false
+    private let lock = NSLock()
+    func set() { lock.lock(); v = true; lock.unlock() }
+    func get() -> Bool { lock.lock(); defer { lock.unlock() }; return v }
 }
 
 struct ListCommand: AsyncParsableCommand {
@@ -23,6 +33,12 @@ struct ListCommand: AsyncParsableCommand {
     @Option(name: .long, help: "bundle 搜索目录, 默认 ~/Library/Application Support/HVM/VMs")
     var bundleDir: String?
 
+    @Flag(name: [.customShort("w"), .long], help: "持续刷新, Ctrl+C 退出")
+    var watch: Bool = false
+
+    @Option(name: .long, help: "watch 间隔秒数, 默认 2")
+    var interval: Int = 2
+
     struct Row: Encodable, Sendable {
         let name: String
         let id: String
@@ -36,6 +52,49 @@ struct ListCommand: AsyncParsableCommand {
     }
 
     func run() async throws {
+        if !watch {
+            renderOnce()
+            return
+        }
+
+        // watch 模式: 拦截 SIGINT, 循环刷新.
+        // signal(SIGINT, SIG_IGN) 阻止默认终止, DispatchSource 把信号转成 handler 调用.
+        // 100ms 切片轮询 stop flag, Ctrl+C 后最多 100ms 退出.
+        guard interval > 0 else {
+            FileHandle.standardError.write(Data("--interval 必须 > 0\n".utf8))
+            throw ExitCode(2)
+        }
+        let stopBox = StopBox()
+        signal(SIGINT, SIG_IGN)
+        let src = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
+        src.setEventHandler { stopBox.set() }
+        src.resume()
+        defer {
+            src.cancel()
+            signal(SIGINT, SIG_DFL)
+        }
+
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd HH:mm:ss"
+
+        while !stopBox.get() {
+            if format == .human {
+                // ANSI: 光标回 (1,1) + 清屏. 不在 json 模式做, 方便 pipe 给 jq.
+                print("\u{1B}[H\u{1B}[2J", terminator: "")
+                print("[\(df.string(from: Date()))] hvm-cli list --watch (interval=\(interval)s, Ctrl+C to exit)")
+            }
+            renderOnce()
+
+            let slices = interval * 10
+            for _ in 0..<slices {
+                if stopBox.get() { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+    }
+
+    /// 单次扫 + 渲染. run() 直接调一次, watch 循环每 interval 调一次.
+    private func renderOnce() {
         let root = bundleDir.map { URL(fileURLWithPath: $0) } ?? HVMPaths.vmsRoot
         let bundles = (try? BundleDiscovery.list(in: root)) ?? []
 

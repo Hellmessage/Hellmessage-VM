@@ -32,6 +32,12 @@ final class DetailContainerView: NSView {
     // 当前挂载的 HVMView (引用 session.attachment.view, 不 retain)
     private weak var currentHVMView: HVMView?
 
+    // 顶部"运行中 VM" tab 栏, 跟 sub-state UI 解耦, 一直存在;
+    // 高度由 runningTabsBarHeight 约束动态控制 (0 个运行中 VM → 0 高度).
+    private var runningTabsBar: NSHostingView<RunningTabsBar>!
+    private var runningTabsBarHeight: NSLayoutConstraint!
+    private static let runningTabsBarMaxHeight: CGFloat = 38
+
     // 追踪当前 AppModel 状态对应的 VM id, 用于决定是否需要重建/切换
     private var shownID: UUID?
     private var shownState: ShowState = .empty
@@ -57,6 +63,7 @@ final class DetailContainerView: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
         translatesAutoresizingMaskIntoConstraints = false
+        installRunningTabsBar()
         subscribeModel()
         // 强制构建初始 UI: refresh() 的相等性短路会跳过 shownState 默认值 == 初始 computeState 的情况
         let initial = computeState()
@@ -65,6 +72,34 @@ final class DetailContainerView: NSView {
         if case .stopped(let id) = initial,
            let item = model.list.first(where: { $0.id == id }) {
             shownStoppedConfig = item.config
+        }
+        applyRunningTabsBarVisibility()
+    }
+
+    /// init 时挂一次 tabs bar, 之后不拆建. 高度通过约束动态切.
+    private func installRunningTabsBar() {
+        let host = NSHostingView(rootView: RunningTabsBar(model: model, errors: errors))
+        host.translatesAutoresizingMaskIntoConstraints = false
+        host.sizingOptions = .minSize
+        addSubview(host)
+        let h = host.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            host.topAnchor.constraint(equalTo: topAnchor),
+            host.leadingAnchor.constraint(equalTo: leadingAnchor),
+            host.trailingAnchor.constraint(equalTo: trailingAnchor),
+            h,
+        ])
+        runningTabsBar = host
+        runningTabsBarHeight = h
+    }
+
+    /// 根据当前运行中 VM 数量切 tabs bar 显隐.
+    private func applyRunningTabsBarVisibility() {
+        let runningCount = model.list.filter { $0.runState == "running" }.count
+        let target: CGFloat = runningCount > 0 ? Self.runningTabsBarMaxHeight : 0
+        if runningTabsBarHeight.constant != target {
+            runningTabsBarHeight.constant = target
+            runningTabsBar.isHidden = runningCount == 0
         }
     }
 
@@ -128,6 +163,8 @@ final class DetailContainerView: NSView {
                 shownStoppedConfig = nil
             }
         }
+        // tabs bar 显隐独立于 sub-state 重建判定: 任意 VM 启停都要更新.
+        applyRunningTabsBarVisibility()
     }
 
     private func computeState() -> ShowState {
@@ -173,7 +210,7 @@ final class DetailContainerView: NSView {
         host.sizingOptions = .minSize
         addSubview(host)
         NSLayoutConstraint.activate([
-            host.topAnchor.constraint(equalTo: topAnchor),
+            host.topAnchor.constraint(equalTo: runningTabsBar.bottomAnchor),
             host.bottomAnchor.constraint(equalTo: bottomAnchor),
             host.leadingAnchor.constraint(equalTo: leadingAnchor),
             host.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -188,7 +225,7 @@ final class DetailContainerView: NSView {
         host.sizingOptions = .minSize
         addSubview(host)
         NSLayoutConstraint.activate([
-            host.topAnchor.constraint(equalTo: topAnchor),
+            host.topAnchor.constraint(equalTo: runningTabsBar.bottomAnchor),
             host.bottomAnchor.constraint(equalTo: bottomAnchor),
             host.leadingAnchor.constraint(equalTo: leadingAnchor),
             host.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -231,7 +268,7 @@ final class DetailContainerView: NSView {
 
         NSLayoutConstraint.activate([
             // TopBar
-            topBar.topAnchor.constraint(equalTo: topAnchor),
+            topBar.topAnchor.constraint(equalTo: runningTabsBar.bottomAnchor),
             topBar.leadingAnchor.constraint(equalTo: leadingAnchor),
             topBar.trailingAnchor.constraint(equalTo: trailingAnchor),
 
@@ -274,7 +311,7 @@ final class DetailContainerView: NSView {
         host.sizingOptions = .minSize
         addSubview(host)
         NSLayoutConstraint.activate([
-            host.topAnchor.constraint(equalTo: topAnchor),
+            host.topAnchor.constraint(equalTo: runningTabsBar.bottomAnchor),
             host.bottomAnchor.constraint(equalTo: bottomAnchor),
             host.leadingAnchor.constraint(equalTo: leadingAnchor),
             host.trailingAnchor.constraint(equalTo: trailingAnchor),

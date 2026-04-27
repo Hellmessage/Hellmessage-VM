@@ -50,12 +50,6 @@
   + ConfigBuilder 装 Rosetta 共享; 需检测 host Rosetta 安装状态
 - **工作量**: ~200 行 + 实测
 
-### L-3 · 多 VM 并发管理 UX
-- **现状**: GUI 一次只嵌入一个 VM (`embeddedID`), 切换要先 detach;
-  CLI 各 VM 独立 host 进程, 无统一面板
-- **要做**: GUI tabs 或多窗口; CLI `hvm-cli list --watch` 持续状态
-- **工作量**: 难估; UX 设计不小
-
 ### L-4 · vmnet daemon 热重装时 QMP 热重连 (方案 C)
 - **背景**: 当前 popover 上「重装 / 修复 shared + host」按钮会 bootout daemon →
   老 daemon 进程被杀 → 运行中 VM 的 QEMU fd=3 收到 EOF, `-netdev socket,fd=3` 标 disconnected.
@@ -111,6 +105,7 @@
 
 ## ✅ 最近完成 (供历史追溯, 滚动清理)
 
+- (2026-04-27) **L-3 (A1+B1)**: 多 VM 并发管理 UX — GUI 主窗口右栏顶部加 RunningTabsBar (运行中 VM 横向 tab + × 关闭, 切换走 selectedID 复用现有 transition); CLI `hvm-cli list --watch -w` + `--interval` (默认 2s, ANSI 清屏 + DispatchSource SIGINT 优雅退出, json 模式不清屏方便 jq pipe). 多 NSWindow 方向因 VZ Metal drawable 跨 window reparent 黑屏限制不可行, 已在 plan 备注
 - (2026-04-27) **U-1 / U-2 / U-3**: 三项实测全部验证通过 — Linux arm64 装机 (QEMU+HVF) 稳定 / Win11 arm64 装机 (swtpm+virtio-win+EDK2) 闭环 / socket_vmnet bridged 真出网
 - (2026-04-26) **M-1**: NetworkMode 加 .shared (跨 HVMBundle/HVMNet/HVMQemu/CLI 同步); GUI CreateVMDialog 加 Engine 选择器 (Linux 专用) + Network 段 (NAT/Bridged/Shared) + 接口枚举 + sudoers 检测 + osascript+复制 helper; EditConfigDialog 同步加 Network 编辑; install-vmnet-helper.sh 打包入 .app
 - (2026-04-26) **M-2**: GUI Disks section 列表 + DiskAddDialog / DiskResizeDialog + 数据盘 delete 走 ConfirmPresenter
@@ -128,4 +123,4 @@
 
 ---
 
-**最后更新**: 2026-04-27 (U-1 / U-2 / U-3 实测通过, 移入完成区)
+**最后更新**: 2026-04-27 (L-3 完成: GUI RunningTabsBar + CLI list --watch)
