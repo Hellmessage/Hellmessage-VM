@@ -16,6 +16,21 @@ import HVMCore
 
 public enum QemuArgsBuilder {
 
+    /// build() 输出.
+    /// vmnetSocketPaths: 按 networks 顺序里 bridged/shared NIC 出现的顺序排列 daemon
+    /// socket 路径. 调用方必须把这 N 个 socket 的连接 fd 在子进程里依次落到 fd 3, 4, ...,
+    /// QEMU 命令行也按这个 fd 顺序写 -netdev socket,id=netN,fd=K (与 lima/colima 实现一致).
+    /// 不再走 socket_vmnet_client wrapper (单 fd 限制, 不支持多 NIC).
+    /// 空数组 = 全 NAT 或无 networks, 调用方直接 spawn qemu-system-aarch64.
+    public struct BuildResult: Sendable {
+        public let args: [String]
+        public let vmnetSocketPaths: [String]
+        public init(args: [String], vmnetSocketPaths: [String]) {
+            self.args = args
+            self.vmnetSocketPaths = vmnetSocketPaths
+        }
+    }
+
     /// argv 构造的所有输入, 显式注入便于测试
     public struct Inputs: Sendable {
         public let config: VMConfig
@@ -59,8 +74,9 @@ public enum QemuArgsBuilder {
         }
     }
 
-    /// 构造 argv. 调用方负责把 [String] 喂给 Process.arguments.
-    public static func build(_ inputs: Inputs) throws -> [String] {
+    /// 构造 argv + 网络元信息. 调用方按 BuildResult.vmnetSocketPath 决定是否套
+    /// socket_vmnet_client wrapper.
+    public static func build(_ inputs: Inputs) throws -> BuildResult {
         let cfg = inputs.config
 
         // 防御: VZ-only guest 不该到这里. validate() 应在调用前已拦截
@@ -197,7 +213,15 @@ public enum QemuArgsBuilder {
 
         // ---- 网络 ----
         // bridged / shared 走系统级 socket_vmnet daemon (launchd 拉起, 见 scripts/install-vmnet-helper.sh).
-        // QEMU 用 -netdev stream 连固定 socket 路径, 不再 per-VM spawn sidecar.
+        // socket_vmnet daemon 协议: 4-byte length prefix per packet, 与 QEMU 的
+        // -netdev stream (裸字节流) 不匹配. 也不能走 socket_vmnet_client wrapper,
+        // 因为 wrapper 只透传单一 fd, 不支持多 NIC.
+        // 实现: 父进程 (HVMHost / hvm-dbg) 自己 connect 每个 daemon, 用 posix_spawn 把
+        // N 个 fd 落到子进程的 fd 3, 4, 5...; QEMU argv 写 -netdev socket,id=netN,fd=K.
+        // 这是 lima / colima 真实做法, 见 lima pkg/driver/qemu/qemu_driver.go fd_connect.
+        // BuildResult.vmnetSocketPaths 给调用方 daemon socket 列表, 顺序 = fd 3..3+N-1.
+        let vmnetFdBase: Int32 = 3
+        var vmnetSocketPaths: [String] = []
         for (idx, net) in cfg.networks.enumerated() {
             let netId = "net\(idx)"
             switch net.mode {
@@ -214,7 +238,9 @@ public enum QemuArgsBuilder {
                                 "请跑: sudo scripts/install-vmnet-helper.sh \(iface)"
                     ))
                 }
-                args += ["-netdev", "stream,id=\(netId),addr.type=unix,addr.path=\(sockPath),server=off"]
+                let fd = vmnetFdBase + Int32(vmnetSocketPaths.count)
+                vmnetSocketPaths.append(sockPath)
+                args += ["-netdev", "socket,id=\(netId),fd=\(fd)"]
                 args += ["-device", "virtio-net-pci,netdev=\(netId),mac=\(net.macAddress)"]
             case .shared:
                 let sockPath = VmnetDaemonPaths.sharedSocket
@@ -225,7 +251,9 @@ public enum QemuArgsBuilder {
                                 "请跑: sudo scripts/install-vmnet-helper.sh"
                     ))
                 }
-                args += ["-netdev", "stream,id=\(netId),addr.type=unix,addr.path=\(sockPath),server=off"]
+                let fd = vmnetFdBase + Int32(vmnetSocketPaths.count)
+                vmnetSocketPaths.append(sockPath)
+                args += ["-netdev", "socket,id=\(netId),fd=\(fd)"]
                 args += ["-device", "virtio-net-pci,netdev=\(netId),mac=\(net.macAddress)"]
             }
         }
@@ -263,6 +291,6 @@ public enum QemuArgsBuilder {
             args += ["-device", "tpm-tis-device,tpmdev=tpm0"]
         }
 
-        return args
+        return BuildResult(args: args, vmnetSocketPaths: vmnetSocketPaths)
     }
 }

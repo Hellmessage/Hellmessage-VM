@@ -173,4 +173,79 @@ public enum VmnetSetupHelper {
         pb.clearContents()
         pb.setString(s, forType: .string)
     }
+
+    /// 校验 launchd label 安全字符集 (防 osascript / shell 注入).
+    /// launchd 官方 Label 字符规范是 [a-zA-Z0-9._-]+, 我们强制走这个白名单.
+    private static func isSafeLabel(_ label: String) -> Bool {
+        guard !label.isEmpty else { return false }
+        return label.unicodeScalars.allSatisfy {
+            CharacterSet.alphanumerics.contains($0) || ".-_".unicodeScalars.contains($0)
+        }
+    }
+
+    /// 校验绝对路径 (用于 plist + socket 路径), 严格白名单防 shell 注入.
+    /// 允许字符: [a-zA-Z0-9./_-], 必须以 / 开头.
+    private static func isSafeAbsPath(_ p: String) -> Bool {
+        guard p.hasPrefix("/") else { return false }
+        return p.unicodeScalars.allSatisfy {
+            CharacterSet.alphanumerics.contains($0) || "/.-_".unicodeScalars.contains($0)
+        }
+    }
+
+    /// 通过 osascript 拉 Terminal 跑 sudo launchctl kickstart -k system/<label>,
+    /// 用于"daemon plist 装了但 socket file 缺"(僵尸) 的场景一键修复.
+    /// label 必须在白名单字符集内 (防 osascript 注入); 不允许引号/分号/反斜杠等
+    public static func kickstartDaemon(label: String) -> LaunchOutcome {
+        guard isSafeLabel(label) else {
+            return .fallbackCommand(command: "sudo launchctl kickstart -k system/<INVALID-LABEL>")
+        }
+        let cmd = "sudo launchctl kickstart -k system/\(label)"
+
+        let appleScript = "tell application \"Terminal\" to do script \"\(cmd)\"\n" +
+                          "tell application \"Terminal\" to activate"
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = ["-e", appleScript]
+        task.standardError = Pipe()
+        do {
+            try task.run()
+            task.waitUntilExit()
+            if task.terminationStatus == 0 { return .launched }
+        } catch {
+            // osascript 不可用 → fallback
+        }
+        return .fallbackCommand(command: cmd)
+    }
+
+    /// 通过 osascript 拉 Terminal 卸载指定 daemon: bootout + rm plist + rm socket.
+    /// 跨项目通用: 不只限 HVM 自己装的 (com.hellmessage.hvm.vmnet.*), 也能卸 lima /
+    /// hell-vm 等共存项目装的. 由 popover 行内"卸载"按钮触发, 用户已在 UI 上显式选择
+    /// 要卸哪个 daemon, 故跨项目也属合理用户意图 (而非 install 阶段的"自动抢").
+    /// label / plistPath / socketPath 都过白名单校验, 防 osascript 注入.
+    public static func uninstallDaemon(label: String, plistPath: String, socketPath: String) -> LaunchOutcome {
+        guard isSafeLabel(label),
+              isSafeAbsPath(plistPath),
+              isSafeAbsPath(socketPath) else {
+            return .fallbackCommand(command: "sudo launchctl bootout system/<INVALID>")
+        }
+        // 三步串成 single sudo 调用, 避免每步都弹密码 prompt
+        let cmd = "sudo bash -c " +
+            "'launchctl bootout system/\(label) 2>/dev/null; " +
+            "rm -f \"\(plistPath)\" \"\(socketPath)\"'"
+
+        let appleScript = "tell application \"Terminal\" to do script \"\(cmd)\"\n" +
+                          "tell application \"Terminal\" to activate"
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = ["-e", appleScript]
+        task.standardError = Pipe()
+        do {
+            try task.run()
+            task.waitUntilExit()
+            if task.terminationStatus == 0 { return .launched }
+        } catch {
+            // osascript 不可用 → fallback 复制命令
+        }
+        return .fallbackCommand(command: cmd)
+    }
 }

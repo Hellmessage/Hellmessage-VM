@@ -122,7 +122,12 @@ public final class AppModel {
         }
     }
 
-    public init() {}
+    /// vmnet daemon 状态 (statusBar chip + popover 用). 启动后自动 2s 轮询.
+    public let vmnet = VmnetStatusModel()
+
+    public init() {
+        vmnet.startPolling()
+    }
 
     // MARK: - 列表管理
 

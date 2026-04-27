@@ -22,13 +22,18 @@ public final class QemuProcessRunner: @unchecked Sendable {
 
     private let inner: SidecarProcessRunner
 
-    public init(binary: URL, args: [String], stderrLog: URL? = nil) {
+    /// extraFdConnections: 父进程会 connect 这些 unix socket 路径, 把连接 fd 透传给
+    /// QEMU 子进程的 fd 3, 4, 5...; QEMU 命令行 `-netdev socket,fd=K` 用这些 fd 接 vmnet
+    /// (与 lima/colima 一致). 空数组 = 全 NAT 或无 vmnet, 走默认 Foundation Process 路径.
+    public init(binary: URL, args: [String], stderrLog: URL? = nil,
+                extraFdConnections: [String] = []) {
         self.binary = binary
         self.args = args
         self.stderrLog = stderrLog
         self.inner = SidecarProcessRunner(config: .init(
             binary: binary, args: args, stderrLog: stderrLog,
-            runAsRoot: false, socketPathForReadyWait: nil
+            runAsRoot: false, socketPathForReadyWait: nil,
+            extraFdConnections: extraFdConnections
         ))
     }
 

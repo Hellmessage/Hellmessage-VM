@@ -87,11 +87,17 @@ struct QemuLaunchCommand: AsyncParsableCommand {
             virtioWinISOPath: virtioWinPath,
             swtpmSocketPath: swtpmSockPath
         )
-        let args = try QemuArgsBuilder.build(inputs)
+        let buildResult = try QemuArgsBuilder.build(inputs)
 
         if dryRun {
             print(qemuBin.path)
-            for a in args { print("  \(a)") }
+            for a in buildResult.args { print("  \(a)") }
+            if !buildResult.vmnetSocketPaths.isEmpty {
+                print("# vmnet fd inheritance:")
+                for (i, p) in buildResult.vmnetSocketPaths.enumerated() {
+                    print("#   fd=\(3 + i) → \(p)")
+                }
+            }
             return
         }
 
@@ -102,7 +108,12 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         let stderrLog = qemuLogsDir.appendingPathComponent("qemu-stderr.log")
         try? FileManager.default.removeItem(at: stderrLog)
 
-        let runner = QemuProcessRunner(binary: qemuBin, args: args, stderrLog: stderrLog)
+        // bridged/shared NIC: 父进程 connect socket_vmnet daemon, posix_spawn 透传 fd
+        // 给 QEMU; 全 NAT 时 extraFdConnections 为空, 走默认 Foundation Process 路径
+        let runner = QemuProcessRunner(
+            binary: qemuBin, args: buildResult.args, stderrLog: stderrLog,
+            extraFdConnections: buildResult.vmnetSocketPaths
+        )
         try runner.start()
         if case .running(let pid) = runner.state {
             print("✔ QEMU 已启动 pid=\(pid)")

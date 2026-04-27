@@ -7,6 +7,9 @@ Package.resolved
 build/
 error/
 
+# Claude 锁文件
+.claude/*.lock
+
 # Xcode
 DerivedData/
 *.xcodeproj

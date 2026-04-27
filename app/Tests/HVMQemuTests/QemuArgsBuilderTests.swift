@@ -16,8 +16,7 @@ final class QemuArgsBuilderTests: XCTestCase {
         qemuRoot: String = "/opt/test/qemu",
         qmpPath: String = "/tmp/hvm-test/run/foo.qmp",
         virtioWinISOPath: String? = nil,
-        swtpmSocketPath: String? = nil,
-        socketVmnetPath: String? = nil
+        swtpmSocketPath: String? = nil
     ) -> QemuArgsBuilder.Inputs {
         QemuArgsBuilder.Inputs(
             config: config,
@@ -25,9 +24,39 @@ final class QemuArgsBuilderTests: XCTestCase {
             qemuRoot: URL(fileURLWithPath: qemuRoot, isDirectory: true),
             qmpSocketPath: qmpPath,
             virtioWinISOPath: virtioWinISOPath,
-            swtpmSocketPath: swtpmSocketPath,
-            socketVmnetPath: socketVmnetPath
+            swtpmSocketPath: swtpmSocketPath
         )
+    }
+
+    /// build() 现在返 BuildResult; 老测试只关心 args, 抽成 helper 减少漂移
+    private func buildArgs(_ inputs: QemuArgsBuilder.Inputs) throws -> [String] {
+        try QemuArgsBuilder.build(inputs).args
+    }
+
+    /// 建一个临时 unix socket 文件 (bind 后立即 close 留空 socket 节点); 用于 bridged
+    /// 测试满足 VmnetDaemonPaths.isReady 检测. 测试结束后由 NSTemporaryDirectory 清理.
+    private func makeTempUnixSocket(_ name: String, in dir: String) throws -> String {
+        let path = dir.hasSuffix("/") ? (dir + name) : (dir + "/" + name)
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        precondition(fd >= 0)
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let bytes = Array(path.utf8)
+        precondition(bytes.count < 100)
+        withUnsafeMutableBytes(of: &addr.sun_path) { raw in
+            let dst = raw.bindMemory(to: UInt8.self)
+            for (i, b) in bytes.enumerated() { dst[i] = b }
+            dst[bytes.count] = 0
+        }
+        addr.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        let rc = withUnsafePointer(to: &addr) { p -> Int32 in
+            p.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                Darwin.bind(fd, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        precondition(rc == 0, "bind errno=\(errno) path=\(path)")
+        close(fd)
+        return path
     }
 
     private func linuxConfig(
@@ -51,7 +80,7 @@ final class QemuArgsBuilderTests: XCTestCase {
     // MARK: - Linux 基本 argv
 
     func testLinuxBasicArgsContainsKeyFlags() throws {
-        let args = try QemuArgsBuilder.build(makeInputs(config: linuxConfig()))
+        let args = try buildArgs(makeInputs(config: linuxConfig()))
 
         // 机器 / CPU / 加速器
         XCTAssertTrue(args.containsPair("-machine", "virt,gic-version=3"))
@@ -69,7 +98,7 @@ final class QemuArgsBuilderTests: XCTestCase {
     }
 
     func testLinuxUsesSingleBiosNotPflash() throws {
-        let args = try QemuArgsBuilder.build(makeInputs(config: linuxConfig()))
+        let args = try buildArgs(makeInputs(config: linuxConfig()))
         XCTAssertTrue(args.contains("-bios"))
         XCTAssertFalse(args.contains(where: { $0.hasPrefix("if=pflash") }),
                        "Linux 走 -bios 单文件, 不用 pflash 双 drive")
@@ -77,7 +106,7 @@ final class QemuArgsBuilderTests: XCTestCase {
 
     func testQmpUnixSocketServer() throws {
         let inputs = makeInputs(config: linuxConfig())
-        let args = try QemuArgsBuilder.build(inputs)
+        let args = try buildArgs(inputs)
         // QMP socket: server=on,wait=off, 必须是 unix:, 严禁 TCP
         XCTAssertTrue(args.containsPair(
             "-qmp", "unix:/tmp/hvm-test/run/foo.qmp,server=on,wait=off"
@@ -89,7 +118,7 @@ final class QemuArgsBuilderTests: XCTestCase {
     // MARK: - 磁盘 / ISO
 
     func testMainDiskRendersAsVirtioBlk() throws {
-        let args = try QemuArgsBuilder.build(makeInputs(config: linuxConfig()))
+        let args = try buildArgs(makeInputs(config: linuxConfig()))
         let drive = args.afterFlag("-drive")
         XCTAssertNotNil(drive)
         XCTAssertTrue(drive!.contains("file=/tmp/hvm-test/foo.hvmz/disks/main.img"))
@@ -99,7 +128,7 @@ final class QemuArgsBuilderTests: XCTestCase {
     }
 
     func testISOAttachedAsCdromInInstallerMode() throws {
-        let args = try QemuArgsBuilder.build(makeInputs(config: linuxConfig()))
+        let args = try buildArgs(makeInputs(config: linuxConfig()))
         let cdromDrive = args.allFlagValues("-drive")
             .first(where: { $0.contains("media=cdrom") })
         XCTAssertNotNil(cdromDrive, "installer 模式必须挂 ISO")
@@ -109,7 +138,7 @@ final class QemuArgsBuilderTests: XCTestCase {
 
     func testISOSkippedWhenBootFromDiskOnly() throws {
         let cfg = linuxConfig(bootFromDiskOnly: true, installerISO: "/tmp/x.iso")
-        let args = try QemuArgsBuilder.build(makeInputs(config: cfg))
+        let args = try buildArgs(makeInputs(config: cfg))
         let cdromDrive = args.allFlagValues("-drive")
             .first(where: { $0.contains("media=cdrom") })
         XCTAssertNil(cdromDrive, "bootFromDiskOnly=true 时不挂 ISO")
@@ -117,7 +146,7 @@ final class QemuArgsBuilderTests: XCTestCase {
 
     func testISOSkippedWhenNoInstaller() throws {
         let cfg = linuxConfig(bootFromDiskOnly: false, installerISO: nil)
-        let args = try QemuArgsBuilder.build(makeInputs(config: cfg))
+        let args = try buildArgs(makeInputs(config: cfg))
         let cdromDrive = args.allFlagValues("-drive")
             .first(where: { $0.contains("media=cdrom") })
         XCTAssertNil(cdromDrive)
@@ -126,7 +155,7 @@ final class QemuArgsBuilderTests: XCTestCase {
     // MARK: - 网络
 
     func testNATNetworkRendersUserDevice() throws {
-        let args = try QemuArgsBuilder.build(makeInputs(config: linuxConfig()))
+        let args = try buildArgs(makeInputs(config: linuxConfig()))
         XCTAssertTrue(args.allFlagValues("-netdev")
             .contains(where: { $0.hasPrefix("user,") && $0.contains("id=net0") }))
         XCTAssertTrue(args.allFlagValues("-device")
@@ -135,33 +164,91 @@ final class QemuArgsBuilderTests: XCTestCase {
                             && $0.contains("mac=02:11:22:33:44:55") }))
     }
 
-    func testBridgedWithoutSocketVmnetThrows() {
-        // bridged + 未注入 socketVmnetPath: builder 应抛 configInvalid 让调用方启 sidecar
+    func testBridgedWithoutDaemonSocketThrows() {
+        // bridged daemon socket 不存在: builder 应抛 configInvalid 提示装 socket_vmnet helper
         var cfg = linuxConfig()
         cfg.networks = [NetworkSpec(mode: .bridged(interface: "en0"),
                                     macAddress: "02:00:00:00:00:01")]
+        // 不设 HVM_VMNET_SOCKET_DIR env, isReady 查 /var/run/socket_vmnet.bridged.en0,
+        // 测试机不一定有 → 大概率 throw. (有也就跳过这个测试; 单测不保证一致环境.)
+        // 为了让测试稳, 显式把 dir 重定向到一个空 tempdir
+        let tempEmpty = NSTemporaryDirectory() + "hvm-test-empty-" + UUID().uuidString.prefix(8)
+        try? FileManager.default.createDirectory(atPath: tempEmpty, withIntermediateDirectories: true)
+        setenv(VmnetDaemonPaths.socketDirEnvVar, tempEmpty, 1)
+        defer { unsetenv(VmnetDaemonPaths.socketDirEnvVar) }
         XCTAssertThrowsError(try QemuArgsBuilder.build(makeInputs(config: cfg)))
     }
 
-    func testBridgedWithSocketVmnetRendersStreamNetdev() throws {
+    func testBridgedWithDaemonReadyRendersSocketFdNetdev() throws {
+        // 在 tempdir 下建一个真实 unix socket 节点假扮 socket_vmnet daemon, builder
+        // 应输出 -netdev socket,id=net0,fd=3 + BuildResult.vmnetSocketPaths 第 0 项指向它
+        let tempDir = NSTemporaryDirectory() + "hvm-test-vmnet-" + UUID().uuidString.prefix(8)
+        try FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+        _ = try makeTempUnixSocket("socket_vmnet.bridged.en0",
+                                   in: tempDir)
+        setenv(VmnetDaemonPaths.socketDirEnvVar, tempDir, 1)
+        defer { unsetenv(VmnetDaemonPaths.socketDirEnvVar) }
+
         var cfg = linuxConfig()
         cfg.networks = [NetworkSpec(mode: .bridged(interface: "en0"),
                                     macAddress: "02:00:00:00:00:01")]
-        let args = try QemuArgsBuilder.build(makeInputs(
-            config: cfg, socketVmnetPath: "/tmp/run/abc.vmnet.sock"
-        ))
-        // -netdev stream 直接连 unix socket (QEMU 10+)
-        XCTAssertTrue(args.allFlagValues("-netdev").contains(where: {
-            $0.hasPrefix("stream,")
-                && $0.contains("addr.type=unix")
-                && $0.contains("addr.path=/tmp/run/abc.vmnet.sock")
-                && $0.contains("server=off")
+        let result = try QemuArgsBuilder.build(makeInputs(config: cfg))
+        // -netdev socket,id=net0,fd=3 (与 lima/colima 一致, fd 透传由 SidecarProcessRunner 负责)
+        XCTAssertTrue(result.args.allFlagValues("-netdev").contains(where: {
+            $0.hasPrefix("socket,") && $0.contains("id=net0") && $0.contains("fd=3")
         }))
-        // virtio-net-pci device 的 mac 仍正确
-        XCTAssertTrue(args.allFlagValues("-device").contains(where: {
+        // device 的 mac 与 netdev 关联仍正确
+        XCTAssertTrue(result.args.allFlagValues("-device").contains(where: {
             $0.hasPrefix("virtio-net-pci")
+                && $0.contains("netdev=net0")
                 && $0.contains("mac=02:00:00:00:00:01")
         }))
+        XCTAssertEqual(result.vmnetSocketPaths.count, 1)
+        XCTAssertEqual(result.vmnetSocketPaths.first, "\(tempDir)/socket_vmnet.bridged.en0")
+    }
+
+    func testMultipleBridgedNicsAssignAscendingFds() throws {
+        // 双 NIC 桥接 (en0 + en1): fd=3, fd=4; vmnetSocketPaths 顺序与 networks 对齐
+        let tempDir = NSTemporaryDirectory() + "hvm-test-vmnet-multi-" + UUID().uuidString.prefix(8)
+        try FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+        _ = try makeTempUnixSocket("socket_vmnet.bridged.en0", in: tempDir)
+        _ = try makeTempUnixSocket("socket_vmnet.bridged.en1", in: tempDir)
+        setenv(VmnetDaemonPaths.socketDirEnvVar, tempDir, 1)
+        defer { unsetenv(VmnetDaemonPaths.socketDirEnvVar) }
+
+        var cfg = linuxConfig()
+        cfg.networks = [
+            NetworkSpec(mode: .bridged(interface: "en0"), macAddress: "02:00:00:00:00:01"),
+            NetworkSpec(mode: .bridged(interface: "en1"), macAddress: "02:00:00:00:00:02"),
+        ]
+        let result = try QemuArgsBuilder.build(makeInputs(config: cfg))
+
+        let netdevs = result.args.allFlagValues("-netdev")
+        XCTAssertTrue(netdevs.contains(where: { $0.contains("id=net0") && $0.contains("fd=3") }))
+        XCTAssertTrue(netdevs.contains(where: { $0.contains("id=net1") && $0.contains("fd=4") }))
+        XCTAssertEqual(result.vmnetSocketPaths.count, 2)
+        XCTAssertEqual(result.vmnetSocketPaths[0], "\(tempDir)/socket_vmnet.bridged.en0")
+        XCTAssertEqual(result.vmnetSocketPaths[1], "\(tempDir)/socket_vmnet.bridged.en1")
+    }
+
+    func testNATInterleavedWithBridgedDoesNotConsumeFd() throws {
+        // 顺序: NAT, bridged en0 → bridged 拿 fd=3, vmnetSocketPaths 只 1 项 (NAT 不占 fd)
+        let tempDir = NSTemporaryDirectory() + "hvm-test-vmnet-mix-" + UUID().uuidString.prefix(8)
+        try FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+        _ = try makeTempUnixSocket("socket_vmnet.bridged.en0", in: tempDir)
+        setenv(VmnetDaemonPaths.socketDirEnvVar, tempDir, 1)
+        defer { unsetenv(VmnetDaemonPaths.socketDirEnvVar) }
+
+        var cfg = linuxConfig()
+        cfg.networks = [
+            NetworkSpec(mode: .nat, macAddress: "02:00:00:00:00:0a"),
+            NetworkSpec(mode: .bridged(interface: "en0"), macAddress: "02:00:00:00:00:0b"),
+        ]
+        let result = try QemuArgsBuilder.build(makeInputs(config: cfg))
+        let netdevs = result.args.allFlagValues("-netdev")
+        XCTAssertTrue(netdevs.contains(where: { $0.hasPrefix("user,") && $0.contains("id=net0") }))
+        XCTAssertTrue(netdevs.contains(where: { $0.contains("id=net1") && $0.contains("fd=3") }))
+        XCTAssertEqual(result.vmnetSocketPaths.count, 1)
     }
 
     // MARK: - guestOS 边界
@@ -191,7 +278,7 @@ final class QemuArgsBuilderTests: XCTestCase {
             bootFromDiskOnly: false,
             windows: WindowsSpec(secureBoot: true, tpmEnabled: true)
         )
-        let args = try QemuArgsBuilder.build(makeInputs(
+        let args = try buildArgs(makeInputs(
             config: cfg, swtpmSocketPath: "/tmp/run/abc.swtpm.sock"
         ))
 
@@ -224,7 +311,7 @@ final class QemuArgsBuilderTests: XCTestCase {
             disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 32)],
             windows: WindowsSpec(secureBoot: false, tpmEnabled: false)
         )
-        let args = try QemuArgsBuilder.build(makeInputs(
+        let args = try buildArgs(makeInputs(
             config: cfg, swtpmSocketPath: "/tmp/abc.swtpm.sock"
         ))
         XCTAssertFalse(args.contains("-tpmdev"),
@@ -243,7 +330,7 @@ final class QemuArgsBuilderTests: XCTestCase {
             windows: WindowsSpec(secureBoot: true, tpmEnabled: true)
         )
         // 注意: swtpmSocketPath 未传 (默认 nil)
-        let args = try QemuArgsBuilder.build(makeInputs(config: cfg))
+        let args = try buildArgs(makeInputs(config: cfg))
         XCTAssertFalse(args.contains("-tpmdev"),
                        "swtpmSocketPath=nil 时不注入 TPM device, 避免 QEMU 连不存在的 socket")
     }
@@ -260,7 +347,7 @@ final class QemuArgsBuilderTests: XCTestCase {
             bootFromDiskOnly: false,
             windows: WindowsSpec()
         )
-        let args = try QemuArgsBuilder.build(makeInputs(
+        let args = try buildArgs(makeInputs(
             config: cfg, virtioWinISOPath: "/Users/me/cache/virtio-win/virtio-win.iso"
         ))
         let cdroms = args.allFlagValues("-drive").filter { $0.contains("media=cdrom") }
@@ -271,7 +358,7 @@ final class QemuArgsBuilderTests: XCTestCase {
 
     func testLinuxIgnoresVirtioWinPath() throws {
         let cfg = linuxConfig()
-        let args = try QemuArgsBuilder.build(makeInputs(
+        let args = try buildArgs(makeInputs(
             config: cfg, virtioWinISOPath: "/Users/me/virtio-win.iso"
         ))
         let cdroms = args.allFlagValues("-drive").filter { $0.contains("media=cdrom") }
@@ -290,7 +377,7 @@ final class QemuArgsBuilderTests: XCTestCase {
             windows: WindowsSpec()
         )
         // 没传 virtioWinISOPath; 仍应能构造 (虽然装机会因缺驱动看不见盘)
-        let args = try QemuArgsBuilder.build(makeInputs(config: cfg))
+        let args = try buildArgs(makeInputs(config: cfg))
         let cdroms = args.allFlagValues("-drive").filter { $0.contains("media=cdrom") }
         XCTAssertEqual(cdroms.count, 1)
     }

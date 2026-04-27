@@ -44,6 +44,8 @@ struct HVMStatusBar: View {
 
             Spacer()
 
+            VmnetStatusChip(model: model.vmnet)
+
             Text(HVMVersion.displayString)
                 .font(HVMFont.small)
                 .foregroundStyle(HVMColor.textTertiary)

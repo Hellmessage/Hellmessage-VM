@@ -86,20 +86,48 @@ mode_check() {
     exit 0
 }
 
+# 把 HVM plist label 的 suffix (shared/host/bridged.<iface>) 映射到 socket 路径.
+# 给 mode_uninstall + install_one 共用. label 不在白名单 → 返回空字符串.
+suffix_to_socket() {
+    local suffix="$1"
+    case "$suffix" in
+        shared)         echo "$SOCKET_BASE" ;;
+        host)           echo "${SOCKET_BASE}.host" ;;
+        bridged.*)
+            local iface="${suffix#bridged.}"
+            # 接口名只允许 [a-zA-Z0-9]+, 防 shell 注入
+            if [[ "$iface" =~ ^[a-zA-Z0-9]+$ ]]; then
+                echo "${SOCKET_BASE}.bridged.$iface"
+            else
+                echo ""
+            fi
+            ;;
+        *) echo "" ;;
+    esac
+}
+
 # ---- uninstall: 卸载所有 HVM 装的 daemon ----
+# 严格只动 HVM 自己的 plist 范围. 不再 glob 删 /var/run/socket_vmnet.bridged.*,
+# 否则会误删 lima / colima / hell-vm 等并存项目的 daemon socket.
 mode_uninstall() {
     require_root "$@"
     shopt -s nullglob
     local removed=0
     for plist in "$PLIST_DIR"/${LABEL_PREFIX}.*.plist; do
-        local label
+        local label suffix sock
         label=$(basename "$plist" .plist)
+        suffix="${label#${LABEL_PREFIX}.}"
+        sock=$(suffix_to_socket "$suffix")
+
         info "卸载 $label"
         launchctl bootout "system/$label" 2>/dev/null || true
         rm -f "$plist"
+        # 仅删跟本 plist 1:1 配套的 socket; 别家 plist 占的 socket 不动
+        if [[ -n "$sock" ]]; then
+            rm -f "$sock"
+        fi
         removed=$((removed + 1))
     done
-    rm -f "$SOCKET_BASE" "$SOCKET_BASE".host "$SOCKET_BASE".bridged.*
     ok "已卸载 $removed 个 daemon"
     exit 0
 }
@@ -111,6 +139,17 @@ install_one() {
     local sock="$1"; shift
     local label="${LABEL_PREFIX}.${suffix}"
     local plist="$PLIST_DIR/${label}.plist"
+
+    # 共存检测: 如果对应 socket 路径已被另一个项目 (lima / colima / hell-vm) 装的
+    # daemon 占用 (socket 文件存在且是 unix socket), 而且 HVM 自己**没装过**这个
+    # plist (PLIST_DIR 下没我们的同 label 文件), 就跳过安装, 复用外部 daemon.
+    # 这样 HVM 不会跟 lima/colima 等共存项目抢资源, 也避免 unlink 别家 socket.
+    if [[ ! -f "$plist" && -S "$sock" ]]; then
+        info "检测到 $sock 已被外部 daemon 占用 (lima / colima / hell-vm 等)"
+        info "  → 复用现有 daemon, 跳过 HVM plist 安装. 卸载外部项目后请重跑本脚本."
+        return 0
+    fi
+
     local args_xml=""
     args_xml+="    <string>$SOCKET_VMNET</string>"$'\n'
     for a in "$@"; do
@@ -118,8 +157,18 @@ install_one() {
     done
     args_xml+="    <string>$sock</string>"
 
-    # 旧 plist 存在则先 bootout, 保证新参数生效
+    # 旧 plist 存在则先 bootout, 保证新参数生效.
+    # bootout 是异步: launchd 标记退出后立刻返回, 实际 daemon 进程 + socket 资源释放
+    # 需要几百 ms; 紧接 bootstrap 会撞 "Bootstrap failed: 5: Input/output error".
+    # 故 bootout 后轮询 launchctl print 等服务真消失再继续.
     launchctl bootout "system/$label" 2>/dev/null || true
+    local _bootout_wait=0
+    while launchctl print "system/$label" >/dev/null 2>&1; do
+        _bootout_wait=$((_bootout_wait + 1))
+        if (( _bootout_wait > 25 )); then break; fi   # 5s 上限, 防极端 hang
+        sleep 0.2
+    done
+
     cat > "$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -147,7 +196,22 @@ EOF
     chmod 644 "$plist"
     chown root:wheel "$plist"
     rm -f "$sock"
-    launchctl bootstrap system "$plist"
+    # bootstrap retry: 偶发 EIO (launchd 内部 race). 5 次, 每次间隔指数后退.
+    local _boot_try=0 _boot_max=5 _boot_sleep
+    while ! launchctl bootstrap system "$plist" 2>/tmp/.hvm_vmnet_boot.err; do
+        _boot_try=$((_boot_try + 1))
+        if (( _boot_try >= _boot_max )); then
+            cat /tmp/.hvm_vmnet_boot.err >&2
+            rm -f /tmp/.hvm_vmnet_boot.err
+            die "launchctl bootstrap $label 失败 (尝试 $_boot_max 次仍失败)"
+        fi
+        _boot_sleep=$(awk "BEGIN { printf \"%.2f\", 0.3 * (2 ^ ($_boot_try - 1)) }")
+        warn "launchctl bootstrap $label 失败, ${_boot_sleep}s 后重试 ($_boot_try/$_boot_max)"
+        # 失败时再保险 bootout 一次 + 等
+        launchctl bootout "system/$label" 2>/dev/null || true
+        sleep "$_boot_sleep"
+    done
+    rm -f /tmp/.hvm_vmnet_boot.err
     launchctl enable "system/$label" 2>/dev/null || true
     ok "$label  →  $sock"
 }
@@ -202,17 +266,20 @@ install_one "host" "${SOCKET_BASE}.host" \
     "--vmnet-gateway=192.168.106.1" \
     "--vmnet-dhcp-end=192.168.106.254"
 
-# bridged: 每个传入的接口起一个 daemon
-for iface in "${ifaces[@]}"; do
-    if ! [[ "$iface" =~ ^[a-zA-Z0-9]+$ ]]; then
-        warn "跳过非法接口名 '$iface'"
-        continue
-    fi
-    info "安装 bridged($iface) (跨物理 LAN; guest IP 落物理网段)"
-    install_one "bridged.$iface" "${SOCKET_BASE}.bridged.$iface" \
-        "--vmnet-mode=bridged" \
-        "--vmnet-interface=$iface"
-done
+# bridged: 每个传入的接口起一个 daemon.
+# guard: bash set -u 下空数组 "${ifaces[@]}" 展开会 unbound; 0 接口时直接跳过.
+if (( ${#ifaces[@]} > 0 )); then
+    for iface in "${ifaces[@]}"; do
+        if ! [[ "$iface" =~ ^[a-zA-Z0-9]+$ ]]; then
+            warn "跳过非法接口名 '$iface'"
+            continue
+        fi
+        info "安装 bridged($iface) (跨物理 LAN; guest IP 落物理网段)"
+        install_one "bridged.$iface" "${SOCKET_BASE}.bridged.$iface" \
+            "--vmnet-mode=bridged" \
+            "--vmnet-interface=$iface"
+    done
+fi
 
 echo ""
 info "完成. 当前 socket:"

@@ -106,6 +106,26 @@
 - **要做**: GUI tabs 或多窗口; CLI `hvm-cli list --watch` 持续状态
 - **工作量**: 难估; UX 设计不小
 
+### L-4 · vmnet daemon 热重装时 QMP 热重连 (方案 C)
+- **背景**: 当前 popover 上「重装 / 修复 shared + host」按钮会 bootout daemon →
+  老 daemon 进程被杀 → 运行中 VM 的 QEMU fd=3 收到 EOF, `-netdev socket,fd=3` 标 disconnected.
+  QEMU 不会自行重连 (fd 模式没有 path 信息), 用户必须重启 VM 才能恢复网络.
+- **现已落地的最低防护**: GUI popover 加运行中 VM 检测, 占用对应 daemon 时禁用按钮 (待补).
+  脚本侧 bootstrap retry + 等 bootout 完成 (已落, 修了 EIO race).
+- **真正零感知方案**:
+  1. 重装前 HVM 收集每个运行中 VM 的 `(qmpSocket, netdev_id, daemon_path)` 清单
+  2. daemon 重启完成后, 对每个 VM:
+     a. HVM 自己 `socket(AF_UNIX)+connect()` 新 daemon 拿新 fd
+     b. 通过 QMP socket 用 `sendmsg(2) + SCM_RIGHTS` 把新 fd 传给运行中 QEMU
+     c. QMP `getfd name=netfd-N` 把 fd 在 QEMU 内部命名
+     d. QMP `netdev_del id=netN` + `netdev_add socket,id=netN,fd=netfd-N`
+- **工程量评估**:
+  - QmpClient 扩 `sendFD(qmpSocket:, fd:)`: ~80 行 (sendmsg 控制消息封装)
+  - 重装编排: vmnet 重装前快照 + 重装后批量重连: ~150 行
+  - 边界处理: guest 内 ARP/MAC 学习 stale (一般 30s 自愈), 重连失败时降级提示: ~50 行
+  - 总 ~300 行 + 调试
+- **决策**: 暂搁置. lima/colima 也都不做 (用户重装/重启 daemon 是稀有事件); 现有方案 A (UI 拦截) + 重启 VM 已经够用. 等用户反馈痛点再做
+
 ---
 
 ## ⚪ Polish / 低优 (可有可无)
@@ -157,4 +177,4 @@
 
 ---
 
-**最后更新**: 2026-04-27 (新增 P-4: GUI + host 双 status item 重复)
+**最后更新**: 2026-04-27 (新增 L-4: vmnet daemon 热重装时 QMP 热重连)

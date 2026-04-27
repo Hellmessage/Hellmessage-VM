@@ -125,7 +125,7 @@ public enum QemuHostEntry {
         }
 
         // 4. 构造 argv
-        let args: [String]
+        let buildResult: QemuArgsBuilder.BuildResult
         do {
             let inputs = QemuArgsBuilder.Inputs(
                 config: config, bundleURL: bundleURL,
@@ -135,12 +135,17 @@ public enum QemuHostEntry {
                 consoleSocketPath: consoleSocketURL.path,
                 unattendISOPath: unattendISOPath
             )
-            args = try QemuArgsBuilder.build(inputs)
+            buildResult = try QemuArgsBuilder.build(inputs)
         } catch {
             fputs("HVMHost(qemu): argv 构造失败: \(error)\n", stderr)
             QemuHostState.shared.tearDown(exitCode: 21)
         }
         QemuHostState.shared.consoleSocketURL = consoleSocketURL
+
+        // 4.5 vmnet fd 透传: bridged/shared NIC 由父进程 (本进程) socket()+connect()
+        // 每个 socket_vmnet daemon, posix_spawn 时把 N 个 fd 落到子进程 fd 3..3+N-1,
+        // QEMU argv 用 -netdev socket,fd=K 接收. 见 QemuProcessRunner / SidecarProcessRunner.
+        // socket_vmnet_client wrapper 由于只支持单 fd, 放弃使用; 多 NIC 需要这条路.
 
         // 3. stderr 落全局 ~/Library/.../HVM/logs/<displayName>-<uuid8>/qemu-stderr.log
         // (truncate, 不累积老错误)
@@ -149,8 +154,12 @@ public enum QemuHostEntry {
         let stderrLog = qemuLogsDir.appendingPathComponent("qemu-stderr.log")
         try? FileManager.default.removeItem(at: stderrLog)
 
-        // 4. 启动 QEMU 子进程
-        let runner = QemuProcessRunner(binary: qemuBin, args: args, stderrLog: stderrLog)
+        // 4. 启动 QEMU 子进程. 有 vmnet NIC 时父进程 connect 每个 daemon, 把 fd 透传给
+        //    子进程 fd 3..3+N-1; 全 NAT 时 vmnetSocketPaths 为空, runner 走默认 Process 路径.
+        let runner = QemuProcessRunner(
+            binary: qemuBin, args: buildResult.args, stderrLog: stderrLog,
+            extraFdConnections: buildResult.vmnetSocketPaths
+        )
         do {
             try runner.start()
         } catch {

@@ -13,11 +13,19 @@
 import Foundation
 
 public enum VmnetDaemonPaths {
-    public static let sharedSocket = "/var/run/socket_vmnet"
-    public static let hostSocket   = "/var/run/socket_vmnet.host"
+    /// 测试用 env override: 改 socket 父目录, 默认 /var/run.
+    /// 仅供 swift test 跳过 sudo 拉 launchd daemon 的依赖, 生产路径不该设此 env.
+    public static let socketDirEnvVar = "HVM_VMNET_SOCKET_DIR"
+
+    public static var socketDir: String {
+        ProcessInfo.processInfo.environment[socketDirEnvVar] ?? "/var/run"
+    }
+
+    public static var sharedSocket: String { "\(socketDir)/socket_vmnet" }
+    public static var hostSocket: String   { "\(socketDir)/socket_vmnet.host" }
 
     public static func bridgedSocket(interface: String) -> String {
-        "/var/run/socket_vmnet.bridged.\(interface)"
+        "\(socketDir)/socket_vmnet.bridged.\(interface)"
     }
 
     /// 检测 daemon socket 是否就绪 (文件存在 + 是 unix socket).
