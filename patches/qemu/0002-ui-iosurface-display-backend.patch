@@ -892,14 +892,16 @@ index 0000000..f2dee1c
 +
 +type_init(register_iosurface);
 diff --git a/ui/meson.build b/ui/meson.build
-index 6371422..d25ae14 100644
+index 6371422..54124ff 100644
 --- a/ui/meson.build
 +++ b/ui/meson.build
-@@ -27,6 +27,7 @@ if host_os == 'linux'
+@@ -27,6 +27,9 @@ if host_os == 'linux'
    system_ss.add(files('input-linux.c', 'udmabuf.c'))
  endif
  system_ss.add(when: cocoa, if_true: files('cocoa.m'))
-+system_ss.add(when: iosurface, if_true: files('iosurface.m'))
++if iosurface
++  system_ss.add(files('iosurface.m'))
++endif
  
  vnc_ss = ss.source_set()
  vnc_ss.add(files(
