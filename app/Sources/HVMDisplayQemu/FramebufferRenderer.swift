@@ -24,10 +24,19 @@ public final class FramebufferRenderer: NSObject {
     private let pipeline: MTLRenderPipelineState
     private let sampler: MTLSamplerState
 
-    /// 当前 framebuffer 纹理 (零拷贝 view 自 buffer)
+    /// 当前 framebuffer 纹理. GPU 私有内存 (.storageModeShared 对 Apple Silicon
+    /// 仍然 GPU 端 zero-copy, 只是不直接 backing 自 host shm), 每帧 draw 前从
+    /// mappedShm replaceRegion 整张. 不用 MTLBuffer.makeTexture(bytesNoCopy:)
+    /// 因为 M3 Max 上 _mtlValidateStrideTextureParameters 对 buffer.length ==
+    /// bytesPerRow * height 的临界情况严格验证失败 (M1/M2 通过, M3 不通过).
     private var currentTexture: MTLTexture?
-    /// 当前 MTLBuffer; deallocator 持有 munmap 责任, buffer 释放即 unmap.
-    private var currentBuffer: MTLBuffer?
+
+    /// shm mmap 起点; 单独持有, 跟 texture 生命周期解耦
+    private var mappedShm: UnsafeMutableRawPointer?
+    private var mappedSize: Int = 0
+    private var mappedWidth: Int = 0
+    private var mappedHeight: Int = 0
+    private var mappedStride: Int = 0
 
     public override init() {
         guard let device = MTLCreateSystemDefaultDevice() else {
@@ -134,19 +143,6 @@ public final class FramebufferRenderer: NSObject {
 
         unbindShm()
 
-        // bytesNoCopy: GPU 与 host 共享同一物理页. macOS 要求页对齐, mmap 天然满足.
-        let buf = device.makeBuffer(
-            bytesNoCopy: raw,
-            length: size,
-            options: .storageModeShared,
-            deallocator: { ptr, _ in
-                munmap(ptr, size)
-            })
-        guard let buf = buf else {
-            munmap(raw, size)
-            return false
-        }
-
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm,
             width:  Int(info.width),
@@ -154,21 +150,30 @@ public final class FramebufferRenderer: NSObject {
             mipmapped: false)
         desc.storageMode = .shared
         desc.usage       = [.shaderRead]
-        guard let tex = buf.makeTexture(descriptor: desc,
-                                          offset: 0,
-                                          bytesPerRow: Int(info.stride)) else {
-            // buf 自动通过 deallocator munmap
+        guard let tex = device.makeTexture(descriptor: desc) else {
+            munmap(raw, size)
             return false
         }
 
-        currentBuffer  = buf
         currentTexture = tex
+        mappedShm      = raw
+        mappedSize     = size
+        mappedWidth    = Int(info.width)
+        mappedHeight   = Int(info.height)
+        mappedStride   = Int(info.stride)
         return true
     }
 
     public func unbindShm() {
         currentTexture = nil
-        currentBuffer  = nil  // 触发 deallocator → munmap
+        if let p = mappedShm {
+            munmap(p, mappedSize)
+            mappedShm = nil
+        }
+        mappedSize = 0
+        mappedWidth = 0
+        mappedHeight = 0
+        mappedStride = 0
     }
 
     // MARK: - draw
@@ -179,6 +184,16 @@ public final class FramebufferRenderer: NSObject {
     /// draw(in:) 已在 main actor 上, 无 hop 开销).
     @MainActor
     public func draw(in view: MTKView) {
+        // 每帧从 shm 同步整张 framebuffer 到 GPU texture (.storageModeShared
+        // 在 Apple Silicon UMA 上 replace 几乎免费; 1080p ≈ 130μs per frame).
+        // 不依赖 SURFACE_DAMAGE 局部更新, 简单可靠.
+        if let tex = currentTexture, let raw = mappedShm,
+           mappedWidth > 0, mappedHeight > 0, mappedStride > 0 {
+            let region = MTLRegionMake2D(0, 0, mappedWidth, mappedHeight)
+            tex.replace(region: region, mipmapLevel: 0,
+                        withBytes: raw, bytesPerRow: mappedStride)
+        }
+
         guard let drawable = view.currentDrawable,
               let descriptor = view.currentRenderPassDescriptor,
               let cmdBuf = commandQueue.makeCommandBuffer(),
