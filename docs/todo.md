@@ -176,6 +176,18 @@
 - **现状**: 跑 `make qemu` 第一次要拉源码 + 编译 30 分钟; 想确认 brew deps / 路径配置正确不带编译
 - **要做**: `--dry-run` 只跑 preflight + ensure_homebrew + ensure_brew_packages
 
+### P-5 · 公共工具函数重构到 app/Sources/HVMUtils 模块
+- **现状**: 散在各业务模块的工具函数 (断点续传 / 字节大小格式化 / 错误信息助手 / 路径 escape 等) 缺统一组织, 易出现复制粘贴
+- **要做**: 新建 `app/Sources/HVMUtils` SwiftPM target 收纳跨模块复用 helper, 各业务模块依赖之替换内部重复实现
+- **入选示例 (待逐个核实)**:
+  - 断点续传 (HTTP resumable download)
+  - 字节大小格式化 (KB / MB / GB human readable)
+  - 错误信息格式化 (errno → 中文 message)
+  - 路径 helper (escape / normalize / sanitize)
+- **边界**: HVMCore 等基础模块不依赖 HVMUtils, 仅业务层用. 迁移时不改 API 行为, 只搬位置 + 收敛重复
+- **触发来源**: 用户反馈 (2026-04-27)
+- **工作量**: 看实际散点数量, 估 300-800 行 refactor
+
 ### P-4 · GUI + host 子进程 menu bar 双 status item 重复
 - **现状**: GUI 启动 QEMU/VZ host 子进程后, 主 GUI 与 host 子进程各自注册 NSStatusItem, menu bar 同时出现 2 个 HVM 图标
   - 主 GUI: `app/Sources/HVM/HVMApp.swift` (`HVM //0 running` 弹出)
