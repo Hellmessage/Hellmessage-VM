@@ -25,6 +25,11 @@ public final class FramebufferHostView: NSView, MTKViewDelegate {
     /// 输入转发器, 由 attach 方法注入. weak 防循环.
     public weak var inputForwarder: InputForwarder?
 
+    /// view drawable 尺寸改变时回调, 通常上层 (QemuEmbeddedSession) 接到后
+    /// 调 DisplayChannel.requestResize 给 guest 改分辨率 (要求 guest 装 vdagent).
+    /// 参数是 drawable pixel 尺寸 (已乘 backingScaleFactor, 给 guest 的真实分辨率).
+    public var onDrawableSizeChange: ((UInt32, UInt32) -> Void)?
+
     /// 我们预期 guest CapsLock 当前状态. 每次发 caps_lock toggle 翻转;
     /// 收到 LED_STATE 时用 ground truth 校正. 这是单一 source 避免 LED_STATE
     /// 回传延迟造成的双重 toggle race.
@@ -225,6 +230,12 @@ public final class FramebufferHostView: NSView, MTKViewDelegate {
         // 鼠标坐标归一化用的是本 view 的尺寸, 保持同步.
         inputForwarder?.setViewSize(width: Double(bounds.width),
                                      height: Double(bounds.height))
+        // drawable 尺寸 (backing pixel, 已乘 retina scale) 推给上层, 上层
+        // 通过 RESIZE_REQUEST → QEMU dpy_set_ui_info → EDID 让 guest vdagent
+        // 自动改分辨率 (guest 须装 spice-vdagent).
+        let w = UInt32(max(1, size.width.rounded()))
+        let h = UInt32(max(1, size.height.rounded()))
+        onDrawableSizeChange?(w, h)
     }
 
     public func draw(in view: MTKView) {

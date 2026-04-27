@@ -41,6 +41,14 @@ final class QemuEmbeddedSession {
         self.channel   = DisplayChannel(socketPath: iosurfacePath)
         self.forwarder = InputForwarder(qmpSocketPath: qmpInputPath)
         self.view.inputForwarder = forwarder
+        // drawable 尺寸变化 → 通过 HDP RESIZE_REQUEST 让 guest 改分辨率.
+        // host 不知道 guest 是否装了 vdagent, 不管装没装都发 — 没装时 QEMU
+        // 端 dpy_set_ui_info 仍触发 EDID 变化但 guest 内 X / Wayland 不会自动响应,
+        // 行为退化但不报错.
+        let channel = self.channel
+        self.view.onDrawableSizeChange = { w, h in
+            channel.requestResize(width: w, height: h)
+        }
     }
 
     /// 启动连接 + 事件循环. 不阻塞调用线程.
