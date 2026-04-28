@@ -2,19 +2,24 @@
 //
 // Metal 全屏渲染器: 把 SURFACE_NEW 携带的 POSIX shm framebuffer 零拷贝绘到 MTKView.
 //
-// 关键链路:
+// 关键链路 (零拷贝, hell-vm 同款方案):
 //   1. SURFACE_NEW 携带 shm fd (SCM_RIGHTS), 由 DisplayChannel 转交
-//   2. mmap shm → MTLBuffer.bytesNoCopy: GPU 与 host 共享同一物理页, 零拷贝
-//   3. MTLBuffer.makeTexture(...): 把 buffer 视图为 BGRA8 2D 纹理
-//   4. fullscreen pipeline (4-vertex triangle strip) + sample 纹理 → drawable
+//   2. mmap shm → device.makeBuffer(bytesNoCopy:): GPU 与 host 共享同一物理页
+//   3. buffer.makeTexture(descriptor:offset:bytesPerRow:): texture 直接 view 自 mmap
+//   4. fullscreen pipeline + fragment shader 采样 → drawable (无任何 CPU memcpy)
 //
-// 性能: BGRA8 1080p ≈ 8MB, 不 copy; QEMU 端 dpy_gfx_update 拷一次 (pixman→shm),
-// host 端从 shm 直接采样到 GPU. 30Hz 帧率 CPU overhead 极低.
+// 关键约束: bytesPerRow 必须 ≥256B 对齐, 否则 M3+ 的 _mtlValidateStrideTextureParameters
+// 会 abort. 这要求 QEMU iosurface backend 的 shm stride 已被 padding 到 256
+// (patches/qemu/0002 里 IOS_STRIDE_ALIGN). 客户端直接信任 info.stride, 不自己推.
+//
+// 性能: 30Hz draw 只触发 GPU encode + present, CPU 端 0 拷贝; QEMU 端 dpy_gfx_update
+// 仍然只拷 dirty 区到 shm. 1080p 全屏动画在 M3 Max 上稳 30Hz 接近 0% CPU.
 
 import Foundation
 import Metal
 import MetalKit
 import Darwin
+import HVMCore
 
 /// 单 VM 一个实例; 跟 FramebufferHostView 1:1 绑定.
 public final class FramebufferRenderer: NSObject {
@@ -24,19 +29,18 @@ public final class FramebufferRenderer: NSObject {
     private let pipeline: MTLRenderPipelineState
     private let sampler: MTLSamplerState
 
-    /// 当前 framebuffer 纹理. GPU 私有内存 (.storageModeShared 对 Apple Silicon
-    /// 仍然 GPU 端 zero-copy, 只是不直接 backing 自 host shm), 每帧 draw 前从
-    /// mappedShm replaceRegion 整张. 不用 MTLBuffer.makeTexture(bytesNoCopy:)
-    /// 因为 M3 Max 上 _mtlValidateStrideTextureParameters 对 buffer.length ==
-    /// bytesPerRow * height 的临界情况严格验证失败 (M1/M2 通过, M3 不通过).
+    /// 当前 framebuffer 纹理 (view 自 currentBuffer 的 BGRA8 2D 视图, 不独立持内存).
     private var currentTexture: MTLTexture?
 
-    /// shm mmap 起点; 单独持有, 跟 texture 生命周期解耦
-    private var mappedShm: UnsafeMutableRawPointer?
-    private var mappedSize: Int = 0
-    private var mappedWidth: Int = 0
-    private var mappedHeight: Int = 0
-    private var mappedStride: Int = 0
+    /// 当前 framebuffer 后端 buffer: bytesNoCopy 包了 mappedShm, deallocator
+    /// 在 GPU 释放最后一个引用时 munmap. 持引用即可保活, 不用手动 munmap.
+    private var currentBuffer: MTLBuffer?
+
+    /// 当前 surface 几何信息. snapshotCGImage 用它构造 CGImage; draw() 不需要
+    /// (texture 自带 width/height).
+    private var currentWidth: Int = 0
+    private var currentHeight: Int = 0
+    private var currentStride: Int = 0
 
     public override init() {
         guard let device = MTLCreateSystemDefaultDevice() else {
@@ -115,12 +119,16 @@ public final class FramebufferRenderer: NSObject {
         super.init()
     }
 
-    deinit { unbindShm() }
+    deinit {
+        // MTLBuffer 随对象释放, deallocator 会自动 munmap, 这里无需任何动作.
+    }
 
     // MARK: - shm lifecycle
 
     /// 接管 SCM_RIGHTS 拿到的 shm fd. 成功返回 true, 失败返回 false.
     /// 不论成功失败, fd 都被本方法 close (mmap 已持有引用 / 失败时直接 close).
+    /// @MainActor: bindShm 改写 currentBuffer / currentTexture, 跟 30Hz draw(in:) 串行.
+    @MainActor
     @discardableResult
     public func bindShm(fd: Int32, info: HDP.SurfaceNew) -> Bool {
         guard info.format == HDP.PixelFormat.bgra8.rawValue else {
@@ -128,12 +136,17 @@ public final class FramebufferRenderer: NSObject {
             return false
         }
         let size = Int(info.shmSize)
-        guard size > 0,
-              size >= Int(info.stride) * Int(info.height) else {
+        let stride = Int(info.stride)
+        let width  = Int(info.width)
+        let height = Int(info.height)
+        // QEMU 端 IOS_STRIDE_ALIGN=256 已保证 stride 256B 对齐, 客户端只校验下界
+        // (Apple Silicon Metal 至少要 16B 对齐, 256B 自然满足) + 不能 < width*4.
+        guard size > 0, stride >= width * 4, stride % 16 == 0,
+              size >= stride * height else {
             Darwin.close(fd)
             return false
         }
-        guard let raw = mmap(nil, size, PROT_READ, MAP_SHARED, fd, 0),
+        guard let raw = mmap(nil, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0),
               raw != UnsafeMutableRawPointer(bitPattern: -1) else {
             Darwin.close(fd)
             return false
@@ -141,39 +154,107 @@ public final class FramebufferRenderer: NSObject {
         // mmap 成功后我们的 fd 副本可释放, mmap 持有内核引用直到 munmap.
         Darwin.close(fd)
 
-        unbindShm()
-
-        let desc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm,
-            width:  Int(info.width),
-            height: Int(info.height),
-            mipmapped: false)
-        desc.storageMode = .shared
-        desc.usage       = [.shaderRead]
-        guard let tex = device.makeTexture(descriptor: desc) else {
+        // bytesNoCopy: MTLBuffer 直接 view 自 mmap 内存; deallocator 在 GPU 释放
+        // 最后一个引用后 munmap. PROT_READ|WRITE 是因为 .storageModeShared 要求
+        // 可写映射 (Metal driver 内部可能写 cache control bits), 即便我们只读.
+        let savedRaw  = raw
+        let savedSize = size
+        guard let buf = device.makeBuffer(
+            bytesNoCopy: raw,
+            length: size,
+            options: .storageModeShared,
+            deallocator: { _, _ in
+                munmap(savedRaw, savedSize)
+            }
+        ) else {
             munmap(raw, size)
             return false
         }
 
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm,
+            width:  width,
+            height: height,
+            mipmapped: false)
+        desc.storageMode = .shared
+        desc.usage       = [.shaderRead]
+        guard let tex = buf.makeTexture(descriptor: desc, offset: 0,
+                                         bytesPerRow: stride) else {
+            // buf 释放时 deallocator 会 munmap, 不再手动调.
+            return false
+        }
+
+        // 老 buffer/texture 释放; MTLBuffer deallocator 自动 munmap 老 mapping.
         currentTexture = tex
-        mappedShm      = raw
-        mappedSize     = size
-        mappedWidth    = Int(info.width)
-        mappedHeight   = Int(info.height)
-        mappedStride   = Int(info.stride)
+        currentBuffer  = buf
+        currentWidth   = width
+        currentHeight  = height
+        currentStride  = stride
         return true
     }
 
+    @MainActor
     public func unbindShm() {
+        // 释放引用, MTLBuffer deallocator 会 munmap.
         currentTexture = nil
-        if let p = mappedShm {
-            munmap(p, mappedSize)
-            mappedShm = nil
+        currentBuffer  = nil
+        currentWidth = 0; currentHeight = 0; currentStride = 0
+    }
+
+    /// CGDataProvider 的 release callback 必须是 @convention(c), 不能 capture
+    /// Swift 引用. 用 BufferBox 桥: passRetained 进 opaque ptr, release 时
+    /// takeRetainedValue 平衡, 让 ARC 自然 dealloc MTLBuffer.
+    private final class BufferBox {
+        let buf: MTLBuffer
+        init(_ b: MTLBuffer) { self.buf = b }
+    }
+
+    /// 抓一张当前 framebuffer 的 CGImage (零拷贝, view 自 MTLBuffer 内存).
+    /// 调用方拿到 CGImage 后可在任意线程做 PNG encode / downscale: CGImage
+    /// 用 CGDataProvider 持有 BufferBox 引用, 即便 main 之后 unbind / 切 surface,
+    /// 老 buffer 也活到 CGImage 释放才 munmap, 不会读 dangling pointer.
+    /// nil = 还没绑 surface.
+    @MainActor
+    public func snapshotCGImage() -> CGImage? {
+        guard let buf = currentBuffer,
+              currentWidth > 0, currentHeight > 0, currentStride > 0 else {
+            return nil
         }
-        mappedSize = 0
-        mappedWidth = 0
-        mappedHeight = 0
-        mappedStride = 0
+        let len = currentStride * currentHeight
+        let opaqueBox = Unmanaged.passRetained(BufferBox(buf)).toOpaque()
+        guard let provider = CGDataProvider(
+            dataInfo: opaqueBox,
+            data: buf.contents(),
+            size: len,
+            releaseData: { ctx, _, _ in
+                guard let ctx else { return }
+                _ = Unmanaged<BufferBox>.fromOpaque(ctx).takeRetainedValue()
+            }
+        ) else {
+            // CGDataProvider 创建失败也得平衡 retain
+            _ = Unmanaged<BufferBox>.fromOpaque(opaqueBox).takeRetainedValue()
+            return nil
+        }
+        let cs = CGColorSpaceCreateDeviceRGB()
+        // QEMU iosurface backend 推的 byte order 是 BGRA (host little-endian =
+        // pixman_x8r8g8b8); 在 CGImage 描述里用 .byteOrder32Little + noneSkipFirst.
+        let bitmapInfo: CGBitmapInfo = [
+            .byteOrder32Little,
+            CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue),
+        ]
+        return CGImage(
+            width:  currentWidth,
+            height: currentHeight,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: currentStride,
+            space: cs,
+            bitmapInfo: bitmapInfo,
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        )
     }
 
     // MARK: - draw
@@ -184,16 +265,8 @@ public final class FramebufferRenderer: NSObject {
     /// draw(in:) 已在 main actor 上, 无 hop 开销).
     @MainActor
     public func draw(in view: MTKView) {
-        // 每帧从 shm 同步整张 framebuffer 到 GPU texture (.storageModeShared
-        // 在 Apple Silicon UMA 上 replace 几乎免费; 1080p ≈ 130μs per frame).
-        // 不依赖 SURFACE_DAMAGE 局部更新, 简单可靠.
-        if let tex = currentTexture, let raw = mappedShm,
-           mappedWidth > 0, mappedHeight > 0, mappedStride > 0 {
-            let region = MTLRegionMake2D(0, 0, mappedWidth, mappedHeight)
-            tex.replace(region: region, mipmapLevel: 0,
-                        withBytes: raw, bytesPerRow: mappedStride)
-        }
-
+        // bytesNoCopy 路径: texture 直接 view 自 mmap 内存, fragment shader
+        // 采样时 Apple Silicon UMA driver 自动同步 cache, 无需 CPU memcpy.
         guard let drawable = view.currentDrawable,
               let descriptor = view.currentRenderPassDescriptor,
               let cmdBuf = commandQueue.makeCommandBuffer(),

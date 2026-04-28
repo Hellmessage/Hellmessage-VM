@@ -17,9 +17,8 @@ import Foundation
 import AppKit
 import MetalKit
 
-public final class FramebufferHostView: NSView, MTKViewDelegate {
+public final class FramebufferHostView: MTKView, MTKViewDelegate {
 
-    private let mtkView: MTKView
     public let renderer: FramebufferRenderer
 
     /// 输入转发器, 由 attach 方法注入. weak 防循环.
@@ -38,35 +37,53 @@ public final class FramebufferHostView: NSView, MTKViewDelegate {
     /// 上一次 NSEvent.modifierFlags 全量, 用于 flagsChanged 算 diff (修饰键 down/up)
     private var lastHostFlags: NSEvent.ModifierFlags = []
 
-    public override init(frame frameRect: NSRect) {
-        self.renderer = FramebufferRenderer()
-        let mtk = MTKView(frame: frameRect, device: renderer.device)
-        mtk.framebufferOnly = true
-        mtk.colorPixelFormat = .bgra8Unorm
-        mtk.preferredFramesPerSecond = 30
-        mtk.translatesAutoresizingMaskIntoConstraints = false
-        mtk.isPaused = false
-        mtk.enableSetNeedsDisplay = false
-        self.mtkView = mtk
-        super.init(frame: frameRect)
-        addSubview(mtk)
-        NSLayoutConstraint.activate([
-            mtk.topAnchor.constraint(equalTo: topAnchor),
-            mtk.bottomAnchor.constraint(equalTo: bottomAnchor),
-            mtk.leadingAnchor.constraint(equalTo: leadingAnchor),
-            mtk.trailingAnchor.constraint(equalTo: trailingAnchor),
-        ])
-        mtk.delegate = self
+    /// 当前是否藏了 host 鼠标. NSCursor.hide/unhide 是引用计数 (HIToolbox 内部),
+    /// 多 hide 没匹配 unhide 鼠标会一直消失; view 销毁前必须保证净 hide 计数 = 0.
+    private var cursorHidden = false
+
+    /// MTKView 必须直接是嵌入主窗口的 view, 不能放在普通 NSView 内 — 否则
+    /// AppKit 在 NSHostingView 的 layout 切换中触发 viewWillMoveToWindow /
+    /// viewDidMoveToWindow 会让 MTKView 内部的 CVDisplayLink 失效, draw(in:)
+    /// 永远不被调用 → 画面卡死. hell-vm 同款做法.
+    public init(frame frameRect: NSRect) {
+        let r = FramebufferRenderer()
+        self.renderer = r
+        super.init(frame: frameRect, device: r.device)
+        framebufferOnly = true
+        colorPixelFormat = .bgra8Unorm
+        clearColor = MTLClearColorMake(0, 0, 0, 1)
+        wantsLayer = true
+        autoResizeDrawable = true
+        translatesAutoresizingMaskIntoConstraints = false
+        // displayLink 60Hz 保底 + setNeedsDisplay 额外触发: 收到 SURFACE_DAMAGE
+        // 时 markFramebufferDirty 调 setNeedsDisplay 立即调度 draw, 即便 M3 Max
+        // ProMotion 把 displayLink throttle 到 ~6Hz 也不会卡 (manual draw 唤醒).
+        preferredFramesPerSecond = 60
+        enableSetNeedsDisplay = true
+        isPaused = false
+        delegate = self
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("storyboard init unsupported") }
+    required init(coder: NSCoder) { fatalError("storyboard init unsupported") }
 
     // MARK: - public
 
     /// 接 SURFACE_NEW 事件: 把 fd 转交给 renderer mmap + 建纹理.
+    /// @MainActor: renderer.bindShm 改写 draw(in:) 读的属性, 必须串行在 main thread.
+    @MainActor
     public func bindSurface(_ arrival: DisplayChannel.SurfaceArrival) {
         renderer.bindShm(fd: arrival.shmFD, info: arrival.info)
+        // 新 surface 立即触发首帧 draw, 不等 surfaceDamage.
+        needsDisplay = true
+    }
+
+    /// 接 SURFACE_DAMAGE 事件: 异步 schedule 一次 draw (绝对禁止用 view.draw() 同步,
+    /// 它会 block main thread 整个 UI 冻住). setNeedsDisplay 是 idempotent, AppKit
+    /// 会自动合并 burst damage 到下一次 displayLink tick.
+    @MainActor
+    public func markFramebufferDirty() {
+        setNeedsDisplay(bounds)
     }
 
     /// 接 LED_STATE 事件: 用 ground truth 校正 expectedGuestCaps.
@@ -101,8 +118,28 @@ public final class FramebufferHostView: NSView, MTKViewDelegate {
         return (Double(p.x), Double(y))
     }
 
-    public override func mouseEntered(with event: NSEvent) { NSCursor.hide() }
-    public override func mouseExited(with event: NSEvent)  { NSCursor.unhide() }
+    public override func mouseEntered(with event: NSEvent) { hideHostCursor() }
+    public override func mouseExited(with event: NSEvent)  { showHostCursor() }
+
+    private func hideHostCursor() {
+        if !cursorHidden { NSCursor.hide(); cursorHidden = true }
+    }
+    private func showHostCursor() {
+        if cursorHidden { NSCursor.unhide(); cursorHidden = false }
+    }
+
+    /// view 离开 window hierarchy (VM 关闭 / tab 切换 / 主窗口关闭) 时:
+    ///   1. 释放 first responder, 让键盘事件重新交回主 window
+    ///   2. 还原 host 鼠标 (mouseEntered 隐了之后没 mouseExited 路径会把鼠标卡死)
+    public override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil {
+            if window?.firstResponder === self {
+                window?.makeFirstResponder(nil)
+            }
+            showHostCursor()
+        }
+    }
 
     public override func mouseMoved(with event: NSEvent) {
         let (x, y) = viewCoords(event)
@@ -177,7 +214,7 @@ public final class FramebufferHostView: NSView, MTKViewDelegate {
         if bothNow && !bothPrev {
             sendModifierUpAll(prev)
             window?.makeFirstResponder(nil)
-            NSCursor.unhide()
+            showHostCursor()  // 走 cursorHidden 计数, 防止跟 mouseExited 双调
             return
         }
 

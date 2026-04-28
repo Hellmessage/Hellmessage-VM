@@ -340,7 +340,7 @@ final class DetailContainerView: NSView {
     }
 
     private func buildQemuEmbedded(id: UUID, item: AppModel.VMListItem) {
-        let session = QemuEmbeddedSession(vmID: id)
+        let session = QemuEmbeddedSession(vmID: id, bundleURL: item.bundleURL)
 
         let topBar = NSHostingView(rootView: DetailTopBar(model: model, item: item))
         topBar.translatesAutoresizingMaskIntoConstraints = false

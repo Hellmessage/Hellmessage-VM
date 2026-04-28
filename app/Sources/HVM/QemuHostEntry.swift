@@ -886,24 +886,14 @@ final class QemuHostState {
         }
     }
 
-    /// 启动 10s 间隔 thumbnail 抓帧 (与 VZ VMSession.startThumbnailTimer 同周期).
-    /// QMP 必须已就绪. 失败仅 NSLog 不影响 VM 主流程.
+    /// QEMU 后端的 thumbnail 抓帧改在 GUI 进程做 (QemuEmbeddedSession), 直接读
+    /// FramebufferRenderer 的 bytesNoCopy mmap shm 编 PNG, 0 暂停 0 拷贝.
+    /// host 进程不再调 QMP screendump (它是 stop-the-world, 每 10s 卡顿一次,
+    /// 严重影响 guest 体验, 详见 docs/QEMU_INTEGRATION.md). 这里保留空函数仅为
+    /// API 兼容, 本身 no-op.
     func startThumbnailTimer() {
         thumbnailTimer?.invalidate()
-        thumbnailTimer = Timer.scheduledTimer(withTimeInterval: HVMScreenshot.thumbnailIntervalSec, repeats: true) { _ in
-            Task { @MainActor in
-                guard let client = QemuHostState.shared.qmpClient,
-                      let bundleURL = QemuHostState.shared.bundleURL else { return }
-                do {
-                    let shot = try await QemuScreenshot.capture(
-                        via: client, tempDir: HVMPaths.runDir, maxEdge: HVMScreenshot.thumbnailMaxEdge
-                    )
-                    try ThumbnailWriter.writeAtomic(shot.pngData, to: bundleURL)
-                } catch {
-                    NSLog("HVMHost(qemu): thumbnail capture 失败 \(error)")
-                }
-            }
-        }
+        thumbnailTimer = nil
     }
 
     /// 关闭 IPC server / QMP / 进程; 释放 lock; 清 socket; 退主进程 (永不返回)

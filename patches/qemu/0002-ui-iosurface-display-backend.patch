@@ -260,10 +260,10 @@ index 3d0d132..13fb141 100644
      --enable-keyring) printf "%s" -Dkeyring=enabled ;;
 diff --git a/ui/iosurface.m b/ui/iosurface.m
 new file mode 100644
-index 0000000..f2dee1c
+index 0000000..eb3cc6c
 --- /dev/null
 +++ b/ui/iosurface.m
-@@ -0,0 +1,660 @@
+@@ -0,0 +1,701 @@
 +/*
 + * HVM iosurface display backend
 + *
@@ -536,6 +536,17 @@ index 0000000..f2dee1c
 +/*  shm lifecycle                                                         */
 +/* ====================================================================== */
 +
++/* Apple Silicon Metal MTLBuffer.makeTexture(bytesNoCopy:bytesPerRow:) requires
++ * bytesPerRow to be a multiple of 256 on M3+ (the older M1/M2 stride validator
++ * was looser). The host renderer wants real zero-copy, so we pad shm stride
++ * up to 256 here regardless of the source surface stride. */
++#define IOS_STRIDE_ALIGN 256
++
++static inline uint32_t ios_align_up_u32(uint32_t x, uint32_t a)
++{
++    return (x + (a - 1)) & ~(a - 1);
++}
++
 +static void release_shm(IOSurfaceDisplay *d)
 +{
 +    if (d->shm_ptr) {
@@ -603,14 +614,17 @@ index 0000000..f2dee1c
 +    IOSurfaceDisplay *d = container_of(dcl, IOSurfaceDisplay, dcl);
 +    IOSurfaceClient  *c = &d->client;
 +
-+    int w      = surface_width(new_surface);
-+    int h      = surface_height(new_surface);
-+    int stride = surface_stride(new_surface);
-+    size_t need = (size_t)stride * (size_t)h;
++    int w          = surface_width(new_surface);
++    int h          = surface_height(new_surface);
++    int src_stride = surface_stride(new_surface);
++    /* dst stride is padded up to IOS_STRIDE_ALIGN so the host can build a
++     * Metal texture directly on top of the shm via bytesNoCopy on M3+. */
++    uint32_t dst_stride = ios_align_up_u32((uint32_t)w * 4u, IOS_STRIDE_ALIGN);
++    size_t need = (size_t)dst_stride * (size_t)h;
 +
 +    release_shm(d);
 +
-+    if (w <= 0 || h <= 0 || stride <= 0 || need == 0) {
++    if (w <= 0 || h <= 0 || src_stride <= 0 || need == 0) {
 +        d->width = d->height = d->stride = 0;
 +        return;
 +    }
@@ -620,11 +634,21 @@ index 0000000..f2dee1c
 +    }
 +    d->width  = (uint32_t)w;
 +    d->height = (uint32_t)h;
-+    d->stride = (uint32_t)stride;
++    d->stride = dst_stride;
 +
-+    /* prime shm with the current frame; subsequent gfx_update calls copy
-+     * dirty rectangles incrementally. */
-+    memcpy(d->shm_ptr, surface_data(new_surface), need);
++    /* prime shm with the current frame; src and dst strides may differ
++     * (dst padded for Metal alignment), copy row by row. subsequent
++     * gfx_update calls copy dirty rectangles only. */
++    {
++        const uint8_t *src_base = surface_data(new_surface);
++        uint8_t       *dst_base = d->shm_ptr;
++        size_t         row_b    = (size_t)w * 4;
++        for (int row = 0; row < h; ++row) {
++            memcpy(dst_base + (size_t)row * (size_t)dst_stride,
++                   src_base + (size_t)row * (size_t)src_stride,
++                   row_b);
++        }
++    }
 +
 +    if (c->fd >= 0 && c->hello_done) {
 +        if (send_surface_new(c, d->width, d->height, d->stride,
@@ -646,13 +670,18 @@ index 0000000..f2dee1c
 +
 +    DisplaySurface *src = qemu_console_surface(dcl->con);
 +    if (!src) return;
-+    const uint8_t *src_base = surface_data(src);
-+    uint8_t       *dst_base = d->shm_ptr;
-+    size_t         row_b    = (size_t)w * 4;
++    /* src and dst strides may differ (dst padded for Metal 256B alignment),
++     * so we can't share a single offset; index source/dest separately. */
++    const uint8_t *src_base   = surface_data(src);
++    uint8_t       *dst_base   = d->shm_ptr;
++    int            src_stride = surface_stride(src);
++    uint32_t       dst_stride = d->stride;
++    size_t         row_b      = (size_t)w * 4;
 +
 +    for (int row = 0; row < h; ++row) {
-+        size_t off = (size_t)(y + row) * (size_t)d->stride + (size_t)x * 4;
-+        memcpy(dst_base + off, src_base + off, row_b);
++        size_t src_off = (size_t)(y + row) * (size_t)src_stride + (size_t)x * 4;
++        size_t dst_off = (size_t)(y + row) * (size_t)dst_stride + (size_t)x * 4;
++        memcpy(dst_base + dst_off, src_base + src_off, row_b);
 +    }
 +
 +    if (c->fd >= 0 && c->hello_done) {
@@ -679,8 +708,20 @@ index 0000000..f2dee1c
 +    }
 +}
 +
++/* graphic_hw_update drives the per-frame guest framebuffer pump (e.g. ramfb's
++ * ramfb_display_update -> dpy_gfx_replace_surface / dpy_gfx_update). Without
++ * this callback, console.c::gui_setup_refresh sees no listener requesting
++ * refresh ticks and never starts the gui_timer, so guest writes to ramfb are
++ * never pulled into the console surface — the host sees a frozen first frame
++ * even though the iosurface backend is alive. cocoa.m does the same. */
++static void ios_refresh(DisplayChangeListener *dcl)
++{
++    graphic_hw_update(dcl->con);
++}
++
 +static const DisplayChangeListenerOps dcl_ops = {
 +    .dpy_name             = "iosurface",
++    .dpy_refresh          = ios_refresh,
 +    .dpy_gfx_update       = ios_gfx_update,
 +    .dpy_gfx_switch       = ios_gfx_switch,
 +    .dpy_gfx_check_format = ios_check_format,

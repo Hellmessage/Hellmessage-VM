@@ -19,6 +19,8 @@ import Foundation
 import AppKit
 import OSLog
 import HVMCore
+import HVMBundle
+import HVMQemu
 import HVMDisplayQemu
 
 private let log = Logger(subsystem: "com.hellmessage.vm", category: "QemuEmbed")
@@ -29,14 +31,17 @@ final class QemuEmbeddedSession {
     let view: FramebufferHostView
     private let channel: DisplayChannel
     private let forwarder: InputForwarder
+    private let bundleURL: URL
 
     private var eventLoopTask: Task<Void, Never>?
     private var connectTask: Task<Void, Never>?
+    private var thumbnailTimer: Timer?
 
-    init(vmID: UUID) {
+    init(vmID: UUID, bundleURL: URL) {
         let iosurfacePath = HVMPaths.iosurfaceSocketPath(for: vmID).path
         let qmpInputPath  = HVMPaths.qmpInputSocketPath(for: vmID).path
 
+        self.bundleURL = bundleURL
         self.view      = FramebufferHostView(frame: .zero)
         self.channel   = DisplayChannel(socketPath: iosurfacePath)
         self.forwarder = InputForwarder(qmpSocketPath: qmpInputPath)
@@ -55,6 +60,7 @@ final class QemuEmbeddedSession {
     func start() {
         log.info("start: connecting forwarder + retry channel")
         forwarder.connect()
+        startThumbnailTimer()
 
         // HDP socket 可能未就绪 (QEMU 还没 bind listener), 重试连接.
         let channel = self.channel
@@ -79,6 +85,7 @@ final class QemuEmbeddedSession {
 
     /// 停止连接 + 事件循环. 多次调用安全.
     func stop() {
+        thumbnailTimer?.invalidate(); thumbnailTimer = nil
         connectTask?.cancel(); connectTask = nil
         eventLoopTask?.cancel(); eventLoopTask = nil
         channel.disconnect()
@@ -88,16 +95,51 @@ final class QemuEmbeddedSession {
     deinit {
         // deinit 在主线程或其它线程都可能, 不能 call MainActor-isolated 方法.
         // channel/forwarder 各自的 disconnect 是线程安全 (内部 DispatchQueue).
+        // thumbnailTimer 必须在 main 上 invalidate, 这里靠 stop() 提前调过 (defensive).
         channel.disconnect()
         forwarder.disconnect()
         connectTask?.cancel()
         eventLoopTask?.cancel()
     }
 
+    // MARK: - thumbnail (zero-copy 路径, 不走 QMP screendump)
+
+    /// 启动 10s 间隔 thumbnail 抓帧. 直接从 renderer 的 bytesNoCopy MTLBuffer
+    /// 读 framebuffer (mmap 共享内存, 0 拷贝), bg thread 编 PNG → 写
+    /// bundle/meta/thumbnail.png. 跟 QEMU iothread 完全解耦, 不暂停 guest.
+    private func startThumbnailTimer() {
+        thumbnailTimer?.invalidate()
+        thumbnailTimer = Timer.scheduledTimer(
+            withTimeInterval: HVMScreenshot.thumbnailIntervalSec,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.captureThumbnail()
+            }
+        }
+    }
+
+    /// main 上拿 CGImage (CGDataProvider 持 buffer 引用, 之后 bg 线程访问安全),
+    /// 然后 detach 到 bg 做 downscale + PNG encode + 落盘.
+    private func captureThumbnail() {
+        guard let cg = view.renderer.snapshotCGImage() else { return }
+        let bundle = self.bundleURL
+        let maxEdge = HVMScreenshot.thumbnailMaxEdge
+        Task.detached(priority: .background) {
+            let scaled = PPMReader.downscale(cg, maxEdge: maxEdge)
+            guard let png = PPMReader.encodePNG(scaled) else { return }
+            try? ThumbnailWriter.writeAtomic(png, to: bundle)
+        }
+    }
+
     // MARK: - private
 
     private func startEventLoop() {
         let stream = channel.events
+        // 事件循环留在 bg actor 跑, 只把改 NSView/renderer 状态的事件 (surfaceNew /
+        // ledState) 通过 await MainActor.run 切到 main. 整个 task 都 @MainActor 会让
+        // 高频 surfaceDamage (bootmgfw / Win Setup 每次 BLT 都触发) starve main thread,
+        // draw(in:) 30Hz timer 调度不上 → 实测卡到 ~1帧/10秒.
         eventLoopTask = Task { [weak view] in
             log.info("event loop started")
             for await event in stream {
@@ -110,13 +152,16 @@ final class QemuEmbeddedSession {
                     log.info("event helloDone caps=0x\(String(caps.rawValue, radix: 16))")
                 case .surfaceNew(let arrival):
                     log.info("event surfaceNew \(arrival.info.width)x\(arrival.info.height) stride=\(arrival.info.stride) shm_size=\(arrival.info.shmSize) fd=\(arrival.shmFD)")
-                    view.bindSurface(arrival)
+                    await MainActor.run { view.bindSurface(arrival) }
                     log.info("surface bound to renderer")
                 case .surfaceDamage(let d):
                     log.debug("event surfaceDamage \(d.x),\(d.y) \(d.w)x\(d.h)")
+                    // Manual draw 模式: 每次 damage 都标 dirty 触发 draw. setNeedsDisplay
+                    // idempotent + AppKit 自动合并到下一帧, 高频 damage 不会爆 main runloop.
+                    await MainActor.run { view.markFramebufferDirty() }
                 case .ledState(let leds):
                     log.info("event ledState caps=\(leds.capsLock) num=\(leds.numLock) scroll=\(leds.scrollLock)")
-                    view.updateGuestLEDState(leds)
+                    await MainActor.run { view.updateGuestLEDState(leds) }
                 case .cursorDefine, .cursorPos:
                     break
                 case .disconnected(let reason):
