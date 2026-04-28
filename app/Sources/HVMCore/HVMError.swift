@@ -41,6 +41,8 @@ public enum StorageError: Error, Sendable {
     case isoSizeSuspicious(bytes: Int64)
     case cloneFailed(errno: Int32)
     case volumeSpaceInsufficient(requiredBytes: UInt64, availableBytes: UInt64)
+    /// 导入磁盘镜像时的所有防呆错误 (格式不支持 / qemu-img 解析失败 / 越界缩容 / 文件不可读)
+    case importInvalid(reason: String, path: String)
 }
 
 // MARK: - Backend
@@ -226,6 +228,11 @@ public extension StorageError {
             return .init(code: "storage.volume_space_insufficient",
                          message: "磁盘卷空间不足",
                          details: ["required": "\(req)", "available": "\(avail)"])
+        case .importInvalid(let reason, let p):
+            return .init(code: HVMErrorCode.storageImportInvalid.rawValue,
+                         message: "导入磁盘镜像不可用",
+                         details: ["reason": reason, "path": p],
+                         hint: "仅支持 qcow2 / raw 镜像; 校验镜像可读、大小在合理范围")
         }
     }
 }

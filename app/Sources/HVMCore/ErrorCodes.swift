@@ -22,6 +22,7 @@ public enum HVMErrorCode: String, Sendable {
     case storageISOMissing      = "storage.iso_missing"
     case storageISOSizeSuspicious = "storage.iso_size_suspicious"
     case storageCloneFailed     = "storage.clone_failed"
+    case storageImportInvalid   = "storage.import_invalid"
 
     // backend.*
     case backendConfigInvalid   = "backend.config_invalid"

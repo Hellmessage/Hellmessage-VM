@@ -26,6 +26,10 @@ struct CreateVMDialog: View {
     @State private var ipswCache: [IPSWCacheItem] = []
     @State private var qemuBackendAvailable: Bool = false
     @State private var linuxEngine: Engine = .vz
+    @State private var creationSource: CreationSource = .installer
+    @State private var importDiskPath: String = ""
+    @State private var importDiskInfo: DiskFactory.ImportableDiskInfo? = nil
+    @State private var importDiskError: String? = nil
     @State private var networkChoice: NetworkChoice = .nat
     @State private var bridgedInterface: String = ""
     @State private var availableInterfaces: [VmnetSetupHelper.InterfaceInfo] = []
@@ -43,11 +47,29 @@ struct CreateVMDialog: View {
         }
     }
 
+    /// VM 创建源: 装机 ISO / IPSW vs 直接导入现成磁盘镜像.
+    /// 仅 Linux 暴露切换; macOS 强制走 IPSW 装机, Windows 强制走 ISO 装机.
+    private enum CreationSource: String, CaseIterable, Hashable {
+        case installer
+        case importDisk
+        var label: String {
+            switch self {
+            case .installer: return "Install from ISO"
+            case .importDisk: return "Import disk image"
+            }
+        }
+    }
+
     private var effectiveEngine: Engine {
         switch guestOS {
         case .macOS:   return .vz
         case .windows: return .qemu
-        case .linux:   return linuxEngine
+        case .linux:
+            // 导入模式下 engine 由镜像格式锁定 (qcow2→qemu, raw→vz), 忽略 linuxEngine 选择
+            if creationSource == .importDisk, let info = importDiskInfo {
+                return info.format == .qcow2 ? .qemu : .vz
+            }
+            return linuxEngine
         }
     }
 
@@ -56,6 +78,10 @@ struct CreateVMDialog: View {
     }
 
     private var installerPathValid: Bool {
+        // Linux 导入模式: 必须有路径且 inspect 通过 (importDiskInfo != nil); macOS / Windows 不暴露此模式
+        if guestOS == .linux, creationSource == .importDisk {
+            return !importDiskPath.isEmpty && importDiskInfo != nil
+        }
         switch guestOS {
         case .linux, .windows: return !isoPath.isEmpty
         case .macOS:           return !ipswPath.isEmpty
@@ -94,7 +120,14 @@ struct CreateVMDialog: View {
         }
         .onChange(of: guestOS) { _, newOS in
             reloadCache()
-            if newOS != .linux { linuxEngine = .vz }
+            if newOS != .linux {
+                linuxEngine = .vz
+                // 导入模式仅 Linux 暴露; 切到 macOS/Windows 时回退到装机模式并清状态
+                if creationSource != .installer {
+                    resetImportState()
+                    creationSource = .installer
+                }
+            }
             if !vmnetModesEnabled, networkChoice != .nat {
                 networkChoice = .nat
             }
@@ -103,6 +136,10 @@ struct CreateVMDialog: View {
             if !vmnetModesEnabled, networkChoice != .nat {
                 networkChoice = .nat
             }
+        }
+        .onChange(of: creationSource) { _, newSource in
+            if newSource == .installer { resetImportState() }
+            if !vmnetModesEnabled, networkChoice != .nat { networkChoice = .nat }
         }
         .onChange(of: networkChoice) { _, _ in refreshDaemonReady() }
         .onChange(of: bridgedInterface) { _, _ in refreshDaemonReady() }
@@ -154,6 +191,27 @@ struct CreateVMDialog: View {
             }
 
             if guestOS == .linux {
+                field("Source") {
+                    HStack(spacing: HVMSpace.sm) {
+                        ForEach(CreationSource.allCases, id: \.self) { source in
+                            let disabled = (source == .importDisk) && !qemuBackendAvailable
+                            Button { if !disabled { creationSource = source } } label: {
+                                HVMNetModeSegment(source.label, selected: creationSource == source, disabled: disabled)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(disabled)
+                            .frame(maxWidth: .infinity)
+                            .help(source == .importDisk
+                                  ? (qemuBackendAvailable
+                                     ? "导入现成 qcow2 / raw 镜像 (例 OpenWrt / Debian cloud image), 跳过装机直接 boot"
+                                     : "导入磁盘需 qemu-img — 请先 make qemu (或 make build-all)")
+                                  : "用 ISO 走完整装机流程")
+                        }
+                    }
+                }
+            }
+
+            if guestOS == .linux, creationSource == .installer {
                 field("Engine") {
                     HStack(spacing: HVMSpace.sm) {
                         Button { linuxEngine = .vz } label: {
@@ -188,6 +246,10 @@ struct CreateVMDialog: View {
             networkSection
 
             switch guestOS {
+            case .linux where creationSource == .importDisk:
+                field("Disk image") {
+                    importDiskField
+                }
             case .linux, .windows:
                 field("Installer ISO") {
                     HVMTextField(
@@ -433,6 +495,84 @@ struct CreateVMDialog: View {
         }
     }
 
+    @ViewBuilder
+    private var importDiskField: some View {
+        VStack(alignment: .leading, spacing: HVMSpace.sm) {
+            HVMTextField(
+                "/path/to/openwrt-arm64.qcow2",
+                text: $importDiskPath,
+                action: HVMTextField.ActionButton("Browse") { pickImportDisk() }
+            )
+            if let info = importDiskInfo {
+                HStack(spacing: HVMSpace.sm) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(HVMColor.accent)
+                    Text("\(info.format.rawValue.uppercased()) · 虚拟容量 \(info.virtualSizeGiB) GiB · 后端将固定为 \(info.format == .qcow2 ? "QEMU" : "VZ")")
+                        .font(HVMFont.small)
+                        .foregroundStyle(HVMColor.textSecondary)
+                }
+                Text("Disk 字段如填得更大将自动 resize; 不可缩小. 镜像会被拷贝进 bundle, 原文件保留.")
+                    .font(HVMFont.small)
+                    .foregroundStyle(HVMColor.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let err = importDiskError {
+                HStack(alignment: .top, spacing: HVMSpace.sm) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(HVMColor.statusPaused)
+                    Text(err)
+                        .font(HVMFont.small)
+                        .foregroundStyle(HVMColor.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                Text("仅支持 qcow2 / raw 镜像 (例 OpenWrt / Debian cloud image / Alpine).")
+                    .font(HVMFont.small)
+                    .foregroundStyle(HVMColor.textTertiary)
+            }
+        }
+    }
+
+    private func pickImportDisk() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        // qcow2 / img / raw 没有标准 UTType, 放开 .data 让用户自由选, inspect 阶段再过滤
+        panel.allowedContentTypes = [.diskImage, .data]
+        if panel.runModal() == .OK, let url = panel.url {
+            importDiskPath = url.path
+            inspectImport(url)
+        }
+    }
+
+    /// 调 DiskFactory.inspectImage 探测格式与虚拟容量, 失败时清掉 info 并把错误展示到 UI.
+    private func inspectImport(_ url: URL) {
+        importDiskInfo = nil
+        importDiskError = nil
+        guard let qemuImg = try? QemuPaths.qemuImgBinary() else {
+            importDiskError = "qemu-img 不在包内 — 请先 make qemu (或 make build-all)"
+            return
+        }
+        do {
+            let info = try DiskFactory.inspectImage(at: url, qemuImg: qemuImg)
+            importDiskInfo = info
+            // 主盘 stepper 默认到镜像 virtual-size, 但不低于 stepper 的下限 (8 GiB)
+            diskGiB = max(diskGiB, max(8, Int(info.virtualSizeGiB)))
+        } catch let e as HVMError {
+            importDiskError = e.userFacing.message + ": " + (e.userFacing.details["reason"] ?? "")
+        } catch {
+            importDiskError = "\(error)"
+        }
+    }
+
+    private func resetImportState() {
+        importDiskPath = ""
+        importDiskInfo = nil
+        importDiskError = nil
+    }
+
     private func fetchLatestIPSW() {
         model.startIpswFetch(errors: errors) { localURL in
             self.ipswPath = localURL.path
@@ -528,11 +668,27 @@ struct CreateVMDialog: View {
 
     private func proceedWithBundleCreation() {
         do {
-            switch guestOS {
-            case .linux, .windows: try ISOValidator.validate(at: isoPath)
-            case .macOS:
-                guard FileManager.default.fileExists(atPath: ipswPath) else {
-                    throw HVMError.install(.ipswNotFound(path: ipswPath))
+            // Linux 导入模式: 走 importDisk 分支 (跳过 ISO 校验, 不走装机)
+            let isImport = (guestOS == .linux && creationSource == .importDisk)
+
+            if isImport {
+                guard let info = importDiskInfo, !importDiskPath.isEmpty else {
+                    throw HVMError.config(.missingField(name: "导入磁盘镜像路径无效"))
+                }
+                // 防呆: 用户改的 disk 字段不可小于镜像虚拟容量
+                if UInt64(diskGiB) < info.virtualSizeGiB {
+                    throw HVMError.storage(.shrinkNotSupported(
+                        currentBytes: Int64(info.virtualSizeBytes),
+                        requestedBytes: Int64(diskGiB) * (1 << 30)
+                    ))
+                }
+            } else {
+                switch guestOS {
+                case .linux, .windows: try ISOValidator.validate(at: isoPath)
+                case .macOS:
+                    guard FileManager.default.fileExists(atPath: ipswPath) else {
+                        throw HVMError.install(.ipswNotFound(path: ipswPath))
+                    }
                 }
             }
 
@@ -578,8 +734,8 @@ struct CreateVMDialog: View {
                 memoryMiB: UInt64(memoryGiB) * 1024,
                 disks: [mainDisk],
                 networks: [NetworkSpec(mode: netMode, macAddress: MACAddressGenerator.random())],
-                installerISO: guestOS == .macOS ? nil : isoPath,
-                bootFromDiskOnly: false,
+                installerISO: (isImport || guestOS == .macOS) ? nil : isoPath,
+                bootFromDiskOnly: isImport,
                 macOS: macOSSpec,
                 linux: linuxSpec,
                 windows: windowsSpec
@@ -593,12 +749,29 @@ struct CreateVMDialog: View {
             )
             try BundleIO.create(at: bundleURL, config: config)
             let qemuImg = mainFormat == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
-            try DiskFactory.create(
-                at: bundleURL.appendingPathComponent(mainDiskFile),
-                sizeGiB: UInt64(diskGiB),
-                format: mainFormat,
-                qemuImg: qemuImg
-            )
+            let mainDiskAbs = bundleURL.appendingPathComponent(mainDiskFile)
+            if isImport, let info = importDiskInfo {
+                do {
+                    try DiskFactory.importImage(
+                        from: URL(fileURLWithPath: importDiskPath),
+                        to: mainDiskAbs,
+                        info: info,
+                        targetSizeGiB: UInt64(diskGiB),
+                        qemuImg: qemuImg
+                    )
+                } catch {
+                    // 导入失败回滚 bundle, 避免留下"半成品"目录
+                    try? FileManager.default.removeItem(at: bundleURL)
+                    throw error
+                }
+            } else {
+                try DiskFactory.create(
+                    at: mainDiskAbs,
+                    sizeGiB: UInt64(diskGiB),
+                    format: mainFormat,
+                    qemuImg: qemuImg
+                )
+            }
 
             if guestOS == .windows, let qemuRoot = try? QemuPaths.resolveRoot() {
                 let nvramURL = BundleLayout.nvramURL(bundleURL)

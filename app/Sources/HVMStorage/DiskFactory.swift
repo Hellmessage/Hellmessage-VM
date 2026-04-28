@@ -82,6 +82,148 @@ public enum DiskFactory {
             .lowercased()
     }
 
+    // MARK: - 导入外部磁盘镜像 (OpenWrt / Debian cloud image / Alpine 等预装好的 qcow2/raw)
+
+    /// 导入磁盘镜像的元信息. virtualSizeBytes = guest 看到的容量, 不是文件本身字节.
+    public struct ImportableDiskInfo: Sendable, Equatable {
+        public let format: DiskFormat
+        public let virtualSizeBytes: UInt64
+        public init(format: DiskFormat, virtualSizeBytes: UInt64) {
+            self.format = format
+            self.virtualSizeBytes = virtualSizeBytes
+        }
+        /// 向上取整到 GiB (DiskSpec.sizeGiB 用 UInt64 GiB 单位).
+        public var virtualSizeGiB: UInt64 {
+            let gib: UInt64 = 1 << 30
+            return (virtualSizeBytes + gib - 1) / gib
+        }
+    }
+
+    /// 主盘容量上限 (GiB), 与 GUI stepper 上限对齐.
+    public static let importMaxSizeGiB: UInt64 = 2048
+
+    /// 探测外部镜像的格式与虚拟容量, 仅放行 qcow2 / raw, 其他 (vmdk/vhdx/...) 拒绝.
+    /// 走 `qemu-img info --output=json`, 因此 qemuImg 必传 (QEMU 后端就绪是导入前提).
+    public static func inspectImage(at url: URL, qemuImg: URL) throws -> ImportableDiskInfo {
+        let path = url.path
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw HVMError.storage(.importInvalid(reason: "文件不存在", path: path))
+        }
+        guard FileManager.default.isReadableFile(atPath: path) else {
+            throw HVMError.storage(.importInvalid(reason: "文件不可读 (权限问题)", path: path))
+        }
+
+        let proc = Process()
+        proc.executableURL = qemuImg
+        // --force-share 防止用户的 qcow2 被别处独占 lock 导致 info 失败
+        proc.arguments = ["info", "--output=json", "--force-share", path]
+        let stdout = Pipe()
+        let stderr = Pipe()
+        proc.standardOutput = stdout
+        proc.standardError = stderr
+        do { try proc.run() } catch {
+            throw HVMError.storage(.importInvalid(reason: "qemu-img 启动失败: \(error)", path: path))
+        }
+        proc.waitUntilExit()
+        guard proc.terminationStatus == 0 else {
+            let err = (try? stderr.fileHandleForReading.readToEnd())
+                .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            throw HVMError.storage(.importInvalid(
+                reason: "qemu-img info 失败 (status=\(proc.terminationStatus)): \(err.trimmingCharacters(in: .whitespacesAndNewlines))",
+                path: path
+            ))
+        }
+        let data = (try? stdout.fileHandleForReading.readToEnd()) ?? Data()
+        struct Info: Decodable {
+            let format: String
+            let virtualSize: UInt64
+            enum CodingKeys: String, CodingKey {
+                case format
+                case virtualSize = "virtual-size"
+            }
+        }
+        let info: Info
+        do {
+            info = try JSONDecoder().decode(Info.self, from: data)
+        } catch {
+            throw HVMError.storage(.importInvalid(reason: "qemu-img info JSON 解析失败: \(error)", path: path))
+        }
+
+        let format: DiskFormat
+        switch info.format.lowercased() {
+        case "qcow2": format = .qcow2
+        case "raw":   format = .raw
+        default:
+            throw HVMError.storage(.importInvalid(
+                reason: "镜像格式 \(info.format) 不支持, 仅接受 qcow2 / raw",
+                path: path
+            ))
+        }
+
+        // 防呆: 导入容量超过主盘上限 (GUI stepper 顶 2048 GiB)
+        let maxBytes = importMaxSizeGiB * (1 << 30)
+        if info.virtualSize > maxBytes {
+            throw HVMError.storage(.importInvalid(
+                reason: "镜像虚拟容量 \(info.virtualSize) bytes 超过上限 \(importMaxSizeGiB) GiB",
+                path: path
+            ))
+        }
+        if info.virtualSize == 0 {
+            throw HVMError.storage(.importInvalid(reason: "镜像虚拟容量为 0", path: path))
+        }
+        return ImportableDiskInfo(format: format, virtualSizeBytes: info.virtualSize)
+    }
+
+    /// 把外部镜像拷贝到 bundle 的目标路径; 若 targetSizeGiB > 镜像 virtual-size 则拷贝后 resize.
+    /// targetSizeGiB == nil 时按镜像 virtual-size 不变. targetSizeGiB < virtual-size 直接拒绝 (缩容不支持).
+    /// qemuImg 仅在 resize 时用到; 不 resize 时可不传.
+    public static func importImage(
+        from src: URL,
+        to dst: URL,
+        info: ImportableDiskInfo,
+        targetSizeGiB: UInt64?,
+        qemuImg: URL?
+    ) throws {
+        if FileManager.default.fileExists(atPath: dst.path) {
+            throw HVMError.storage(.diskAlreadyExists(path: dst.path))
+        }
+        // 缩容防呆: target 不可小于镜像本身的 virtual-size
+        if let target = targetSizeGiB {
+            let targetBytes = Int64(target) * 1024 * 1024 * 1024
+            if targetBytes < Int64(info.virtualSizeBytes) {
+                throw HVMError.storage(.shrinkNotSupported(
+                    currentBytes: Int64(info.virtualSizeBytes),
+                    requestedBytes: targetBytes
+                ))
+            }
+            if target > importMaxSizeGiB {
+                throw HVMError.storage(.importInvalid(
+                    reason: "目标容量 \(target) GiB 超过上限 \(importMaxSizeGiB) GiB",
+                    path: dst.path
+                ))
+            }
+        }
+
+        do {
+            try FileManager.default.copyItem(at: src, to: dst)
+        } catch {
+            throw HVMError.storage(.creationFailed(errno: EIO, path: dst.path))
+        }
+
+        // 仅在显式放大时才调 qemu-img resize (raw 走 ftruncate, qcow2 走 qemu-img)
+        if let target = targetSizeGiB,
+           UInt64(Int64(target) * 1024 * 1024 * 1024) > info.virtualSizeBytes {
+            do {
+                try grow(at: dst, toGiB: target, format: info.format, qemuImg: qemuImg)
+            } catch {
+                // resize 失败回滚拷贝, 避免留下"半成品"主盘
+                try? FileManager.default.removeItem(at: dst)
+                throw error
+            }
+        }
+        Self.log.info("disk imported: \(src.lastPathComponent, privacy: .public) → \(dst.lastPathComponent, privacy: .public) format=\(info.format.rawValue, privacy: .public) virtualGiB=\(info.virtualSizeGiB)")
+    }
+
     // MARK: - raw (ftruncate)
 
     private static func createRaw(at url: URL, sizeGiB: UInt64) throws {
