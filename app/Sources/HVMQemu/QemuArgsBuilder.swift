@@ -143,10 +143,19 @@ public enum QemuArgsBuilder {
         args += ["-m", "\(cfg.memoryMiB)M"]
         args += ["-name", cfg.displayName]
 
-        // 不加 -no-reboot: guest reboot 走 QEMU system_reset (HW reset), host 子进程不退,
-        // QEMU iosurface backend 重新 advertise SURFACE_NEW, fanout reconnectChannel 后
-        // 主嵌入 view 自然恢复画面 (Win 装机第一阶段后 reboot 进 OOBE 这条路依赖 reset).
-        // ACPI 真 shutdown 仍走 powerdown 路径 — QEMU 进程退出, host 子进程 detect 后 tearDown.
+        // -no-reboot 仅 Windows 装机阶段加 (cfg.bootFromDiskOnly=false): 第一次 Win Setup
+        // 拷完文件触发 reboot 时让 QEMU 直接退出, 给用户决策点 — 切到 bootFromDiskOnly=true
+        // 后再 cold start, argv 切到 hvm-gpu-ramfb-pci 接管 OS 期通路.
+        // 这条分流的根因: 装机期单挂 ramfb 跟 BDD 软件画法兼容; 装好后切融合设备让
+        // viogpudo.sys 绑 virtio-gpu 通路做 dynamic resize. 两者公用一个 argv 时
+        // virtio-gpu reset_bh 会清 ramfb 已 push 的 console surface 显 placeholder,
+        // 实测 Win Setup / "Press any key to boot from CD" 频繁触发 → 装机黑屏.
+        // 详见 patches/qemu/0003 注释.
+        // bootFromDiskOnly=true (运行期): 不加 -no-reboot, guest reboot 走 system_reset
+        // host 子进程不退 — Win OOBE 链上 reboot 也是这条路.
+        if cfg.guestOS == .windows && !cfg.bootFromDiskOnly {
+            args += ["-no-reboot"]
+        }
         // 关人类 monitor (仅 QMP 控制, 防 stdio 干扰)
         args += ["-monitor", "none"]
 
@@ -317,16 +326,24 @@ public enum QemuArgsBuilder {
         // ---- 显示 + 输入 ----
         // QEMU virt 机器默认无显卡, 只有 serial/parallel console; 必须显式加 GPU 才能出 graphical UEFI/OS UI.
         //
-        // Linux:   virtio-gpu-pci (内核自带 driver, 加速; OS 期 set_scanout 即可 dynamic resize)
-        // Windows ARM64: hvm-gpu-ramfb-pci (自家 patch 0003 融合设备, 内置 ramfb + virtio-gpu-pci):
-        //                 - boot 期 (g->enable=0) 走 ramfb 路径 → fw_cfg etc/ramfb 给 EDK2 GOP /
-        //                   bootmgfw.efi (绕开历史上单挂 virtio-gpu-pci 时 bootmgfw GOP hang 的问题)
-        //                 - OS 期 viogpudo.sys 绑 PCI 1AF4:1050 + 发 SET_SCANOUT 后切到 virtio-gpu
-        //                   路径, 实现真 dynamic resize (vdagent → SetDisplayConfig → SET_SCANOUT
-        //                   → 改 framebuffer 大小)
-        //                 单 PCI 设备同时挂两角色, 不需要在 argv 里两个设备并列
+        // Linux: virtio-gpu-pci (内核自带 driver, 加速; OS 期 set_scanout 即可 dynamic resize)
+        //
+        // Windows ARM64: 装机阶段 vs 运行阶段二选一, 由 bootFromDiskOnly 切换:
+        //  - bootFromDiskOnly=false (装机): -device ramfb 单挂. Win Setup / WinPE 走 BDD
+        //    软件画法 (cursor + 像素都直接画进 ramfb cpu_physical_memory_map 出来的 buffer),
+        //    跟单设备路径完全兼容, 不会有 virtio-gpu reset_bh 清 console surface 的 placeholder
+        //    问题. -no-reboot 在 -monitor 上面那条已加, Setup 第一次 reboot 时 QEMU 退出,
+        //    给用户切 bootFromDiskOnly=true 的决策点.
+        //  - bootFromDiskOnly=true (运行): -device hvm-gpu-ramfb-pci (自家 patch 0003 融合
+        //    设备), boot 期走 ramfb 兼容 EDK2/bootmgfw, OS 期 viogpudo.sys 绑 PCI 1AF4:1050
+        //    切到 virtio-gpu 路径做 dynamic resize. vendor/device id 复用 0x1AF4/0x1050,
+        //    viogpudo.inf 自动 match.
         if cfg.guestOS == .windows {
-            args += ["-device", "hvm-gpu-ramfb-pci"]
+            if cfg.bootFromDiskOnly {
+                args += ["-device", "hvm-gpu-ramfb-pci"]
+            } else {
+                args += ["-device", "ramfb"]
+            }
         } else {
             args += ["-device", "virtio-gpu-pci"]
         }

@@ -4,7 +4,7 @@ Date: Sat, 2 May 2026 00:00:00 +0800
 Subject: [PATCH] hw/display: add hvm-gpu-ramfb-pci hybrid display device
 
 新 PCI 设备 `hvm-gpu-ramfb-pci`, 单设备同时挂 ramfb (UEFI/bootmgfw GOP 兼容)
-+ virtio-gpu-pci (OS 期 viogpudo.sys / 内核 virtio-gpu driver 接管):
++ virtio-gpu-pci (OS 期 viogpudo.sys / 内核 virtio-gpu driver 接管做 dynamic resize):
 
   - boot 期 (g->enable == 0): 走 ramfb 路径, fw_cfg etc/ramfb 接口给 EDK2 GOP /
     bootmgfw.efi, framebuffer 在 cpu_physical_memory_map 出来的 guest RAM 区里;
@@ -14,10 +14,22 @@ Subject: [PATCH] hw/display: add hvm-gpu-ramfb-pci hybrid display device
     自己 dpy_gfx_update / dpy_gfx_replace_surface 把 dynamic 大小 framebuffer
     推给同一个 console.
 
+reset_hold hook: virtio-gpu 的 reset_bh 会对所有 scanout 调
+dpy_gfx_replace_surface(con, NULL) 把 console 顶上变成 QEMU 内置的
+"Display output is not active." placeholder 文字 surface. 我们在 reset_hold
+末尾把 g->enable 强制拉回 0 (driver state 已被 reset 清, 下个 gfx_update 必须走
+ramfb 路径) + 调 ramfb_resend_surface 让 ramfb 重新生成 surface, 下个
+gfx_update tick dpy_gfx_replace_surface 会把 placeholder 换回真 ramfb. 否则
+EDK2/bootmgfw "Press any key to boot from CD" / Win Setup 装机界面 都会卡在
+placeholder 看不到内容.
+
+ramfb 公开 ramfb_resend_surface(s) 给上述 hook 调; 内部就是 ramfb_post_load
+里走过的 ramfb_fw_cfg_write(s, 0, 0) 套用 (从 cached cfg 重建 surface).
+
 vendor/device id 复用 0x1AF4/0x1050 (Red Hat virtio-gpu, viogpudo.inf 自动 match,
 不需要改 guest driver). PCI class 仍 DISPLAY_OTHER.
 
-套版自 hw/display/virtio-vga.c (VGA + virtio-gpu 融合), 仅把 VGA 路径换成 ramfb.
+套版自 hw/display/virtio-vga.c (VGA + virtio-gpu 融合), 把 VGA 路径换成 ramfb.
 
 只暴露 PCI 形态 (TYPE_HVM_GPU_RAMFB_PCI = "hvm-gpu-ramfb-pci"); virtio-bus
 (non-PCI) 的 transport 当前用例不需要.
@@ -25,10 +37,12 @@ vendor/device id 复用 0x1AF4/0x1050 (Red Hat virtio-gpu, viogpudo.inf 自动 m
 Signed-off-by: HVM <noreply@hellmessage.com>
 ---
  hw/display/Kconfig                       |   9 +
- hw/display/hvm-gpu-ramfb-pci.c           | 219 +++++++++++++++++++++++
+ hw/display/hvm-gpu-ramfb-pci.c           | 245 +++++++++++++++++++++++
  hw/display/meson.build                   |   8 +
- include/hw/display/hvm-gpu-ramfb-pci.h   |  35 ++++
- 4 files changed, 271 insertions(+)
+ hw/display/ramfb.c                       |   9 +
+ include/hw/display/hvm-gpu-ramfb-pci.h   |  37 ++++
+ include/hw/display/ramfb.h               |   7 +
+ 6 files changed, 315 insertions(+)
  create mode 100644 hw/display/hvm-gpu-ramfb-pci.c
  create mode 100644 include/hw/display/hvm-gpu-ramfb-pci.h
 
@@ -54,10 +68,10 @@ index 1e95ab2..29cf4c9 100644
      default y
 diff --git a/hw/display/hvm-gpu-ramfb-pci.c b/hw/display/hvm-gpu-ramfb-pci.c
 new file mode 100644
-index 0000000..d0139c7
+index 0000000..3f265fb
 --- /dev/null
 +++ b/hw/display/hvm-gpu-ramfb-pci.c
-@@ -0,0 +1,220 @@
+@@ -0,0 +1,247 @@
 +/*
 + * HVM hybrid display device — virtio-gpu-pci + ramfb fallback
 + *
@@ -173,6 +187,29 @@ index 0000000..d0139c7
 +    DEFINE_VIRTIO_GPU_PCI_PROPERTIES(VirtIOPCIProxy),
 +};
 +
++/* virtio-gpu 的 reset_bh 会对所有 scanout 调 dpy_gfx_replace_surface(con, NULL),
++ * console 顶上的会变成 QEMU 内置的 "Display output is not active." placeholder.
++ * 我们在 reset_hold 末尾 (parent_phases.hold 跑完之后) 强制把 g->enable 拉回 0
++ * (driver state 已被 reset 清, 下个 gfx_update 必须走 ramfb 路径) +
++ * 调 ramfb_resend_surface 让 ramfb 重新生成 surface, 下个 gfx_update tick
++ * dpy_gfx_replace_surface 会把 placeholder 换回真 ramfb. */
++static void hvm_ramfb_reset_hold(Object *obj, ResetType type)
++{
++    HVMGPURamfbBaseClass *klass = HVM_GPU_RAMFB_PCI_BASE_GET_CLASS(obj);
++    HVMGPURamfbBase *vrf = HVM_GPU_RAMFB_PCI_BASE(obj);
++
++    if (klass->parent_phases.hold) {
++        klass->parent_phases.hold(obj, type);
++    }
++
++    if (vrf->vgpu) {
++        vrf->vgpu->enable = 0;
++    }
++    if (vrf->ramfb) {
++        ramfb_resend_surface(vrf->ramfb);
++    }
++}
++
 +/* PCI device wrapper: virtio-gpu PCI base 套上 ramfb fallback */
 +static void hvm_ramfb_realize(VirtIOPCIProxy *vpci_dev, Error **errp)
 +{
@@ -226,12 +263,16 @@ index 0000000..d0139c7
 +{
 +    DeviceClass *dc = DEVICE_CLASS(klass);
 +    VirtioPCIClass *k = VIRTIO_PCI_CLASS(klass);
++    HVMGPURamfbBaseClass *v = HVM_GPU_RAMFB_PCI_BASE_CLASS(klass);
 +    PCIDeviceClass *pcidev_k = PCI_DEVICE_CLASS(klass);
++    ResettableClass *rc = RESETTABLE_CLASS(klass);
 +
 +    set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
 +    device_class_set_props(dc, hvm_ramfb_properties);
 +    dc->desc = "HVM hybrid display: ramfb (boot) + virtio-gpu (runtime)";
 +    dc->hotpluggable = false;
++    resettable_class_set_parent_phases(rc, NULL, hvm_ramfb_reset_hold,
++                                       NULL, &v->parent_phases);
 +    k->realize = hvm_ramfb_realize;
 +    pcidev_k->class_id = PCI_CLASS_DISPLAY_OTHER;
 +}
@@ -297,12 +338,32 @@ index 90e6c04..4d8f1d1 100644
    if virgl.found() and opengl.found()
      virtio_gpu_pci_gl_ss = ss.source_set()
      virtio_gpu_pci_gl_ss.add(when: ['CONFIG_VIRTIO_GPU', 'CONFIG_VIRTIO_PCI', virgl, opengl],
+diff --git a/hw/display/ramfb.c b/hw/display/ramfb.c
+index 9a17d97..b1f5607 100644
+--- a/hw/display/ramfb.c
++++ b/hw/display/ramfb.c
+@@ -124,6 +124,15 @@ static int ramfb_post_load(void *opaque, int version_id)
+     return 0;
+ }
+ 
++void ramfb_resend_surface(RAMFBState *s)
++{
++    /* Re-run the fw_cfg write callback, which re-creates the display surface
++     * from the cached config. After this, the next ramfb_display_update() call
++     * will dpy_gfx_replace_surface() with a fresh surface, replacing whatever
++     * (e.g. NULL placeholder from virtio-gpu reset) is currently on the console. */
++    ramfb_fw_cfg_write(s, 0, 0);
++}
++
+ const VMStateDescription ramfb_vmstate = {
+     .name = "ramfb",
+     .version_id = 1,
 diff --git a/include/hw/display/hvm-gpu-ramfb-pci.h b/include/hw/display/hvm-gpu-ramfb-pci.h
 new file mode 100644
-index 0000000..135417f
+index 0000000..43b5b5c
 --- /dev/null
 +++ b/include/hw/display/hvm-gpu-ramfb-pci.h
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,36 @@
 +/*
 + * HVM hybrid display device: virtio-gpu-pci + ramfb fallback
 + *
@@ -312,6 +373,7 @@ index 0000000..135417f
 +#ifndef HW_DISPLAY_HVM_GPU_RAMFB_PCI_H
 +#define HW_DISPLAY_HVM_GPU_RAMFB_PCI_H
 +
++#include "hw/resettable.h"
 +#include "hw/virtio/virtio-pci.h"
 +#include "hw/virtio/virtio-gpu.h"
 +#include "hw/display/ramfb.h"
@@ -334,6 +396,25 @@ index 0000000..135417f
 +
 +struct HVMGPURamfbBaseClass {
 +    VirtioPCIClass parent_class;
++    ResettablePhases parent_phases;
 +};
 +
 +#endif /* HW_DISPLAY_HVM_GPU_RAMFB_PCI_H */
+diff --git a/include/hw/display/ramfb.h b/include/hw/display/ramfb.h
+index 172aa6d..17fbb71 100644
+--- a/include/hw/display/ramfb.h
++++ b/include/hw/display/ramfb.h
+@@ -7,6 +7,13 @@
+ typedef struct RAMFBState RAMFBState;
+ void ramfb_display_update(QemuConsole *con, RAMFBState *s);
+ RAMFBState *ramfb_setup(bool romfile, Error **errp);
++/* Re-create the display surface from the cached fw_cfg (etc/ramfb) config,
++ * forcing the next ramfb_display_update() to dpy_gfx_replace_surface() again.
++ * Useful when an external code path (eg virtio-gpu reset) replaced the
++ * console surface with the "Display output is not active" NULL placeholder.
++ * Idempotent if no valid framebuffer config has been written by the guest
++ * yet (s->width == 0). */
++void ramfb_resend_surface(RAMFBState *s);
+ 
+ extern const VMStateDescription ramfb_vmstate;
+ 
