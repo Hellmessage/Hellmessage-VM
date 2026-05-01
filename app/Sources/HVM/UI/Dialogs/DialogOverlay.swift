@@ -24,6 +24,9 @@ struct DialogOverlay: View {
             if let vwState = model.virtioWinFetchState {
                 VirtioWinFetchDialog(state: vwState)
             }
+            if let utmState = model.utmGuestToolsFetchState {
+                UtmGuestToolsFetchDialog(state: utmState)
+            }
             if let pickerState = model.ipswCatalogPicker {
                 IpswCatalogPicker(model: model, errors: errors, onSelect: pickerState.onSelect)
             }
@@ -47,6 +50,7 @@ struct DialogOverlay: View {
             model.installState != nil ||
             model.ipswFetchState != nil ||
             model.virtioWinFetchState != nil ||
+            model.utmGuestToolsFetchState != nil ||
             model.ipswCatalogPicker != nil ||
             model.editConfigItem != nil ||
             model.snapshotCreateItem != nil ||

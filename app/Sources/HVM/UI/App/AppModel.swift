@@ -68,6 +68,8 @@ public final class AppModel {
     public var ipswFetchState: IpswFetchState? = nil
     /// 正在拉 virtio-win.iso 时的进度. 非 nil → DialogOverlay 显示 VirtioWinFetchDialog 模态
     public var virtioWinFetchState: VirtioWinFetchState? = nil
+    /// 正在拉 utm-guest-tools.iso 时的进度. 非 nil → DialogOverlay 显示 UtmGuestToolsFetchDialog 模态
+    public var utmGuestToolsFetchState: UtmGuestToolsFetchState? = nil
     /// IPSW 版本选择器是否打开. 非 nil → DialogOverlay 显示 IpswCatalogPicker 模态.
     /// 选完后通过 onSelect 回调把 entry 交回上层 (向导)
     public var ipswCatalogPicker: IpswCatalogPickerState? = nil
@@ -116,6 +118,18 @@ public final class AppModel {
 
     /// virtio-win.iso 下载进度 (Win11 装机驱动). 由 startVirtioWinFetch 维护.
     public struct VirtioWinFetchState: Sendable, Equatable {
+        public var receivedBytes: Int64
+        public var totalBytes: Int64?     // 服务端 Content-Length, 缺失时 UI 退化为字节数
+
+        public var fraction: Double? {
+            guard let t = totalBytes, t > 0 else { return nil }
+            return Double(receivedBytes) / Double(t)
+        }
+    }
+
+    /// utm-guest-tools.iso 下载进度 (Win11 ARM64 vdagent + viogpudo + qemu-ga).
+    /// 由 startUtmGuestToolsFetch 维护.
+    public struct UtmGuestToolsFetchState: Sendable, Equatable {
         public var receivedBytes: Int64
         public var totalBytes: Int64?     // 服务端 Content-Length, 缺失时 UI 退化为字节数
 
@@ -506,6 +520,39 @@ public final class AppModel {
                 onComplete()
             } catch {
                 self.virtioWinFetchState = nil
+                errors.present(error)
+            }
+        }
+    }
+
+    /// 异步确保 utm-guest-tools.iso 已缓存. 已就绪即立即 onComplete; 否则前台下载 + 进度上报.
+    /// 失败走 errors.present, 不调 onComplete.
+    /// 与 startVirtioWinFetch 同模式: 进度通过 utmGuestToolsFetchState 更新,
+    /// UtmGuestToolsFetchDialog 读.
+    public func startUtmGuestToolsFetch(
+        errors: ErrorPresenter,
+        onComplete: @escaping @MainActor () -> Void
+    ) {
+        if UtmGuestToolsCache.isReady {
+            // 已缓存 (含 legacy migrate 命中): 直接 onComplete, 不弹 dialog
+            onComplete()
+            return
+        }
+        utmGuestToolsFetchState = UtmGuestToolsFetchState(receivedBytes: 0, totalBytes: nil)
+        Task { @MainActor in
+            do {
+                _ = try await UtmGuestToolsCache.ensureCached { p in
+                    Task { @MainActor [self] in
+                        self.utmGuestToolsFetchState = UtmGuestToolsFetchState(
+                            receivedBytes: p.receivedBytes,
+                            totalBytes: p.totalBytes
+                        )
+                    }
+                }
+                self.utmGuestToolsFetchState = nil
+                onComplete()
+            } catch {
+                self.utmGuestToolsFetchState = nil
                 errors.present(error)
             }
         }

@@ -50,8 +50,11 @@ public enum UtmGuestToolsCache {
         HVMPaths.utmGuestToolsCacheDir.appendingPathComponent("utm-guest-tools.iso")
     }
 
-    /// 缓存就绪判定 (存在 + 大小 ≥ 50MB sanity; 上游 ISO 实际 ~120MB)
+    /// 缓存就绪判定 (存在 + 大小 ≥ 50MB sanity; 上游 ISO 实际 ~120MB).
+    /// 第一次调用时触发一次 legacy mv (老 cache `cache/spice-tools/utm-guest-tools.iso`
+    /// → 新路径), 后续 access 不再做 IO 副作用.
     public static var isReady: Bool {
+        _ = _legacyMigrateOnce
         let path = cachedISOURL.path
         let fm = FileManager.default
         guard let attrs = try? fm.attributesOfItem(atPath: path),
@@ -60,6 +63,26 @@ public enum UtmGuestToolsCache {
         else { return false }
         return true
     }
+
+    /// 一次性 lazy 迁移 SpiceToolsCache 时代的老 cache 路径
+    /// (~/Library/Application Support/HVM/cache/spice-tools/utm-guest-tools.iso) 到新
+    /// 路径. static let 闭包保证整个进程只跑一次; 失败 (跨卷 / 权限 / 已被改) 不抛出,
+    /// 下次进程启动再试 — legacy 文件留在原地不丢.
+    private static let _legacyMigrateOnce: Void = {
+        let fm = FileManager.default
+        let legacyURL = HVMPaths.appSupport
+            .appendingPathComponent("cache/spice-tools/utm-guest-tools.iso")
+        let newURL = HVMPaths.utmGuestToolsCacheDir
+            .appendingPathComponent("utm-guest-tools.iso")
+        guard fm.fileExists(atPath: legacyURL.path),
+              !fm.fileExists(atPath: newURL.path) else { return }
+        do {
+            try HVMPaths.ensure(HVMPaths.utmGuestToolsCacheDir)
+            try fm.moveItem(at: legacyURL, to: newURL)
+        } catch {
+            // legacy 仍在原处, 下次进程再试; user 也可手动 mv.
+        }
+    }()
 
     /// 已缓存文件大小 (bytes); 不存在返 nil
     public static var cachedSizeBytes: Int64? {
@@ -97,6 +120,7 @@ public enum UtmGuestToolsCache {
     public static func ensureCached(
         progress: @escaping @Sendable (Progress) -> Void
     ) async throws -> URL {
+        _ = _legacyMigrateOnce
         if isReady {
             return cachedISOURL
         }

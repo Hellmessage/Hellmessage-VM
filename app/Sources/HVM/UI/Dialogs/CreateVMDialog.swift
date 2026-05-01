@@ -657,9 +657,17 @@ struct CreateVMDialog: View {
 
     private func createAction() {
         creating = true
-        // 注: virtio-win.iso 拉取已默认禁用 — UTM Guest Tools ISO 已替代它的角色
-        // (UtmGuestToolsCache 由其他地方触发拉取). 后续若恢复 virtio-win 通路, 在
-        // guestOS==.windows 分支重新串 model.startVirtioWinFetch(errors:) {...} 即可.
+        // Win VM: 创建前确保 UTM Guest Tools ISO 就绪 (含 ARM64 native vdagent +
+        // viogpudo + qemu-ga). 已缓存即立即继续; 否则前台 UtmGuestToolsFetchDialog
+        // 模态进度. 失败 errors.present 不继续, user 可重试.
+        // 注: virtio-win.iso 拉取已默认禁用; 后续若恢复, 在 windows 分支再串
+        // model.startVirtioWinFetch(errors:) {...} 即可.
+        if guestOS == .windows {
+            model.startUtmGuestToolsFetch(errors: errors) {
+                self.proceedWithBundleCreation()
+            }
+            return
+        }
         proceedWithBundleCreation()
     }
 

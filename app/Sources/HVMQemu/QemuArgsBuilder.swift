@@ -276,7 +276,10 @@ public enum QemuArgsBuilder {
         //   用 2-byte length-prefix, 跟 socket_vmnet 不兼容 — connect 上但 frame 序列化失败.
         // **bus= 关键**: 必须挂到 pcie-root-port (rp_N) 走 PCIe native, 不能落 pcie.0 legacy
         //   bridge — 见上节 "PCIe root ports" 注释.
-        var vmnetSocketPaths: [String] = []
+        // vmnetSocketPaths 当前固定空: socket_vmnet 走系统级 launchd daemon, QEMU 用
+        // -netdev stream 直接 connect daemon socket 不再需要父进程透传 fd. 字段保留
+        // 在 BuildResult 里作向前兼容 API.
+        let vmnetSocketPaths: [String] = []
         for (idx, net) in cfg.networks.enumerated() {
             let netId = "net\(idx)"
             // NIC 挂哪个 root port: 按 networks 顺序占 rp0..rp3; 超 4 张回落 pcie.0
@@ -311,8 +314,6 @@ public enum QemuArgsBuilder {
                 args += ["-device", deviceOpts]
             }
         }
-        _ = vmnetSocketPaths  // 避免 unused warning, 字段保留向前兼容 BuildResult API
-
         // ---- 显示 + 输入 ----
         // QEMU virt 机器默认无显卡, 只有 serial/parallel console; 必须显式加 GPU 才能出 graphical UEFI/OS UI.
         // Linux: virtio-gpu-pci (内核自带 driver, 加速); Windows ARM64: 必须只挂 ramfb,
