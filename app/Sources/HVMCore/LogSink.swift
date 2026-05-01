@@ -28,8 +28,12 @@ public final class LogSink {
 
     /// 日志保留天数, 超过的 .log 文件自动删
     public static let retentionDays: Int = 14
-    /// 轮询间隔. 太小没意义 (OSLogStore 内部已有缓冲), 太大用户感觉日志延迟
-    private static let pollIntervalSec: UInt64 = 5
+    /// 轮询间隔. OSLogStore.getEntries 是同步阻塞 syscall, 持系统级 unified logging
+    /// 锁; 长跑进程 (GUI / VMHost) entries 多, 单次扫描 50-200ms, 期间 main thread
+    /// 上的 os.Logger 调用会短暂阻塞 → MTKView draw 调度被 starve → 用户看到 framebuffer
+    /// 周期卡顿. 调到 30s: 文件 .log 滞后 30s 用户接受 (紧急排查用 Console.app 看实时
+    /// OSLog), 卡顿频率从 12/min 降到 2/min, 单次 spike 被 ProMotion displayLink 平滑掉.
+    private static let pollIntervalSec: UInt64 = 30
 
     private var started = false
     private var pollTask: Task<Void, Never>?

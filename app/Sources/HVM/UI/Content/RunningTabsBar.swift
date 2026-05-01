@@ -27,7 +27,10 @@ struct RunningTabsBar: View {
             .padding(.horizontal, HVMSpace.sm)
             .padding(.vertical, HVMSpace.xs)
         }
-        .frame(maxWidth: .infinity)
+        // maxHeight: .infinity + bg 在最外层: NSHostingView 高度由约束固定 38pt,
+        // SwiftUI ScrollView 内容只有 ~32pt, 不填满则差额露出 DetailContainerView
+        // 黑色背景 (一条窄横线, 随窗口宽度变化). 强制 ScrollView 填满 host.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(HVMColor.bgSidebar)
     }
 

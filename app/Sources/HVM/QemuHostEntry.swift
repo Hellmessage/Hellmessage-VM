@@ -212,20 +212,10 @@ public enum QemuHostEntry {
             QemuHostState.shared.qmpClient = client
             fputs("HVMHost(qemu): QMP 已连接\n", stderr)
 
-            // 6.0 EFI Shell 自动注入 (仅 windows 装机阶段). EDK2 patched firmware 启动后落到
-            // EFI Shell, 自动注入 fs0:\efi\boot\bootaa64.efi 让 Win11 ISO 直接启动到 Setup.
-            // 装完后 bootFromDiskOnly=true, ISO 不挂, EDK2 自动 boot Windows from disk, 不需注入.
-            // 多一道 NVRAM 探测在 injectBootISO 内: 即便 user 没把 bootFromDiskOnly 切回
-            // true, 只要 Win Boot Manager 已写进 efi-vars.fd, EDK2 直接 boot Windows 进
-            // OOBE/logon, 这时 spam Enter 会命中 OOBE 焦点元素 → user 看到 "支持" 反复点亮.
-            if config.guestOS == .windows, !config.bootFromDiskOnly {
-                let nvramURL = BundleLayout.nvramURL(bundleURL)
-                fputs("HVMHost(qemu): Win11 装机模式, 启动 EFI Shell 自动注入 (后台 6s 后开始)\n", stderr)
-                Task { @MainActor in
-                    await EFIShellAutoboot.injectBootISO(via: client, nvramURL: nvramURL)
-                    fputs("HVMHost(qemu): EFI Shell 自动注入完成\n", stderr)
-                }
-            }
+            // (6.0 EFI Shell auto-inject 已删除: bootmgfw "Press any key to boot from CD or DVD"
+            // 倒计时 5s 内 user 手动按一次任意键即可进 Setup, 跟物理 USB 装机一致, 不再
+            // host 端 spam Enter — 之前 spam 在 NVRAM 探测漏判 / Win 装好但 user 没切
+            // bootFromDiskOnly 这种边缘场景下会砸到 OOBE 让焦点元素被反复 click.)
 
             // 6.1 thumbnail 抓帧定时器 (M-4): 与 VZ 路径周期一致, 抓 → 写 bundle/meta/thumbnail.png
             QemuHostState.shared.startThumbnailTimer()
@@ -263,7 +253,7 @@ public enum QemuHostEntry {
                 for await event in client.events {
                     fputs("HVMHost(qemu): [event] \(event.name)\n", stderr)
                     if event.name == "SHUTDOWN" {
-                        // SHUTDOWN 之后 QEMU 通常自动 exit (-no-reboot 加持下), 由 process observer 收尾
+                        // SHUTDOWN 之后 QEMU 自动 exit (ACPI poweroff 路径), 由 process observer 收尾
                         return
                     }
                 }

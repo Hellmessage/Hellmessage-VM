@@ -129,8 +129,10 @@ public enum QemuArgsBuilder {
         args += ["-m", "\(cfg.memoryMiB)M"]
         args += ["-name", cfg.displayName]
 
-        // 不让 QEMU 收到 ACPI reboot 后自旋重启 — system_reset 直接 exit, 与 hvm-cli 语义一致
-        args += ["-no-reboot"]
+        // 不加 -no-reboot: guest reboot 走 QEMU system_reset (HW reset), host 子进程不退,
+        // QEMU iosurface backend 重新 advertise SURFACE_NEW, fanout reconnectChannel 后
+        // 主嵌入 view 自然恢复画面 (Win 装机第一阶段后 reboot 进 OOBE 这条路依赖 reset).
+        // ACPI 真 shutdown 仍走 powerdown 路径 — QEMU 进程退出, host 子进程 detect 后 tearDown.
         // 关人类 monitor (仅 QMP 控制, 防 stdio 干扰)
         args += ["-monitor", "none"]
 
@@ -230,14 +232,14 @@ public enum QemuArgsBuilder {
 
         // ---- 网络 ----
         // bridged / shared 走系统级 socket_vmnet daemon (launchd 拉起, 见 scripts/install-vmnet-helper.sh).
-        // socket_vmnet daemon 协议: 4-byte length prefix per packet, 与 QEMU 的
-        // -netdev stream (裸字节流) 不匹配. 也不能走 socket_vmnet_client wrapper,
-        // 因为 wrapper 只透传单一 fd, 不支持多 NIC.
-        // 实现: 父进程 (HVMHost / hvm-dbg) 自己 connect 每个 daemon, 用 posix_spawn 把
-        // N 个 fd 落到子进程的 fd 3, 4, 5...; QEMU argv 写 -netdev socket,id=netN,fd=K.
-        // 这是 lima / colima 真实做法, 见 lima pkg/driver/qemu/qemu_driver.go fd_connect.
-        // BuildResult.vmnetSocketPaths 给调用方 daemon socket 列表, 顺序 = fd 3..3+N-1.
-        let vmnetFdBase: Int32 = 3
+        // **协议关键**: socket_vmnet daemon 用 4-byte length-prefix framing, 这恰好跟 QEMU
+        //   `-netdev stream,addr.type=unix,addr.path=<sock>` 的 framing 一致 (lima / hell-vm 同款).
+        // **不要**用 `-netdev socket,fd=K`: 那是 QEMU 早期 VM-to-VM multicast netdev,
+        //   用 2-byte length-prefix, 跟 socket_vmnet 不兼容 — connect 上但 frame 序列化失败,
+        //   guest DHCP request 发出去 daemon 解析失败丢弃, 反向 daemon 发来的 frame guest 也读不了.
+        //   (历史遗留: 之前 hvm-mac 这条路径错用 socket+fd, 实测 guest 拿 169.254 APIPA fallback.)
+        // QEMU 自己 connect unix socket → fd 透传机制 (posix_spawn dup2) 完全不需要,
+        //   BuildResult.vmnetSocketPaths 保留为空 (老接口, 调用方 / Sidecar 兼容代码会跳过透传路径).
         var vmnetSocketPaths: [String] = []
         for (idx, net) in cfg.networks.enumerated() {
             let netId = "net\(idx)"
@@ -255,9 +257,7 @@ public enum QemuArgsBuilder {
                                 "请跑: sudo scripts/install-vmnet-helper.sh \(iface)"
                     ))
                 }
-                let fd = vmnetFdBase + Int32(vmnetSocketPaths.count)
-                vmnetSocketPaths.append(sockPath)
-                args += ["-netdev", "socket,id=\(netId),fd=\(fd)"]
+                args += ["-netdev", "stream,id=\(netId),addr.type=unix,addr.path=\(sockPath)"]
                 args += ["-device", "virtio-net-pci,netdev=\(netId),mac=\(net.macAddress)"]
             case .shared:
                 let sockPath = VmnetDaemonPaths.sharedSocket
@@ -268,12 +268,11 @@ public enum QemuArgsBuilder {
                                 "请跑: sudo scripts/install-vmnet-helper.sh"
                     ))
                 }
-                let fd = vmnetFdBase + Int32(vmnetSocketPaths.count)
-                vmnetSocketPaths.append(sockPath)
-                args += ["-netdev", "socket,id=\(netId),fd=\(fd)"]
+                args += ["-netdev", "stream,id=\(netId),addr.type=unix,addr.path=\(sockPath)"]
                 args += ["-device", "virtio-net-pci,netdev=\(netId),mac=\(net.macAddress)"]
             }
         }
+        _ = vmnetSocketPaths  // 避免 unused warning, 字段保留向前兼容 BuildResult API
 
         // ---- 显示 + 输入 ----
         // QEMU virt 机器默认无显卡, 只有 serial/parallel console; 必须显式加 GPU 才能出 graphical UEFI/OS UI.
