@@ -226,14 +226,17 @@ public enum QemuArgsBuilder {
                 args += ["-drive", "if=none,id=cdrom_unat,media=cdrom,file=\(unattendPath),readonly=on"]
                 args += ["-device", "usb-storage,drive=cdrom_unat,id=cdrom_unat_dev,removable=true,bus=xhci.0"]
             }
-            // virtio-win 驱动 ISO: usb-storage 第三 cdrom (装机看不到 virtio-blk 主盘必经)
-            if let virtioWinPath = inputs.virtioWinISOPath {
-                args += ["-drive", "if=none,id=cdrom_vio,media=cdrom,file=\(virtioWinPath),readonly=on"]
-                args += ["-device", "usb-storage,drive=cdrom_vio,id=cdrom_vio_dev,removable=true,bus=xhci.0"]
-            }
-            // UTM Guest Tools ISO: usb-storage 第四 cdrom (含 ARM64 native vdagent +
-            // utmapp 自家 viogpudo, OOBE FirstLogonCommands 扫盘符跑 NSIS installer 装).
-            // 探测条件 ` for %D in (...) do for %F in (%D:\\utm-guest-tools-*.exe) do ...`,
+            // virtio-win 驱动 ISO 不再挂 — UTM Guest Tools NSIS installer 自带所有 ARM64
+            // virtio driver (vioserial/Balloon/viostor/vioscsi/NetKVM/viogpudo/...) +
+            // vdservice + vdagent.exe, single source. 装机阶段主硬盘走 -device nvme
+            // (Win 自带 inbox driver 看到), 不需要 virtio-blk; OOBE 阶段跑 utm-guest-tools
+            // /S 装包 install 全部 driver + service, 之后 shutdown /r /t 10 自动重启生效.
+            // (HVMQemu.virtioWinISOPath 字段保留作 fallback 入口, 但 QemuHostEntry 默认传 nil.)
+            _ = inputs.virtioWinISOPath
+            // UTM Guest Tools ISO: usb-storage 第三 cdrom (含 ARM64 native vdagent +
+            // utmapp 自家 viogpudo + 完整 virtio driver 集合, OOBE FirstLogonCommands 扫盘符
+            // 跑 NSIS installer 装). 探测条件:
+            //   for %D in (...) do for %F in (%D:\\utm-guest-tools-*.exe) do ...
             // 没挂这条 ISO 时整条 cmd noop, 不影响 OOBE 流程.
             if let utmGuestToolsPath = inputs.utmGuestToolsISOPath {
                 args += ["-drive", "if=none,id=cdrom_utm,media=cdrom,file=\(utmGuestToolsPath),readonly=on"]

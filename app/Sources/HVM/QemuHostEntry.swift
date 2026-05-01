@@ -50,16 +50,14 @@ public enum QemuHostEntry {
         // 清残留 socket (上次崩溃留的会让 QEMU bind 失败)
         try? FileManager.default.removeItem(at: qmpSocketURL)
 
-        // 2. virtio-win 路径解析 (windows guest 才用; 缓存就绪才挂第二 cdrom).
-        //    创建 Win VM 时 GUI 会前台触发 ensureCached; 这里不做下载, 缺则降级.
-        var virtioWinPath: String? = nil
+        // 2. virtio-win 路径强制 nil — Windows guest 现在走 UTM Guest Tools ISO single
+        //    source. UTM NSIS installer (utm-guest-tools-*.exe /S) 自带所有 ARM64 virtio
+        //    driver + vdservice + vdagent.exe, 不需要 stock virtio-win.iso 第二 cdrom.
+        //    主硬盘走 -device nvme (Win 自带 inbox driver 看到, 不需要 virtio-blk).
+        //    VirtioWinCache 模块保留作 fallback 入口, 但默认不 wire (减少 cdrom slot 冲突).
+        let virtioWinPath: String? = nil
         if config.guestOS == .windows {
-            if VirtioWinCache.isReady {
-                virtioWinPath = VirtioWinCache.cachedISOURL.path
-            } else {
-                fputs("HVMHost(qemu): ⚠ virtio-win.iso 未缓存, Win 装机将看不到 virtio-blk 盘\n", stderr)
-                fputs("  GUI 创建向导会自动下载; CLI 创建后请用 GUI Cache → Download virtio-win\n", stderr)
-            }
+            _ = VirtioWinCache.isReady  // 字段保留, 当前不读取
             // 2.1 NVRAM (Win 双 pflash 必需 RW vars 文件); 不存在则从 EDK2 vars 模板初始化一次.
             // 老 bundle (本特性前创建) 没初始化 nvram, 这里兜底; 新 bundle 创建时 CreateVMDialog 也会预置.
             let nvramURL = BundleLayout.nvramURL(bundleURL)

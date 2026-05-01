@@ -163,6 +163,13 @@ public enum WindowsUnattend {
             // 探测失败 (没挂 ISO / 缓存缺) 时整条 cmd noop, 不阻塞 OOBE.
             let cmd = "cmd /c for %D in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do @for %F in (%D:\\utm-guest-tools-*.exe) do @if exist %F start /wait %F /S"
             commands.append((cmd, "HVM auto-install UTM Guest Tools (ARM64 vdagent + viogpudo for dynamic resize)"))
+            // utm-guest-tools NSIS /S 装完后 SetRebootFlag = true, 但 silent 模式不弹 dialog
+            // 也不主动 reboot. 我们在装包后 10 秒倒计时后自动 reboot 让新 driver / service
+            // (viogpudo / vdservice / vdagent.exe) 真正加载生效, 否则 user 进 desktop 看到的
+            // 仍是 BasicDisplay + viogpudo 没启用 → resize 不工作.
+            // /f = force close apps, /t 10 = 10 秒后重启 (给 NSIS installer 收尾时间).
+            let reboot = "cmd /c shutdown /r /f /t 10"
+            commands.append((reboot, "HVM auto-reboot to activate UTM driver / vdservice"))
         }
 
         var oobeBlock = ""

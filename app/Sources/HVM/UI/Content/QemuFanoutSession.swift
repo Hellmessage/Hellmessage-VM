@@ -126,10 +126,15 @@ final class QemuFanoutSession {
     }
 
     /// 启动连接 + 事件循环. 不阻塞调用线程. 多次调用安全 (第二次无效).
+    /// forwarder.connect() **不**在这里调 — 有 race: CLI 启动 VM 后立即 open GUI,
+    /// QMP input socket 可能还没 bind (QEMU 启动有 ms 级延迟), forwarder.connect()
+    /// 一次性同步 connect 失败后 silent swallow → connected=false 永久 → mouse/key
+    /// 事件全丢. 改成 channel.connect 成功后才调 forwarder.connect (channel 自带
+    /// 50×0.1s 重试, channel ready 时 QMP input socket 一定已 bind, 跟 control QMP /
+    /// console / spice / iosurface 同时 bind).
     func start() {
         guard connectTask == nil else { return }
         log.info("start: retry connecting HDP channel for vm=\(self.vmID.uuidString)")
-        forwarder.connect()
         startThumbnailTimer()
         runConnectLoop()
     }
@@ -148,6 +153,9 @@ final class QemuFanoutSession {
 
     /// 异步 connect 重试 (最多 5 秒). 成功后启动 eventLoop. start() / reconnectChannel()
     /// 共用. 相同 socket 路径; eventLoop 重启时 self.channel 已是新实例.
+    /// channel ready 后串行调 forwarder.connect() — 那时 QMP input socket 一定已 bind
+    /// (QEMU 启动时同时 bind 所有 socket, channel.connect 成功 = 所有 socket ready).
+    /// 这避免 CLI 启动 VM → 立即 open GUI → forwarder race connect 失败的 stuck bug.
     private func runConnectLoop() {
         let channel = self.channel
         connectTask = Task.detached(priority: .userInitiated) { [weak self] in
@@ -155,7 +163,10 @@ final class QemuFanoutSession {
                 do {
                     try channel.connect()
                     log.info("HDP channel connect OK on attempt \(attempt)")
-                    await MainActor.run { self?.startEventLoop() }
+                    await MainActor.run {
+                        self?.forwarder.connect()
+                        self?.startEventLoop()
+                    }
                     return
                 } catch {
                     if attempt == 0 || attempt == 10 {
