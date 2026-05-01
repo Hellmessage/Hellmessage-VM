@@ -29,7 +29,7 @@ import HVMIPC
 
 public enum HVMHostEntry {
     @MainActor
-    public static func run(bundlePath: String) -> Never {
+    public static func run(bundlePath: String, embeddedInGUI: Bool = false) -> Never {
         let bundleURL = URL(fileURLWithPath: bundlePath)
 
         // 1. 载入 config (共用前置)
@@ -68,24 +68,29 @@ public enum HVMHostEntry {
         case .qemu:
             QemuHostEntry.run(
                 config: config, bundleURL: bundleURL,
-                lock: lock, socketURL: socketURL, startedAt: startedAt
+                lock: lock, socketURL: socketURL, startedAt: startedAt,
+                embeddedInGUI: embeddedInGUI
             )
         case .vz:
             runVZ(
                 config: config, bundleURL: bundleURL,
-                lock: lock, socketURL: socketURL, startedAt: startedAt
+                lock: lock, socketURL: socketURL, startedAt: startedAt,
+                embeddedInGUI: embeddedInGUI
             )
         }
     }
 
     /// VZ 后端流程. 调用方已完成 load/lock/dirs 共用前置.
+    /// `embeddedInGUI=true`: GUI 主进程派生场景, 跳过 menu bar status item (GUI 主进程
+    /// 已有, 避免重复图标). hvm-cli 起 host 时为 false, 装 status item 给用户控制入口.
     @MainActor
     private static func runVZ(
         config: VMConfig,
         bundleURL: URL,
         lock: BundleLock,
         socketURL: URL,
-        startedAt: Date
+        startedAt: Date,
+        embeddedInGUI: Bool
     ) -> Never {
         // 3. NSApplication 启动: accessory 策略 (menu bar 图标 + 离屏 window 给 VZ view)
         let app = NSApplication.shared
@@ -121,7 +126,10 @@ public enum HVMHostEntry {
             HostState.shared.view = view
 
             // 4a-extra. menu bar 状态栏图标. accessory 模式核心入口, 让 user 知道有 VM 在跑.
-            HostState.shared.installStatusItem(displayName: config.displayName)
+            // GUI 派生场景跳过 — GUI 主进程自己有 status item, 避免重复图标.
+            if !embeddedInGUI {
+                HostState.shared.installStatusItem(displayName: config.displayName)
+            }
 
             // 4b. 起 VM
             let handle = VMHandle(config: config, bundleURL: bundleURL)

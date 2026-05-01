@@ -9,6 +9,7 @@ import HVMBundle
 import HVMCore
 import HVMInstall
 import HVMIPC
+import HVMDisplayQemu
 
 @MainActor
 @Observable
@@ -40,6 +41,25 @@ public final class AppModel {
     private var refreshCache: [String: (mtime: Date, item: VMListItem)] = [:]
     /// 当前嵌入主窗口右栏展示的 VM (同时只有一个)
     public var embeddedID: UUID?
+    /// QEMU 后端 VM 的 fanout session 缓存. 一个 VM 一个, 由主窗口嵌入路径或
+    /// detached 独立窗口需要 framebuffer 时 lazy 创建; 当所有 subscriber 都
+    /// 注销 (主窗口切走 + 独立窗口关闭) 时 tearDown.
+    /// 跟 sessions[] 平行: sessions 是 VZ 通路的本进程 VZVirtualMachine,
+    /// qemuFanouts 是 QEMU 通路的 host 子进程 framebuffer 扇出.
+    /// internal: QemuFanoutSession 类型本身 internal, 没必要跨模块暴露.
+    var qemuFanouts: [UUID: QemuFanoutSession] = [:]
+    /// QEMU 后端 VM 当前已弹出的独立窗口 (共存式: 主窗口嵌入仍可同时存在).
+    /// 用 detachedQemuVMs 集合给 SwiftUI 订阅状态变化以更新 detach 按钮 UI;
+    /// 真正持有 controller 的是 detachedQemuWindowControllers (非 @Observable
+    /// 字段, 避免 SwiftUI 订阅 NSWindowController 这种非 Sendable 引用).
+    public var detachedQemuVMs: Set<UUID> = []
+    @ObservationIgnored
+    var detachedQemuWindowControllers: [UUID: DetachedVMWindowController] = [:]
+    /// 由 HVMAppDelegate 在应用启动时注入的 errors / confirms 引用. 独立窗口
+    /// (detached) 里 BottomBar 的 stop/kill 等操作复用主进程同一份 presenter,
+    /// 错误弹窗仍出现在主窗口的 DialogOverlay (而不是 detached 窗口里).
+    @ObservationIgnored
+    public weak var sharedErrors: ErrorPresenter?
     /// 创建向导显隐
     public var showCreateWizard: Bool = false
     /// 正在跑 macOS 装机时的进度. 非 nil → DialogOverlay 显示 InstallDialog 模态
@@ -125,8 +145,17 @@ public final class AppModel {
     /// vmnet daemon 状态 (statusBar chip + popover 用). 启动后自动 2s 轮询.
     public let vmnet = VmnetStatusModel()
 
+    /// 1Hz tick refreshList: 兜底捕获所有 VM 状态切换 (host 子进程退出 / hvm-cli 起停 /
+    /// QEMU 装机后 reboot 自退). refreshList 内部 mtime 缓存保证只在 BundleLock 状态变化
+    /// 时实际更新 list, 1Hz 探测开销可接受.
+    private var stateTickTimer: Timer?
+
     public init() {
         vmnet.startPolling()
+        // AppModel 是 App 全生命周期单例, 不需要 deinit 清 timer (进程退出即销毁).
+        stateTickTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshList() }
+        }
     }
 
     // MARK: - 列表管理
@@ -170,6 +199,15 @@ public final class AppModel {
         } else if selectedID == nil {
             selectedID = list.first?.id
         }
+
+        // QEMU host 子进程退出 (BundleLock 释放, runState→stopped) 后, fanout 上的
+        // channel 已断, detached 窗口若还开着会显示僵尸画面 — 主动拆掉.
+        // 此处依赖 isBusy() 周期性探测 (refreshList 由 sidebar / popover / timer 触发).
+        let staleFanoutIDs = qemuFanouts.keys.filter { id in
+            guard let item = list.first(where: { $0.id == id }) else { return true }
+            return item.runState != "running"
+        }
+        for id in staleFanoutIDs { tearDownQemuFanout(id: id) }
     }
 
     public var selectedItem: VMListItem? {
@@ -239,7 +277,9 @@ public final class AppModel {
         try handle.seekToEnd()
         let proc = Process()
         proc.executableURL = exec
-        proc.arguments = ["--host-mode-bundle", bundleURL.path]
+        // --gui-embedded: 告诉 host 子进程它是被 GUI 主进程派生的, 跳过自己装
+        // menu bar status item (GUI 主进程已有, 避免重复图标).
+        proc.arguments = ["--host-mode-bundle", bundleURL.path, "--gui-embedded"]
         proc.standardOutput = handle
         proc.standardError = handle
         try proc.run()
@@ -478,11 +518,97 @@ public final class AppModel {
         refreshList()
     }
 
-    // MARK: - 嵌入 (M2 唯一显示模式)
+    // MARK: - 嵌入 (M2 VZ 通路唯一显示模式; QEMU 通路走 qemuFanouts)
 
     public func embedInMain(_ id: UUID) {
         guard let s = sessions[id] else { return }
         s.showEmbedded()
         embeddedID = id
+    }
+
+    // MARK: - QEMU fanout / detached 窗口
+
+    /// 确保该 VM 有一个活跃的 fanout session. 不存在则创建 + start; 已存在则原样复用.
+    /// 调用方负责 addSubscriber + (subscribers 全空时) tearDownQemuFanoutIfIdle.
+    /// internal: QemuFanoutSession 类型 internal, API 跟着 internal.
+    func ensureQemuFanout(id: UUID, bundleURL: URL) -> QemuFanoutSession {
+        if let existing = qemuFanouts[id] { return existing }
+        let fanout = QemuFanoutSession(vmID: id, bundleURL: bundleURL)
+        qemuFanouts[id] = fanout
+        // 监听 QEMU host 进程退出 (Win 装机后 reboot / kill / panic 均会触发 channel
+        // 断开). 否则 GUI 停在 "running 黑屏", 必须等下次 refreshList 兜底才切.
+        fanout.onDisconnected = { [weak self, id] in
+            self?.handleQemuFanoutDisconnected(id: id)
+        }
+        fanout.start()
+        return fanout
+    }
+
+    /// fanout channel 断开 (host 子进程退出 / 远端 GOODBYE / IO 错误) 时调.
+    /// 拆 fanout + 关闭 detached 窗口 + 立即 refreshList; 再延迟 500ms 兜底一次,
+    /// 因为 host 进程 fork 退出 → BundleLock 真正 unlock 之间有微秒级 kernel cleanup
+    /// 延迟, 第一次 refreshList 偶发仍读到 isBusy=true (跟 sendIPC 末尾同模式).
+    private func handleQemuFanoutDisconnected(id: UUID) {
+        tearDownQemuFanout(id: id)
+        refreshList()
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            self?.refreshList()
+        }
+    }
+
+    /// VM 停止 / host 子进程退出后, 强制拆掉 fanout + 关闭可能存在的 detached 窗口.
+    /// channel 已断时, view 上仍能显示最后一帧 (renderer 持 mmap), 关 detached 窗口
+    /// 释放该 view 的 mmap 引用; 主窗口的 fanout view 由 DetailContainerView transition
+    /// (.runningRemote → .stopped) 时自动清.
+    public func tearDownQemuFanout(id: UUID) {
+        if let fanout = qemuFanouts.removeValue(forKey: id) {
+            fanout.stop()
+        }
+        closeDetachedQemuWindow(id: id)
+    }
+
+    /// 当 subscriber 计数归零时调用; 若该 VM 仍 running 则什么都不做 (后续可能再开),
+    /// 实际上会在 VM 停止时由 tearDownQemuFanout 强制清理. 这里保留 hook 给将来想做
+    /// "无人查看 → 节省 QMP/socket 资源"的优化, 当前实现是 no-op (保证嵌入和独立窗口
+    /// 之间快速切换不重连 channel, 体验更顺).
+    public func tearDownQemuFanoutIfIdle(id: UUID) {
+        guard let fanout = qemuFanouts[id] else { return }
+        if fanout.activeSubscriberCount == 0 {
+            // 当前策略: 保留, 不立即拆. VM 停止时由 tearDownQemuFanout 兜底.
+            _ = fanout
+        }
+    }
+
+    /// 弹出独立窗口 (共存式: 主窗口嵌入仍可同时存在).
+    /// 已弹出再调一次会把窗口前置 (orderFrontRegardless), 不重复创建.
+    public func openDetachedQemu(id: UUID, item: VMListItem) {
+        if let existing = detachedQemuWindowControllers[id] {
+            existing.window?.makeKeyAndOrderFront(nil)
+            existing.window?.orderFrontRegardless()
+            return
+        }
+        let fanout = ensureQemuFanout(id: id, bundleURL: item.bundleURL)
+        let controller = DetachedVMWindowController(model: self, item: item, fanout: fanout)
+        detachedQemuWindowControllers[id] = controller
+        detachedQemuVMs.insert(id)
+        controller.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// 关闭独立窗口. 由 detach 按钮再点一次 / 窗口 X 按钮 / VM 停止触发.
+    public func closeDetachedQemuWindow(id: UUID) {
+        if let controller = detachedQemuWindowControllers.removeValue(forKey: id) {
+            controller.tearDown()
+        }
+        detachedQemuVMs.remove(id)
+    }
+
+    /// detach 按钮 toggle: 已开就关, 没开就开.
+    public func toggleDetachedQemu(id: UUID) {
+        if detachedQemuWindowControllers[id] != nil {
+            closeDetachedQemuWindow(id: id)
+        } else if let item = list.first(where: { $0.id == id }) {
+            openDetachedQemu(id: id, item: item)
+        }
     }
 }

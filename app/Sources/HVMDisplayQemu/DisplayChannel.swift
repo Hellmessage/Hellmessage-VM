@@ -37,9 +37,14 @@ public final class DisplayChannel: @unchecked Sendable {
     /// SURFACE_NEW 事件载荷.
     /// **fd 生命周期**: shmFD 由 DisplayChannel 接收, 通过本结构传递给消费者.
     /// 消费者拿到后必须执行 `mmap(...)` 并立即 `close(shmFD)`. 不消费就泄漏.
+    /// init 公开是为了让上层 fanout/扇出器在 dup fd 后构造副本派发给多个 subscriber.
     public struct SurfaceArrival: @unchecked Sendable {
         public let info: HDP.SurfaceNew
         public let shmFD: Int32
+        public init(info: HDP.SurfaceNew, shmFD: Int32) {
+            self.info = info
+            self.shmFD = shmFD
+        }
     }
 
     public enum ConnectError: Error, Sendable {

@@ -33,6 +33,15 @@ final class HVMAppDelegate: NSObject, NSApplicationDelegate {
         NSApp.appearance = NSAppearance(named: .darkAqua)
         NSApp.setActivationPolicy(.regular)
 
+        // 启动时杜绝上一次 GUI 异常死亡留下的孤儿 QEMU/swtpm 进程 + stale socket.
+        // 必须在 model.refreshList / 主窗口加载之前: VM list 探测 BundleLock 时, 孤儿
+        // 已被清掉, isBusy 报告才准确. 同步调用, 一般 < 200ms 不阻塞 UI.
+        OrphanReaper.reapOnLaunch()
+
+        // 让 detached QEMU 窗口里的错误弹窗复用主窗口同一份 presenter,
+        // ErrorDialog 仍只在主窗口 DialogOverlay 出现, 体验跟嵌入路径一致.
+        model.sharedErrors = errors
+
         installMainMenu()
 
         // menu bar 图标启动即创建, 跟主窗口可见性独立 — 用户打开 App 立刻能在右上角看到
@@ -194,11 +203,10 @@ final class HVMAppDelegate: NSObject, NSApplicationDelegate {
 
     /// snapshot model + IP + 缩略图, 装配 SwiftUI view
     private func makePopoverView() -> MenuPopoverView {
+        // 走 item.runState (BundleLock 探测) 而不是 sessions[] (后者只含 VZ 通路本进程
+        // session, QEMU 后端跑在 host 子进程不入 sessions, hvm-cli 起的 VM 也不入).
         let running = model.list
-            .compactMap { item -> AppModel.VMListItem? in
-                guard model.sessions[item.id] != nil else { return nil }
-                return item
-            }
+            .filter { $0.runState == "running" }
             .sorted { $0.displayName.lowercased() < $1.displayName.lowercased() }
 
         let rows = running.map { item in

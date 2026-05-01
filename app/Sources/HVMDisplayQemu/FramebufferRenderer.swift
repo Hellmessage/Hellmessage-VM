@@ -21,6 +21,16 @@ import MetalKit
 import Darwin
 import HVMCore
 
+/// MTLBuffer.makeBuffer(deallocator:) 的 deallocator closure 在 Swift 6 SDK 里
+/// 类型为 `@Sendable @escaping (UnsafeMutableRawPointer, Int) -> Void`. 直接 capture
+/// `UnsafeMutableRawPointer` 触发 non-Sendable warning. 包成 @unchecked Sendable
+/// wrapper 让编译器跳过检查 — mmap 返回的 raw pointer 跨线程访问本身是 race-free
+/// (kernel mapping 不变), munmap 也是线程安全 syscall.
+fileprivate struct HVMFbShmRegion: @unchecked Sendable {
+    let raw: UnsafeMutableRawPointer
+    let size: Int
+}
+
 /// 单 VM 一个实例; 跟 FramebufferHostView 1:1 绑定.
 public final class FramebufferRenderer: NSObject {
 
@@ -157,14 +167,13 @@ public final class FramebufferRenderer: NSObject {
         // bytesNoCopy: MTLBuffer 直接 view 自 mmap 内存; deallocator 在 GPU 释放
         // 最后一个引用后 munmap. PROT_READ|WRITE 是因为 .storageModeShared 要求
         // 可写映射 (Metal driver 内部可能写 cache control bits), 即便我们只读.
-        let savedRaw  = raw
-        let savedSize = size
+        let region = HVMFbShmRegion(raw: raw, size: size)
         guard let buf = device.makeBuffer(
             bytesNoCopy: raw,
             length: size,
             options: .storageModeShared,
             deallocator: { _, _ in
-                munmap(savedRaw, savedSize)
+                munmap(region.raw, region.size)
             }
         ) else {
             munmap(raw, size)
@@ -201,18 +210,17 @@ public final class FramebufferRenderer: NSObject {
         currentWidth = 0; currentHeight = 0; currentStride = 0
     }
 
-    /// CGDataProvider 的 release callback 必须是 @convention(c), 不能 capture
-    /// Swift 引用. 用 BufferBox 桥: passRetained 进 opaque ptr, release 时
-    /// takeRetainedValue 平衡, 让 ARC 自然 dealloc MTLBuffer.
-    private final class BufferBox {
-        let buf: MTLBuffer
-        init(_ b: MTLBuffer) { self.buf = b }
-    }
-
-    /// 抓一张当前 framebuffer 的 CGImage (零拷贝, view 自 MTLBuffer 内存).
-    /// 调用方拿到 CGImage 后可在任意线程做 PNG encode / downscale: CGImage
-    /// 用 CGDataProvider 持有 BufferBox 引用, 即便 main 之后 unbind / 切 surface,
-    /// 老 buffer 也活到 CGImage 释放才 munmap, 不会读 dangling pointer.
+    /// 抓一张当前 framebuffer 的 CGImage. **不再零拷贝** — 改成 main actor 同步
+    /// memcpy 一份到独立 Data, 返回基于 Data 的 CGImage.
+    ///
+    /// 设计权衡:
+    /// - 旧路径 (零拷贝): CGImage 持 MTLBuffer 强引用, bg thread PNG encode 时直接
+    ///   读 mmap 共享内存 → 跟 GPU 当前帧渲染抢同一物理页 cache → 用户报每 ~10s
+    ///   鼠标卡顿一次 (thumbnail timer 间隔). cache contention.
+    /// - 新路径 (memcpy): main thread 一次性 ~8MB memcpy (1080p BGRA) ~1ms, bg thread
+    ///   的 downscale / PNG encode 完全访问独立 Data 副本, 不再触发 mmap → GPU
+    ///   渲染不被打扰. 1ms main thread 抖动远小于 cache contention 引起的 100ms+ 视觉
+    ///   stutter, 综合 UX 提升明显.
     /// nil = 还没绑 surface.
     @MainActor
     public func snapshotCGImage() -> CGImage? {
@@ -221,18 +229,10 @@ public final class FramebufferRenderer: NSObject {
             return nil
         }
         let len = currentStride * currentHeight
-        let opaqueBox = Unmanaged.passRetained(BufferBox(buf)).toOpaque()
-        guard let provider = CGDataProvider(
-            dataInfo: opaqueBox,
-            data: buf.contents(),
-            size: len,
-            releaseData: { ctx, _, _ in
-                guard let ctx else { return }
-                _ = Unmanaged<BufferBox>.fromOpaque(ctx).takeRetainedValue()
-            }
-        ) else {
-            // CGDataProvider 创建失败也得平衡 retain
-            _ = Unmanaged<BufferBox>.fromOpaque(opaqueBox).takeRetainedValue()
+        // memcpy framebuffer 到独立 Data; CGImage 通过 CGDataProvider(data:) 持有 Data,
+        // bg thread 渲染 thumbnail 时只摸这份副本, 跟 GPU mmap 完全脱钩.
+        let copy = Data(bytes: buf.contents(), count: len)
+        guard let provider = CGDataProvider(data: copy as CFData) else {
             return nil
         }
         let cs = CGColorSpaceCreateDeviceRGB()

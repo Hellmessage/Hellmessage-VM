@@ -117,9 +117,25 @@ public enum WindowsUnattend {
             // ARM64 Windows: virtio-win.iso 不带 ARM64 MSI, 走 inf 分发.
             // 1) certutil 把 Red Hat 代码签名证书装进 TrustedPublisher (否则 inf 因证书链不受信任被拒).
             // 2) pnputil /add-driver /subdirs /install 递归扫所有 inf, 按 OS 架构过滤只装 ARM64 + 装驱动.
-            // 探测条件: %D:\NetKVM 目录存在 (比 MSI 名稳, 不受 virtio-win 版本变化影响).
-            // XML 里 & 必须 escape 成 &amp; (cmd 多命令分隔符).
-            let cmd = "cmd /c for %D in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do @if exist %D:\\NetKVM (certutil -addstore -f TrustedPublisher %D:\\cert\\*.cer &amp; pnputil /add-driver %D:\\ /subdirs /install)"
+            //    实测 virtio-win-0.1.285 顶层有 NetKVM 目录, 内含 \NetKVM\w11\ARM64\netkvm.inf.
+            // 3) pnputil /scan-devices 强制 PnP manager 重新枚举设备. OOBE 阶段 NIC PCI 设备早就
+            //    advertise 了, 但只有装完驱动才有 PnP 绑定; scan-devices 让首登登就有网, 不必 reboot.
+            // 4) 全程把 stdout / stderr redirect 到 C:\HVM-virtio-install.log: 装失败时 user
+            //    能直接看 log 知道是 certutil 拒签 / pnputil 拒载 / 还是别的.
+            // 探测条件保持 %D:\NetKVM (跟 hell-vm 一致, 当前 virtio-win.iso 顶层结构稳定).
+            // XML 里 & 必须 escape 成 &amp;, > 必须 escape 成 &gt; (cmd 重定向 / 多命令分隔符).
+            let log = "C:\\HVM-virtio-install.log"
+            let cmd = """
+            cmd /c \
+            echo === HVM virtio-install %DATE% %TIME% === &gt; \(log) 2&gt;&amp;1 \
+            &amp; for %D in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do @if exist %D:\\NetKVM ( \
+            echo --- found virtio-win at %D: --- &gt;&gt; \(log) \
+            &amp; certutil -addstore -f TrustedPublisher %D:\\cert\\*.cer &gt;&gt; \(log) 2&gt;&amp;1 \
+            &amp; pnputil /add-driver %D:\\ /subdirs /install &gt;&gt; \(log) 2&gt;&amp;1 \
+            ) \
+            &amp; echo --- scan-devices --- &gt;&gt; \(log) \
+            &amp; pnputil /scan-devices &gt;&gt; \(log) 2&gt;&amp;1
+            """.replacingOccurrences(of: "\n", with: "")
             oobeBlock = """
 
               <settings pass="oobeSystem">

@@ -81,6 +81,20 @@ struct DetailTopBar: View {
                 StatusBadge(state: displayState)
             }
             Spacer()
+            // QEMU 后端独立窗口 toggle: 仅 .qemu engine + running 时显示.
+            // 共存式 (CLAUDE.md / 设计决策): 主窗口嵌入 + detached 独立窗口可同时存在.
+            if item.config.engine == .qemu, displayState == .running {
+                let detached = model.detachedQemuVMs.contains(item.id)
+                Button {
+                    model.toggleDetachedQemu(id: item.id)
+                } label: {
+                    Image(systemName: detached
+                          ? "rectangle.on.rectangle.fill"
+                          : "rectangle.on.rectangle")
+                }
+                .buttonStyle(IconButtonStyle())
+                .help(detached ? "关闭独立窗口" : "弹出到独立窗口")
+            }
         }
         .padding(.horizontal, HVMSpace.xl)
         .padding(.vertical, HVMSpace.md)
@@ -205,11 +219,31 @@ struct StoppedContentView: View {
             .buttonStyle(GhostButtonStyle())
             .help("Show in Finder")
 
-            Button(role: .destructive) { deleteAction() } label: {
-                Text("Delete")
+            // 主操作 (Start / Install) 占据顶部最显眼位置. 装机未完成走 Install,
+            // 装完 / 非 macOS 走 Start.
+            if needsInstall {
+                Button(action: installAction) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 12))
+                        Text("Install")
+                    }
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(item.config.macOS?.ipsw == nil)
+                .keyboardShortcut(.return, modifiers: [.command])
+                .help("跑 VZMacOSInstaller 装 macOS 到主盘. 装完此按钮变为 Start")
+            } else {
+                Button(action: startAction) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 11))
+                        Text("Start")
+                    }
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .keyboardShortcut(.return, modifiers: [.command])
             }
-            .buttonStyle(GhostButtonStyle(destructive: true))
-            .help("Move to Trash")
         }
     }
 
@@ -603,36 +637,20 @@ struct StoppedContentView: View {
                 }
             }
 
-            if needsInstall {
-                Button(action: installAction) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "arrow.down.circle.fill")
-                            .font(.system(size: 12))
-                        Text("Install")
-                    }
+            if !needsInstall, item.config.installerISO != nil, !item.config.bootFromDiskOnly {
+                Button(action: bootFromDiskAction) {
+                    Text("Boot From Disk")
                 }
-                .buttonStyle(PrimaryButtonStyle())
-                .disabled(item.config.macOS?.ipsw == nil)
-                .keyboardShortcut(.return, modifiers: [.command])
-                .help("跑 VZMacOSInstaller 装 macOS 到主盘. 装完此按钮变为 Start")
-            } else {
-                if item.config.installerISO != nil && !item.config.bootFromDiskOnly {
-                    Button(action: bootFromDiskAction) {
-                        Text("Boot From Disk")
-                    }
-                    .buttonStyle(GhostButtonStyle())
-                    .help("装完 OS 后切到只从硬盘启动")
-                }
-                Button(action: startAction) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 11))
-                        Text("Start")
-                    }
-                }
-                .buttonStyle(PrimaryButtonStyle())
-                .keyboardShortcut(.return, modifiers: [.command])
+                .buttonStyle(GhostButtonStyle())
+                .help("装完 OS 后切到只从硬盘启动")
             }
+
+            // 危险操作 (Delete) 放最右, 走 ConfirmDialog 弹窗确认避免误触.
+            Button(role: .destructive) { deleteAction() } label: {
+                Text("Delete")
+            }
+            .buttonStyle(GhostButtonStyle(destructive: true))
+            .help("将虚拟机 bundle 移到废纸篓")
         }
     }
 
@@ -713,12 +731,21 @@ struct StoppedContentView: View {
     }
 
     private func deleteAction() {
-        do {
-            var resultURL: NSURL?
-            try FileManager.default.trashItem(at: item.bundleURL, resultingItemURL: &resultURL)
-            model.refreshList()
-        } catch {
-            errors.present(error)
+        confirms.present(ConfirmDialogModel(
+            title: "删除虚拟机",
+            message: "将 \"\(item.displayName)\" 移到废纸篓? bundle 整体 (主盘 / 数据盘 / config / snapshots) 一并移除, 可从废纸篓恢复。",
+            confirmTitle: "删除",
+            cancelTitle: "取消",
+            destructive: true
+        )) { confirmed in
+            guard confirmed else { return }
+            do {
+                var resultURL: NSURL?
+                try FileManager.default.trashItem(at: item.bundleURL, resultingItemURL: &resultURL)
+                model.refreshList()
+            } catch {
+                errors.present(error)
+            }
         }
     }
 

@@ -21,12 +21,19 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
 
     public let renderer: FramebufferRenderer
 
-    /// 输入转发器, 由 attach 方法注入. weak 防循环.
-    public weak var inputForwarder: InputForwarder?
+    /// 输入转发器, 由 fanout 注入 (weak).
+    /// 重要: QEMU `-qmp unix:..,server=on,wait=off` 是**单 client** chardev socket,
+    /// 不允许多个客户端并发连接 (第二个 client 会卡在 greeting). 所以同 VM 多 view
+    /// 共存时**必须共享同一个 InputForwarder 实例** (fanout 内 own), 不能各自连
+    /// 各自 socket. 每次发 input 前 view 自己 setViewSize 同步自己的 size,
+    /// NSEvent 一时刻只送一个 view, 串行无竞争.
+    public weak var forwarder: InputForwarder?
 
-    /// view drawable 尺寸改变时回调, 通常上层 (QemuEmbeddedSession) 接到后
-    /// 调 DisplayChannel.requestResize 给 guest 改分辨率 (要求 guest 装 vdagent).
+    /// view drawable 尺寸改变时回调, 通常上层 (QemuFanoutSession 给 resize master
+    /// 那个 view 设置) 接到后调 DisplayChannel.requestResize 让 guest 改分辨率.
     /// 参数是 drawable pixel 尺寸 (已乘 backingScaleFactor, 给 guest 的真实分辨率).
+    /// 非 resize master 的 view (例如 detached 独立窗口) 应保持 nil, 避免多 view
+    /// 之间反复 resize 拉锯 guest 分辨率.
     public var onDrawableSizeChange: ((UInt32, UInt32) -> Void)?
 
     /// 我们预期 guest CapsLock 当前状态. 每次发 caps_lock toggle 翻转;
@@ -37,14 +44,41 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
     /// 上一次 NSEvent.modifierFlags 全量, 用于 flagsChanged 算 diff (修饰键 down/up)
     private var lastHostFlags: NSEvent.ModifierFlags = []
 
+    /// 当前已发给 guest 的 keyDown 但未发对应 keyUp 的 qcode 集合.
+    /// 用途: 当 view 失去 first responder (例如用户按 Cmd+Ctrl 触发 release-capture
+    /// 快捷键, 或主动切到别的 window) 时, AppKit 不再把后续 keyUp 事件送给本 view,
+    /// guest 会卡在 "key 一直按下" 状态 → keyboard auto-repeat 让用户看到 Tab 一直
+    /// 切焦点 / 字母一直输入这种灵异现象. 释放焦点前必须遍历此集合一次性补发 keyUp.
+    private var pressedKeys: Set<String> = []
+
     /// 当前是否藏了 host 鼠标. NSCursor.hide/unhide 是引用计数 (HIToolbox 内部),
     /// 多 hide 没匹配 unhide 鼠标会一直消失; view 销毁前必须保证净 hide 计数 = 0.
     private var cursorHidden = false
+
+    /// 输入捕获总开关. 默认 true; 设 false 时:
+    ///   - acceptsFirstResponder = false (键盘事件 fall through 给 NSWindow / 别的 control)
+    ///   - mouse/key/scroll 处理函数全部直接 return, 不发 forwarder
+    ///   - 不隐藏 host 鼠标 (mouseEntered 跳过 hide); 切 false 瞬间立即还原
+    ///   - 立即释放当前 first responder, 防止键盘事件残留 routing 到本 view
+    /// 主用途: 同 VM 有独立窗口 (detached) 时, 主窗口的嵌入 view 让出输入,
+    /// 用户操作完全在独立窗口里完成, 避免主窗口意外抢 mouse/key 焦点.
+    public var inputCaptureEnabled: Bool = true {
+        didSet {
+            guard oldValue != inputCaptureEnabled else { return }
+            if !inputCaptureEnabled {
+                if window?.firstResponder === self {
+                    window?.makeFirstResponder(nil)
+                }
+                showHostCursor()
+            }
+        }
+    }
 
     /// MTKView 必须直接是嵌入主窗口的 view, 不能放在普通 NSView 内 — 否则
     /// AppKit 在 NSHostingView 的 layout 切换中触发 viewWillMoveToWindow /
     /// viewDidMoveToWindow 会让 MTKView 内部的 CVDisplayLink 失效, draw(in:)
     /// 永远不被调用 → 画面卡死. hell-vm 同款做法.
+    /// forwarder 由 fanout 在 addSubscriber 时注入 (weak), 多 view 共享.
     public init(frame frameRect: NSRect) {
         let r = FramebufferRenderer()
         self.renderer = r
@@ -93,8 +127,8 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
 
     // MARK: - first responder
 
-    public override var acceptsFirstResponder: Bool { true }
-    public override func becomeFirstResponder() -> Bool { true }
+    public override var acceptsFirstResponder: Bool { inputCaptureEnabled }
+    public override func becomeFirstResponder() -> Bool { inputCaptureEnabled }
 
     public override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -111,14 +145,21 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
 
     /// 把 NSEvent 的 windowLocation 转成本 view 内的像素坐标 (左上原点).
     /// QEMU `usb-tablet` / `virtio-tablet` 期望左上原点.
+    /// 同时把当前 view 的 size 推给 forwarder, 多 view 共享 forwarder 时各 view
+    /// 的 size 不同 — NSEvent 一时刻只送一个 view, 这里 sync 后立即 forward 串行无竞争.
     private func viewCoords(_ event: NSEvent) -> (Double, Double) {
+        forwarder?.setViewSize(width: Double(bounds.width),
+                                height: Double(bounds.height))
         let p = convert(event.locationInWindow, from: nil)
         // NSView 默认 isFlipped = false, 原点左下; 我们要左上, 翻 Y.
         let y = bounds.height - p.y
         return (Double(p.x), Double(y))
     }
 
-    public override func mouseEntered(with event: NSEvent) { hideHostCursor() }
+    public override func mouseEntered(with event: NSEvent) {
+        guard inputCaptureEnabled else { return }
+        hideHostCursor()
+    }
     public override func mouseExited(with event: NSEvent)  { showHostCursor() }
 
     private func hideHostCursor() {
@@ -128,12 +169,15 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
         if cursorHidden { NSCursor.unhide(); cursorHidden = false }
     }
 
-    /// view 离开 window hierarchy (VM 关闭 / tab 切换 / 主窗口关闭) 时:
-    ///   1. 释放 first responder, 让键盘事件重新交回主 window
-    ///   2. 还原 host 鼠标 (mouseEntered 隐了之后没 mouseExited 路径会把鼠标卡死)
+    /// view 离开 window hierarchy 时收尾 (forwarder 生命周期由 fanout 管, 跟
+    /// view 进出 window 解耦):
+    ///   1. 补发所有 stuck normal key keyUp (防 guest 卡键)
+    ///   2. 释放 first responder, 让键盘事件重新交回主 window
+    ///   3. 还原 host 鼠标 (mouseEntered 隐了之后没 mouseExited 路径会把鼠标卡死)
     public override func viewWillMove(toWindow newWindow: NSWindow?) {
         super.viewWillMove(toWindow: newWindow)
         if newWindow == nil {
+            releaseAllPressedKeys()
             if window?.firstResponder === self {
                 window?.makeFirstResponder(nil)
             }
@@ -141,65 +185,85 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
         }
     }
 
+    /// AppKit 因任何原因 (用户点别处 / 别的 view 抢) 让本 view 失去 first
+    /// responder 时, 也要补发 stuck key keyUp; 否则 guest 卡键.
+    public override func resignFirstResponder() -> Bool {
+        releaseAllPressedKeys()
+        return super.resignFirstResponder()
+    }
+
     public override func mouseMoved(with event: NSEvent) {
+        guard inputCaptureEnabled else { return }
         let (x, y) = viewCoords(event)
-        inputForwarder?.mouseMove(viewX: x, viewY: y)
+        forwarder?.mouseMove(viewX: x, viewY: y)
     }
     public override func mouseDragged(with event: NSEvent)      { mouseMoved(with: event) }
     public override func rightMouseDragged(with event: NSEvent) { mouseMoved(with: event) }
     public override func otherMouseDragged(with event: NSEvent) { mouseMoved(with: event) }
 
     public override func mouseDown(with event: NSEvent) {
+        guard inputCaptureEnabled else { return }
         if window?.firstResponder !== self {
             window?.makeFirstResponder(self)
         }
         let (x, y) = viewCoords(event)
-        inputForwarder?.mouseButton(.left, down: true, viewX: x, viewY: y)
+        forwarder?.mouseButton(.left, down: true, viewX: x, viewY: y)
     }
     public override func mouseUp(with event: NSEvent) {
+        guard inputCaptureEnabled else { return }
         let (x, y) = viewCoords(event)
-        inputForwarder?.mouseButton(.left, down: false, viewX: x, viewY: y)
+        forwarder?.mouseButton(.left, down: false, viewX: x, viewY: y)
     }
     public override func rightMouseDown(with event: NSEvent) {
+        guard inputCaptureEnabled else { return }
         let (x, y) = viewCoords(event)
-        inputForwarder?.mouseButton(.right, down: true, viewX: x, viewY: y)
+        forwarder?.mouseButton(.right, down: true, viewX: x, viewY: y)
     }
     public override func rightMouseUp(with event: NSEvent) {
+        guard inputCaptureEnabled else { return }
         let (x, y) = viewCoords(event)
-        inputForwarder?.mouseButton(.right, down: false, viewX: x, viewY: y)
+        forwarder?.mouseButton(.right, down: false, viewX: x, viewY: y)
     }
     public override func otherMouseDown(with event: NSEvent) {
+        guard inputCaptureEnabled else { return }
         let (x, y) = viewCoords(event)
-        inputForwarder?.mouseButton(.middle, down: true, viewX: x, viewY: y)
+        forwarder?.mouseButton(.middle, down: true, viewX: x, viewY: y)
     }
     public override func otherMouseUp(with event: NSEvent) {
+        guard inputCaptureEnabled else { return }
         let (x, y) = viewCoords(event)
-        inputForwarder?.mouseButton(.middle, down: false, viewX: x, viewY: y)
+        forwarder?.mouseButton(.middle, down: false, viewX: x, viewY: y)
     }
     public override func scrollWheel(with event: NSEvent) {
+        guard inputCaptureEnabled else { return }
         let dy = event.scrollingDeltaY
         guard abs(dy) >= 0.1 else { return }
         let (x, y) = viewCoords(event)
         let dir: InputForwarder.ScrollDirection = (dy > 0) ? .up : .down
-        inputForwarder?.scrollWheel(dir, viewX: x, viewY: y)
+        forwarder?.scrollWheel(dir, viewX: x, viewY: y)
     }
 
     // MARK: - keyboard
 
     public override func keyDown(with event: NSEvent) {
+        guard inputCaptureEnabled else { return }
         syncCapsLockIfNeeded(modifierFlags: event.modifierFlags)
         if event.isARepeat { return }  // 不发 repeat, guest 自己 repeat
         if let qcode = HVMQCode.qcode(forKeyCode: event.keyCode) {
-            inputForwarder?.keyDown(qcode: qcode)
+            forwarder?.keyDown(qcode: qcode)
+            pressedKeys.insert(qcode)
         }
     }
     public override func keyUp(with event: NSEvent) {
+        guard inputCaptureEnabled else { return }
         if let qcode = HVMQCode.qcode(forKeyCode: event.keyCode) {
-            inputForwarder?.keyUp(qcode: qcode)
+            forwarder?.keyUp(qcode: qcode)
+            pressedKeys.remove(qcode)
         }
     }
 
     public override func flagsChanged(with event: NSEvent) {
+        guard inputCaptureEnabled else { return }
         let cur = event.modifierFlags
         let prev = lastHostFlags
         lastHostFlags = cur
@@ -212,6 +276,11 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
         let bothNow = cur.intersection(release) == release
         let bothPrev = prev.intersection(release) == release
         if bothNow && !bothPrev {
+            // 必须先补发所有 stuck normal key (Tab / 字母 etc) keyUp, 再发 modifier
+            // keyUp, 最后释放 first responder. 顺序很关键: 先释放再发 keyUp, AppKit
+            // 会把 key event 送给新 first responder (主 window) 而不是本 view, guest
+            // 收不到 keyUp → 卡键 → user 看到 Tab 一直切焦点 / 字母一直输入.
+            releaseAllPressedKeys()
             sendModifierUpAll(prev)
             window?.makeFirstResponder(nil)
             showHostCursor()  // 走 cursorHidden 计数, 防止跟 mouseExited 双调
@@ -234,18 +303,30 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
         for (flag, qcode) in map {
             let was = prev.contains(flag)
             let now = cur.contains(flag)
-            if !was && now { inputForwarder?.keyDown(qcode: qcode) }
-            if  was && !now { inputForwarder?.keyUp(qcode: qcode) }
+            if !was && now { forwarder?.keyDown(qcode: qcode) }
+            if  was && !now { forwarder?.keyUp(qcode: qcode) }
         }
     }
 
     /// 释放 first responder 时给 guest 补 keyUp, 防止 stuck modifier (例如
     /// 用户按住 ctrl 按 cmd 触发 release, 没补 keyUp 的话 guest 会卡在 ctrl down).
     private func sendModifierUpAll(_ flags: NSEvent.ModifierFlags) {
-        if flags.contains(.shift)   { inputForwarder?.keyUp(qcode: "shift") }
-        if flags.contains(.control) { inputForwarder?.keyUp(qcode: "ctrl") }
-        if flags.contains(.option)  { inputForwarder?.keyUp(qcode: "alt") }
-        if flags.contains(.command) { inputForwarder?.keyUp(qcode: "meta_l") }
+        if flags.contains(.shift)   { forwarder?.keyUp(qcode: "shift") }
+        if flags.contains(.control) { forwarder?.keyUp(qcode: "ctrl") }
+        if flags.contains(.option)  { forwarder?.keyUp(qcode: "alt") }
+        if flags.contains(.command) { forwarder?.keyUp(qcode: "meta_l") }
+    }
+
+    /// 给所有已 keyDown 但未 keyUp 的 normal key (Tab / Return / 字母 / 数字 etc)
+    /// 补发 keyUp + 清空状态. 在 view 即将丢 first responder / 离开 window 前调用,
+    /// 避免 guest 看到 keyDown 没对应 keyUp → keyboard auto-repeat 卡键现象 (例如
+    /// Win11 OOBE 阶段 Tab 一直切焦点循环 "支持/下一步/上一步").
+    private func releaseAllPressedKeys() {
+        guard !pressedKeys.isEmpty else { return }
+        for qcode in pressedKeys {
+            forwarder?.keyUp(qcode: qcode)
+        }
+        pressedKeys.removeAll()
     }
 
     /// CapsLock 双端同步: host 与 expectedGuestCaps 不一致时给 guest 发一次
@@ -255,8 +336,8 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
     private func syncCapsLockIfNeeded(modifierFlags: NSEvent.ModifierFlags) {
         let hostOn = modifierFlags.contains(.capsLock)
         if hostOn != expectedGuestCaps {
-            inputForwarder?.keyDown(qcode: "caps_lock")
-            inputForwarder?.keyUp(qcode: "caps_lock")
+            forwarder?.keyDown(qcode: "caps_lock")
+            forwarder?.keyUp(qcode: "caps_lock")
             expectedGuestCaps = hostOn
         }
     }
@@ -265,7 +346,7 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
 
     public func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         // 鼠标坐标归一化用的是本 view 的尺寸, 保持同步.
-        inputForwarder?.setViewSize(width: Double(bounds.width),
+        forwarder?.setViewSize(width: Double(bounds.width),
                                      height: Double(bounds.height))
         // drawable 尺寸 (backing pixel, 已乘 retina scale) 推给上层, 上层
         // 通过 RESIZE_REQUEST → QEMU dpy_set_ui_info → EDID 让 guest vdagent

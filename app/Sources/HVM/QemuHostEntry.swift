@@ -29,7 +29,8 @@ public enum QemuHostEntry {
         bundleURL: URL,
         lock: BundleLock,
         socketURL: URL,
-        startedAt: Date
+        startedAt: Date,
+        embeddedInGUI: Bool = false
     ) -> Never {
         // 1. 路径解析
         let qemuRoot: URL
@@ -191,7 +192,10 @@ public enum QemuHostEntry {
         QemuHostState.shared.qmpSocketURL = qmpSocketURL
         QemuHostState.shared.lock = lock
         QemuHostState.shared.startedAt = startedAt
-        QemuHostState.shared.installStatusItem(displayName: config.displayName)
+        // GUI 派生场景跳过自家 status item, 避免主 GUI 已有的图标重复出现.
+        if !embeddedInGUI {
+            QemuHostState.shared.installStatusItem(displayName: config.displayName)
+        }
 
         // 6. QMP 连接 (重试; 同时监控进程 state, 若 QEMU 早退不再重试)
         Task { @MainActor in
@@ -211,10 +215,14 @@ public enum QemuHostEntry {
             // 6.0 EFI Shell 自动注入 (仅 windows 装机阶段). EDK2 patched firmware 启动后落到
             // EFI Shell, 自动注入 fs0:\efi\boot\bootaa64.efi 让 Win11 ISO 直接启动到 Setup.
             // 装完后 bootFromDiskOnly=true, ISO 不挂, EDK2 自动 boot Windows from disk, 不需注入.
+            // 多一道 NVRAM 探测在 injectBootISO 内: 即便 user 没把 bootFromDiskOnly 切回
+            // true, 只要 Win Boot Manager 已写进 efi-vars.fd, EDK2 直接 boot Windows 进
+            // OOBE/logon, 这时 spam Enter 会命中 OOBE 焦点元素 → user 看到 "支持" 反复点亮.
             if config.guestOS == .windows, !config.bootFromDiskOnly {
-                fputs("HVMHost(qemu): Win11 装机模式, 启动 EFI Shell 自动注入 (后台 30s 后开始)\n", stderr)
+                let nvramURL = BundleLayout.nvramURL(bundleURL)
+                fputs("HVMHost(qemu): Win11 装机模式, 启动 EFI Shell 自动注入 (后台 6s 后开始)\n", stderr)
                 Task { @MainActor in
-                    await EFIShellAutoboot.injectBootISO(via: client)
+                    await EFIShellAutoboot.injectBootISO(via: client, nvramURL: nvramURL)
                     fputs("HVMHost(qemu): EFI Shell 自动注入完成\n", stderr)
                 }
             }

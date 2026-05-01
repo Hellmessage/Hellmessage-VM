@@ -33,9 +33,11 @@ final class DetailContainerView: NSView {
     // 当前挂载的 HVMView (引用 session.attachment.view, 不 retain)
     private weak var currentHVMView: HVMView?
 
-    // QEMU 嵌入 session (HDP socket → FramebufferHostView). 仅 .runningRemote
-    // + engine == .qemu 时存在; transition 时 stop + 重建.
-    private var currentQemuSession: QemuEmbeddedSession?
+    // QEMU 嵌入路径当前 view + 它订阅的 fanout (fanout 由 AppModel 持有,
+    // 主窗口嵌入 + detached 独立窗口可同时各持一个 view 订阅同一 fanout).
+    // transition 离开 qemu running 状态时, removeSubscriber + view.removeFromSuperview.
+    private weak var currentQemuFanoutView: FramebufferHostView?
+    private var currentQemuFanoutVMID: UUID?
 
     // 顶部"运行中 VM" tab 栏, 跟 sub-state UI 解耦, 一直存在;
     // 高度由 runningTabsBarHeight 约束动态控制 (0 个运行中 VM → 0 高度).
@@ -79,6 +81,7 @@ final class DetailContainerView: NSView {
             shownStoppedConfig = item.config
         }
         applyRunningTabsBarVisibility()
+        syncEmbeddedInputCapture()
     }
 
     /// init 时挂一次 tabs bar, 之后不拆建. 高度通过约束动态切.
@@ -124,6 +127,9 @@ final class DetailContainerView: NSView {
                 _ = self.model.embeddedID
                 _ = self.model.list.count
                 _ = self.model.sessions.count
+                // detachedQemuVMs 变化 → 重 sync 主嵌入 view 的 inputCaptureEnabled
+                // (打开独立窗口时主嵌入让出 mouse/key 捕获)
+                _ = self.model.detachedQemuVMs
                 // 订阅当前选中 VM 的 runState (QEMU 后端无 session, 状态切换只能从 list.runState 看)
                 if let sel = self.model.selectedID,
                    let item = self.model.list.first(where: { $0.id == sel }) {
@@ -170,6 +176,17 @@ final class DetailContainerView: NSView {
         }
         // tabs bar 显隐独立于 sub-state 重建判定: 任意 VM 启停都要更新.
         applyRunningTabsBarVisibility()
+        // 同步嵌入 view 的输入捕获开关 (打开独立窗口时主嵌入让出输入).
+        syncEmbeddedInputCapture()
+    }
+
+    /// 主窗口的 QEMU 嵌入 view, 当对应 VM 已弹出独立窗口时, 主窗口让出 mouse/key
+    /// 捕获 — 让用户操作完全发生在独立窗口里.
+    private func syncEmbeddedInputCapture() {
+        guard let view = currentQemuFanoutView,
+              let id = currentQemuFanoutVMID else { return }
+        let detached = model.detachedQemuVMs.contains(id)
+        view.inputCaptureEnabled = !detached
     }
 
     private func computeState() -> ShowState {
@@ -194,10 +211,16 @@ final class DetailContainerView: NSView {
         currentTopBar?.removeFromSuperview(); currentTopBar = nil
         currentBottomBar?.removeFromSuperview(); currentBottomBar = nil
         currentHVMView?.removeFromSuperview(); currentHVMView = nil
-        if let qs = currentQemuSession {
-            qs.stop()
-            qs.view.removeFromSuperview()
-            currentQemuSession = nil
+        if let view = currentQemuFanoutView, let id = currentQemuFanoutVMID {
+            // 从 fanout 注销主窗口嵌入 view; fanout 本身留给 detached 窗口或下次嵌入复用.
+            // VM 真停止时由 AppModel.refreshList 末尾的 staleFanoutIDs 清理 + tearDownQemuFanout.
+            model.qemuFanouts[id]?.removeSubscriber(view)
+            view.removeFromSuperview()
+            currentQemuFanoutView = nil
+            currentQemuFanoutVMID = nil
+            // 如果该 VM 没有 detached 窗口在订阅 + 主窗口刚切走 → fanout 可能空闲,
+            // 但当前策略是保留 fanout 直到 VM 停止, 见 tearDownQemuFanoutIfIdle 注释.
+            model.tearDownQemuFanoutIfIdle(id: id)
         }
 
         switch state {
@@ -340,7 +363,9 @@ final class DetailContainerView: NSView {
     }
 
     private func buildQemuEmbedded(id: UUID, item: AppModel.VMListItem) {
-        let session = QemuEmbeddedSession(vmID: id, bundleURL: item.bundleURL)
+        // 拿 (或创建) 该 VM 的 fanout. fanout 是共享资源, detached 窗口也订阅它,
+        // 主窗口 transition 离开时只 removeSubscriber, 不停 fanout (除非 VM 真停止).
+        let fanout = model.ensureQemuFanout(id: id, bundleURL: item.bundleURL)
 
         let topBar = NSHostingView(rootView: DetailTopBar(model: model, item: item))
         topBar.translatesAutoresizingMaskIntoConstraints = false
@@ -357,7 +382,7 @@ final class DetailContainerView: NSView {
         let topDivider = makeHorizontalDivider()
         let bottomDivider = makeHorizontalDivider()
 
-        let fbView = session.view
+        let fbView = FramebufferHostView(frame: .zero)
         fbView.translatesAutoresizingMaskIntoConstraints = false
         fbView.setContentHuggingPriority(.defaultLow, for: .vertical)
         fbView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
@@ -395,10 +420,12 @@ final class DetailContainerView: NSView {
 
         currentTopBar = topBar
         currentBottomBar = bottomBar
-        currentQemuSession = session
+        currentQemuFanoutView = fbView
+        currentQemuFanoutVMID = id
 
-        // 启动连接 + 事件循环 (异步重试 socket connect, 不阻塞 UI)
-        session.start()
+        // 主窗口嵌入 view 是 resize master: drawable 尺寸变化 → HDP RESIZE_REQUEST
+        // 给 guest 改分辨率. detached 窗口的 view 不当 master, 避免拉锯.
+        fanout.addSubscriber(fbView, isResizeMaster: true)
     }
 
     private func makeHorizontalDivider() -> NSView {
