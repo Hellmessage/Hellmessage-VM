@@ -59,10 +59,12 @@ public enum QemuArgsBuilder {
         /// 输入专用 QMP socket. 非 nil 时额外加一个 `-qmp unix:...,server=on,wait=off`,
         /// 给 HVMDisplayQemu.InputForwarder 用 (跟 control QMP 分离, 避免 accept 争抢).
         public let qmpInputSocketPath: String?
-        /// spice-vdagent virtio-serial chardev socket. 非 nil 时 argv 加
-        /// virtio-serial-pci + chardev + virtserialport 三件套, guest 内安装
-        /// spice-vdagent 后即可响应 host 的 RESIZE_REQUEST → EDID 变化做动态分辨率.
-        public let vdagentSocketPath: String?
+        /// SPICE 服务 unix socket (`-spice unix=on,addr=...`). 非 nil 时启 spice-server
+        /// 内嵌实例, 仅作 vdagent multiplex 跳板 (display/cursor/inputs 仍走自家 iosurface
+        /// + QMP input). 配套 `-chardev spicevmc,name=vdagent` + virtserialport 让 spice-server
+        /// 把 host 端 SpiceMainClient 发的 VDAgentMessage 中转到 guest 内 spice-vdagent.
+        /// nil 时不启 spice-server, 也不挂 vdagent virtio-serial port (Win 动态 resize 失效).
+        public let spiceSocketPath: String?
 
         public init(
             config: VMConfig,
@@ -75,7 +77,7 @@ public enum QemuArgsBuilder {
             unattendISOPath: String? = nil,
             iosurfaceSocketPath: String? = nil,
             qmpInputSocketPath: String? = nil,
-            vdagentSocketPath: String? = nil
+            spiceSocketPath: String? = nil
         ) {
             self.config = config
             self.bundleURL = bundleURL
@@ -87,7 +89,7 @@ public enum QemuArgsBuilder {
             self.unattendISOPath = unattendISOPath
             self.iosurfaceSocketPath = iosurfaceSocketPath
             self.qmpInputSocketPath = qmpInputSocketPath
-            self.vdagentSocketPath = vdagentSocketPath
+            self.spiceSocketPath = spiceSocketPath
         }
     }
 
@@ -289,14 +291,21 @@ public enum QemuArgsBuilder {
 
         // ---- 显示 + 输入 ----
         // QEMU virt 机器默认无显卡, 只有 serial/parallel console; 必须显式加 GPU 才能出 graphical UEFI/OS UI.
+        //
         // Linux: virtio-gpu-pci (内核自带 driver, 加速 + EDID 动态分辨率).
-        // 单 virtio-gpu-pci (无 ramfb fw_cfg) — Linux + Windows ARM64 共用.
-        // 历史: 之前 Win 用 virtio-ramfb 试图同时给 EDK2 ramfb GOP + viogpudo 接管,
-        // 但 ARM64 viogpudo 没正确 takeover EFI GOP, 导致 Windows 同时看到 viogpudo 的
-        // monitor + basicdisplay.sys 接 EFI GOP 的 phantom monitor = 双屏, RESIZE 不生效.
-        // 改成纯 virtio-gpu-pci: EDK2 用 VirtioGpuDxe 的 GOP 走 boot, OS 接管后由 viogpudo
-        // 接同一 PCI 设备 = 单 display, EDID 路径正确生效.
-        args += ["-device", "virtio-gpu-pci"]
+        //
+        // Windows ARM64: virtio-ramfb (HVM patch 0003 移植自 utmapp/qemu).
+        //   - boot 阶段 EDK2 走 RamfbDxe 用 fw_cfg ramfb 的 GOP framebuffer (零依赖 driver)
+        //   - OS 接管阶段 Windows 加载 viogpudo 接 virtio-gpu PCI device
+        //   - 走 virtio-gpu-pci 时, ARM Win 11 上 viogpudo 不响应 spice-vdagent 的
+        //     SetDisplayConfig 改分辨率 (UTM Issue #3291 已知 driver 限制), dynamic resize 不可用.
+        //   - 走 virtio-ramfb 时, OS 看到 viogpudo monitor + EFI GOP 残留 phantom monitor
+        //     (basicdisplay.sys 接 RamfbDxe 留下的 framebuffer), 但 spice-vdagent 改 monitor 1
+        //     (viogpudo) 的 size 能 work. 双屏问题需要 unattend / EDK2 patch fix (见 docs).
+        //
+        // 选 virtio-ramfb 是为了换取 dynamic resize 工作, 接受双屏 (后续 fix).
+        let gpuDevice = (cfg.guestOS == .windows) ? "virtio-ramfb" : "virtio-gpu-pci"
+        args += ["-device", gpuDevice]
         // USB 键盘 + USB tablet (xhci controller 已在 ISO 之前定义, 避免 bus=xhci.0 forward ref).
         // tablet 给绝对坐标鼠标 (hvm-dbg mouse abs 注入也走它).
         args += ["-device", "usb-kbd,bus=xhci.0"]
@@ -309,13 +318,27 @@ public enum QemuArgsBuilder {
             args += ["-display", "cocoa"]
         }
 
-        // spice-vdagent virtio-serial 通道: 给 guest 内 spice-vdagent agent 用,
-        // host 端不连接此 socket. 装了 vdagent 的 guest 收到 EDID 变化会自动改
-        // 分辨率, 配合 HDP RESIZE_REQUEST 实现动态分辨率.
-        if let vdagentSocket = inputs.vdagentSocketPath {
-            args += ["-device", "virtio-serial-pci,id=vsp0"]
-            args += ["-chardev", "socket,id=vdagent,path=\(vdagentSocket),server=on,wait=off"]
-            args += ["-device", "virtserialport,bus=vsp0.0,chardev=vdagent,name=com.redhat.spice.0"]
+        // SPICE main channel + vdagent virtio-serial 通道.
+        // 设计要点: HVM 的 display 仍走自家 iosurface backend (零拷贝 + Metal 渲染),
+        // spice-server 这里**仅**作 vdagent multiplex 跳板 — host 端 SpiceMainClient
+        // 在 main channel 上发 SPICE_MSGC_MAIN_AGENT_DATA 包裹 VDAgentMessage
+        // (MONITORS_CONFIG / ANNOUNCE_CAPABILITIES), spice-server 通过 spicevmc chardev
+        // multiplex 进 com.redhat.spice.0 port, guest 内 vdservice 收到后 forward 给
+        // user-session vdagent.exe → SetDisplayConfig 改分辨率.
+        // 走 raw -chardev socket (旧实现) vdservice 不会 forward 到 vdagent.exe.
+        // 详见 docs/QEMU_INTEGRATION.md「vdagent 通路」.
+        if let spiceSocket = inputs.spiceSocketPath {
+            // -spice 选项注释:
+            //   unix=on,addr=...     unix socket 模式 (不开 TCP, 进程间走 fs 权限护栏)
+            //   disable-ticketing=on 不验密 (自家进程对自家进程, ticketing 仅徒增协议 round-trip)
+            //   seamless-migration=off 不做 SPICE migration, 关掉减表面积
+            // 注: 不带 `gl=off`. aarch64 build 不带 SPICE OpenGL display backend, QEMU 直接
+            //     报 "Invalid parameter 'gl'". 默认即关, 不显式设 gl 选项.
+            args += ["-spice", "unix=on,addr=\(spiceSocket),disable-ticketing=on,seamless-migration=off"]
+            // 实验 K': 恢复 spicevmc, 验证 host 进程立即 connect spice 可避免 Win boot loop
+            args += ["-device", "virtio-serial"]
+            args += ["-chardev", "spicevmc,id=vdagent,debug=0,name=vdagent"]
+            args += ["-device", "virtserialport,chardev=vdagent,name=com.redhat.spice.0"]
         }
 
         // ---- QMP 控制 ----

@@ -18,6 +18,7 @@ import HVMBackend
 import HVMBundle
 import HVMCore
 import HVMDisplay
+import HVMDisplayQemu
 import HVMInstall
 import HVMIPC
 import HVMQemu
@@ -139,10 +140,10 @@ public enum QemuHostEntry {
         // ui/iosurface backend 起 listener pthread + 额外 -qmp + virtio-serial-pci.
         let iosurfaceSocketURL  = HVMPaths.iosurfaceSocketPath(for: config.id)
         let qmpInputSocketURL   = HVMPaths.qmpInputSocketPath(for: config.id)
-        let vdagentSocketURL    = HVMPaths.vdagentSocketPath(for: config.id)
+        let spiceSocketURL      = HVMPaths.spiceSocketPath(for: config.id)
         try? FileManager.default.removeItem(at: iosurfaceSocketURL)
         try? FileManager.default.removeItem(at: qmpInputSocketURL)
-        try? FileManager.default.removeItem(at: vdagentSocketURL)
+        try? FileManager.default.removeItem(at: spiceSocketURL)
 
         let buildResult: QemuArgsBuilder.BuildResult
         do {
@@ -155,7 +156,7 @@ public enum QemuHostEntry {
                 unattendISOPath: unattendISOPath,
                 iosurfaceSocketPath: iosurfaceSocketURL.path,
                 qmpInputSocketPath: qmpInputSocketURL.path,
-                vdagentSocketPath: vdagentSocketURL.path
+                spiceSocketPath: spiceSocketURL.path
             )
             buildResult = try QemuArgsBuilder.build(inputs)
         } catch {
@@ -218,6 +219,17 @@ public enum QemuHostEntry {
             }
             QemuHostState.shared.qmpClient = client
             fputs("HVMHost(qemu): QMP 已连接\n", stderr)
+
+            // 6.0a SpiceMainClient connect — 必须早于 guest 内 vioserialp 加载
+            // (boot 后约 10-20s). spice-server listen 跟 QMP listen 同时就绪
+            // (QEMU 启动后立即 bind 所有 -chardev socket / -spice socket).
+            // QMP 已连成功 → spice socket 一定已 bind, 直接 connect.
+            // SpiceMainClient.connect 内部失败 silently swallow + lazy 重连, 不阻塞.
+            let spiceSocketURL = HVMPaths.spiceSocketPath(for: config.id)
+            let spice = SpiceMainClient(socketPath: spiceSocketURL.path)
+            spice.connect()
+            QemuHostState.shared.spiceClient = spice
+            fputs("HVMHost(qemu): SPICE main client connect → \(spiceSocketURL.lastPathComponent)\n", stderr)
 
             // (6.0 EFI Shell auto-inject 已删除: bootmgfw "Press any key to boot from CD or DVD"
             // 倒计时 5s 内 user 手动按一次任意键即可进 Setup, 跟物理 USB 装机一致, 不再
@@ -455,6 +467,16 @@ final class QemuHostState {
     /// VM 列表 thumbnail 抓帧定时器 (M-4): QMP screendump → bundle/meta/thumbnail.png. 与 VZ 路径同周期 10s
     var thumbnailTimer: Timer?
 
+    /// SPICE main channel client (host 子进程持有, 而非 GUI fanout). 设计要点:
+    /// QEMU 启 spice-server 后, **必须**有 SPICE main client 立即 connect, 否则
+    /// spice-server 在 vdagent chardev 上的状态机异常会让 Win 早期 driver init BSOD
+    /// (实测: 不连 spice → Win bootmgfw → kernel → vioserialp 阶段 reboot loop).
+    /// 时序关键: SpiceMainClient.connect 必须早于 Win guest 内 vioserialp 加载
+    /// (boot 后约 10-20s), 所以放 host 进程 (跟 QEMU spawn 同步) 而非 GUI fanout
+    /// (lazy 启动晚于 Win boot). GUI 端拖窗口的 sendMonitorsConfig 通过 IPC
+    /// (dbg.display.resize op) 转给本 client, 本 client 自带 dedup 不抖.
+    var spiceClient: SpiceMainClient?
+
     var statusItem: NSStatusItem?
     var statusMenu: QemuStatusMenuController?
 
@@ -559,6 +581,7 @@ final class QemuHostState {
         case IPCOp.dbgBootProgress.rawValue:  return await handleDbgBootProgress(req: req)
         case IPCOp.dbgConsoleRead.rawValue:   return handleDbgConsoleRead(req: req)
         case IPCOp.dbgConsoleWrite.rawValue:  return handleDbgConsoleWrite(req: req)
+        case IPCOp.dbgDisplayResize.rawValue: return handleDbgDisplayResize(req: req)
 
         default:
             if req.op.hasPrefix("dbg.") {
@@ -813,6 +836,25 @@ final class QemuHostState {
         } catch {
             return .failure(id: req.id, code: "dbg.console_write_failed", message: "\(error)")
         }
+    }
+
+    /// 转 SpiceMainClient.sendMonitorsConfig — GUI 端 view 拖窗口或 hvm-dbg display-resize
+    /// 都通过 IPC 调到这里. SpiceMainClient 持有方在 host 子进程, 因为它必须早于
+    /// guest vioserialp init 时 connect spice-server (见 QemuHostState.spiceClient 注释).
+    /// SpiceMainClient.sendMonitorsConfig 自带 dedup, 高频拖窗口不会 spam guest.
+    private func handleDbgDisplayResize(req: IPCRequest) -> IPCResponse {
+        guard let widthStr = req.args["width"], let heightStr = req.args["height"],
+              let width = UInt32(widthStr), let height = UInt32(heightStr),
+              width > 0, height > 0 else {
+            return .failure(id: req.id, code: "ipc.bad_args",
+                            message: "dbg.display.resize 需要 width / height 正整数")
+        }
+        guard let spice = QemuHostState.shared.spiceClient else {
+            return .failure(id: req.id, code: "spice.client_unavailable",
+                            message: "SpiceMainClient 未初始化 (QMP 还没就绪 / spice 通路未启)")
+        }
+        spice.sendMonitorsConfig(width: width, height: height)
+        return .success(id: req.id, data: ["width": "\(width)", "height": "\(height)"])
     }
 
     private func handleDbgFindText(req: IPCRequest) async -> IPCResponse {

@@ -97,9 +97,14 @@ public enum HVMPaths {
     public static func qmpInputSocketPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).qmp.input.sock")
     }
-    /// spice-vdagent virtio-serial chardev socket; host 不连, 仅留给 guest agent.
-    public static func vdagentSocketPath(for id: UUID) -> URL {
-        runDir.appendingPathComponent("\(id.uuidString.lowercased()).vdagent.sock")
+    /// SPICE main channel unix socket; QEMU `-spice unix=on,addr=...` server,
+    /// HVMDisplayQemu.SpiceMainClient 作 client 连进去, 在 main channel 上发
+    /// SPICE_MSGC_MAIN_AGENT_DATA 包裹 VDAgentMessage(MONITORS_CONFIG), spice-server
+    /// 通过 -chardev spicevmc,name=vdagent multiplex 给 guest 内 spice-vdagent 服务
+    /// (vdservice → vdagent.exe → SetDisplayConfig 改分辨率).
+    /// 详见 docs/QEMU_INTEGRATION.md vdagent 通路章节.
+    public static func spiceSocketPath(for id: UUID) -> URL {
+        runDir.appendingPathComponent("\(id.uuidString.lowercased()).spice.sock")
     }
     /// GUI 主进程 control socket; 由 AppModel.ensureQemuFanout 时启的 SocketServer 监听.
     /// 跟 socketPath() (host 子进程的 IPC socket) 区分开. 仅 hvm-dbg display-resize 这种

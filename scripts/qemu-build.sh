@@ -30,8 +30,12 @@ QEMU_REPO="https://gitlab.com/qemu-project/qemu.git"
 #   - meson/ninja/pkgconf/glib/pixman/libslirp/dtc/capstone — QEMU 编译依赖
 #   - swtpm/libtpms — Win11 TPM 2.0 sidecar (打包入 .app/Resources/QEMU/bin/swtpm)
 #   - socket_vmnet — vmnet bridged/shared 非 root 桥接 (打包入 .app/Resources/QEMU/bin/socket_vmnet)
+#   - spice-protocol/spice-server — Win 动态 resize 必需; QEMU 内嵌 spice-server 让
+#       -chardev spicevmc,name=vdagent 走 SPICE main channel multiplex 到 guest
+#       spice-vdagent.exe; 不开 SPICE display 端口 (display 仍走自家 iosurface backend).
+#       详见 docs/QEMU_INTEGRATION.md vdagent 通路章节.
 # 注: Homebrew 已把 pkg-config 别名到 pkgconf, 直接用新名避免每次 install no-op
-BREW_PACKAGES=(meson ninja pkgconf glib pixman libslirp dtc capstone swtpm libtpms socket_vmnet)
+BREW_PACKAGES=(meson ninja pkgconf glib pixman libslirp dtc capstone swtpm libtpms socket_vmnet spice-protocol spice-server)
 
 # ---- 路径 ----
 # qemu-src: git clone 源码 (~900M, gitignored)
@@ -190,7 +194,7 @@ build_qemu() {
             --disable-debug-info \
             --disable-werror \
             --disable-fuse \
-            --disable-spice \
+            --enable-spice \
             --disable-libssh \
             --disable-curl \
             --disable-libnfs \
@@ -485,6 +489,46 @@ bundle_socket_vmnet() {
     ok "socket_vmnet + socket_vmnet_client 嵌入完成"
 }
 
+# ---- 9.7 嵌入 qemu-system-aarch64 全部 brew dylib 依赖 (用户机零依赖闭环) ----
+# QEMU make install 出来的 qemu-system-aarch64 默认裸引用 /opt/homebrew/opt/{glib,
+# pixman,libslirp,gnutls,capstone,libusb,zstd,libpng,spice-server,...} 一长串 dylib.
+# CLAUDE.md 约束「最终用户机器零依赖, 所有运行时产物随 .app 包内分发」, 必须把所有
+# 非系统 dylib 复制进 stage/lib/ + 重写 install_name 为 @executable_path/../lib/.
+# 复用 bundle_dylib_deps 递归: 一次扫描 qemu-system-aarch64 的全部 deps, 自动包括
+# spice-server 引入的 jpeg-turbo / lz4 / opus / orc / openssl@3 / gstreamer / gettext.
+# 必须在 strip_xattrs 之前调 (install_name_tool 会触发 xattr 残留, 后续 codesign 拦);
+# 也必须在 prune_share 之后, 跟其他 bundle_* 同序.
+bundle_qemu_system() {
+    step "嵌入 qemu-system-aarch64 全部 brew dylib 依赖 (用户机零依赖)"
+
+    local qemu_bin="$STAGING_DIR/bin/qemu-system-aarch64"
+    [[ -x "$qemu_bin" ]] || err "$qemu_bin 不存在或不可执行"
+
+    local lib_dir="$STAGING_DIR/lib"
+    mkdir -p "$lib_dir"
+
+    chmod u+w "$qemu_bin"
+    # 去掉 QEMU build 期 ad-hoc 签名, 让 install_name_tool -change 不被 codesign integrity 拦
+    codesign --remove-signature "$qemu_bin" 2>/dev/null || true
+
+    local processed
+    processed="$(mktemp -t hvm-bundle-deps-qemu)"
+    : > "$processed"
+    bundle_dylib_deps "$qemu_bin" "$lib_dir" "$processed"
+    rm -f "$processed"
+
+    local leftover
+    leftover="$(otool -L "$qemu_bin" 2>/dev/null | grep -E '(/opt/homebrew|/usr/local)' || true)"
+    if [[ -n "$leftover" ]]; then
+        warn "qemu-system-aarch64 仍引用 brew 路径 (打包不完整):"
+        echo "$leftover"
+    fi
+
+    local dylib_count
+    dylib_count="$(ls -1 "$lib_dir" 2>/dev/null | wc -l | tr -d ' ')"
+    ok "qemu-system-aarch64 dylib 闭环完成 (stage/lib/ 共 $dylib_count 个)"
+}
+
 # bundle_dylib_deps <target_macho> <lib_out_dir> <processed_set_file>
 # 递归: 把 target 所有非系统 dylib 引用复制到 lib_out_dir, 改 install name + 改引用,
 # 然后对每个新拷的 dylib 重复. processed_set_file 防重复处理.
@@ -572,7 +616,8 @@ write_manifest() {
     "--target-list=aarch64-softmmu",
     "--enable-cocoa",
     "--enable-hvf",
-    "--enable-iosurface"
+    "--enable-iosurface",
+    "--enable-spice"
   ],
   "patches": $patches_json,
   "edk2_firmware_source": "QEMU $QEMU_TAG 源码自带 pc-bios/edk2-aarch64-code.fd.bz2 (kraxel build)",
@@ -600,6 +645,7 @@ main() {
     prune_share
     bundle_swtpm
     bundle_socket_vmnet
+    bundle_qemu_system
     strip_xattrs
     write_manifest
     echo

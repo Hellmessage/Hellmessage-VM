@@ -28,6 +28,7 @@ import OSLog
 import Darwin
 import HVMCore
 import HVMBundle
+import HVMIPC
 import HVMQemu
 import HVMDisplayQemu
 
@@ -54,12 +55,14 @@ final class QemuFanoutSession {
     /// NSEvent 一时刻只送一个 view, 序列化无竞争.
     private let forwarder: InputForwarder
 
-    /// spice-vdagent client. user 拖 HVM 主窗口 → resize master view 的
-    /// onDrawableSizeChange 调 sendMonitorsConfig(w, h), 直接通过 vdagent
-    /// virtio-serial chardev 发 VDAgentMonitorsConfig 给 guest 内 spice-vdagent
-    /// 服务 → SetDisplayConfig → 改分辨率. 没装 vdagent 的 guest 不响应没事
-    /// (chardev 写穿过去, guest 端没 reader 静默丢, 主路径不阻塞).
-    private let vdagent: VdagentClient
+    /// host 子进程 IPC socket path (跟 hvm-cli/hvm-dbg 用同一条 socket).
+    /// fireResize 通过本路径发 dbg.display.resize op 给 host 子进程, host 端的
+    /// SpiceMainClient 转发 VDAgentMonitorsConfig 给 guest spice-vdagent.
+    /// 设计要点: SpiceMainClient 必须在 host 子进程持有 (跟 QEMU spawn 同步连入
+    /// spice-server, 早于 guest vioserialp 加载, 否则 spice-server 状态机异常让
+    /// Win 早期 driver init BSOD). GUI 端只能 IPC 转发, 不能直接持 SpiceMainClient.
+    /// 详见 QemuHostState.spiceClient 注释.
+    private let hostSocketPath: String
 
     /// 弱引用包. View 销毁后 fanout 自动跳过 (不需要显式 unsubscribe 也安全).
     private final class WeakBox {
@@ -92,19 +95,34 @@ final class QemuFanoutSession {
         self.bundleURL = bundleURL
         let iosurfacePath = HVMPaths.iosurfaceSocketPath(for: vmID).path
         let qmpInputPath  = HVMPaths.qmpInputSocketPath(for: vmID).path
-        let vdagentPath   = HVMPaths.vdagentSocketPath(for: vmID).path
         self.channel = DisplayChannel(socketPath: iosurfacePath)
         self.forwarder = InputForwarder(qmpSocketPath: qmpInputPath)
-        self.vdagent = VdagentClient(socketPath: vdagentPath)
+        self.hostSocketPath = HVMPaths.socketPath(for: vmID).path
     }
 
     /// 给 hvm-dbg display-resize 用 — 跟 view.onDrawableSizeChange callback 等价的
-    /// 同步触发: HDP RESIZE_REQUEST (Linux EDID 路径) + vdagent MONITORS_CONFIG (Win 路径).
+    /// 同步触发: HDP RESIZE_REQUEST (Linux EDID 路径) + SPICE MONITORS_CONFIG (Win 路径,
+    /// 走 IPC 转 host 子进程的 SpiceMainClient).
     /// 不依赖任何 view 实例存在 (只要 fanout 还活着, 即 VM 在跑且 GUI 持有 session).
     /// hvm-dbg 通过 guiControlSocketPath IPC 转到这里, 自动化测试 resize 链路.
     func fireResize(width: UInt32, height: UInt32) {
         channel.requestResize(width: width, height: height)
-        vdagent.sendMonitorsConfig(width: width, height: height)
+        sendSpiceResizeIPC(width: width, height: height)
+    }
+
+    /// 异步 fire-and-forget 发 dbg.display.resize 给 host 子进程. 不阻塞 UI thread,
+    /// IPC 失败 silently swallow (host 进程退出 / spice 通路未启都不算 user 错误).
+    /// SpiceMainClient.sendMonitorsConfig 自带 dedup, 高频拖窗口 spam IPC 也不会
+    /// 让 guest 抖动.
+    private nonisolated func sendSpiceResizeIPC(width: UInt32, height: UInt32) {
+        let socketPath = self.hostSocketPath
+        DispatchQueue.global(qos: .userInitiated).async {
+            let req = IPCRequest(
+                op: IPCOp.dbgDisplayResize.rawValue,
+                args: ["width": "\(width)", "height": "\(height)"]
+            )
+            _ = try? SocketClient.request(socketPath: socketPath, request: req, timeoutSec: 2)
+        }
     }
 
     /// 启动连接 + 事件循环. 不阻塞调用线程. 多次调用安全 (第二次无效).
@@ -112,7 +130,6 @@ final class QemuFanoutSession {
         guard connectTask == nil else { return }
         log.info("start: retry connecting HDP channel for vm=\(self.vmID.uuidString)")
         forwarder.connect()
-        vdagent.connect()
         startThumbnailTimer()
         runConnectLoop()
     }
@@ -160,7 +177,7 @@ final class QemuFanoutSession {
         eventLoopTask?.cancel(); eventLoopTask = nil
         channel.disconnect()
         forwarder.disconnect()
-        vdagent.disconnect()
+        // SpiceMainClient 在 host 子进程持有, 这里 GUI 端没东西要 disconnect.
         if cachedSurfaceFD >= 0 {
             Darwin.close(cachedSurfaceFD); cachedSurfaceFD = -1
         }
@@ -170,10 +187,10 @@ final class QemuFanoutSession {
 
     deinit {
         // deinit 跨线程, 不能 call MainActor-isolated 方法.
-        // channel.disconnect / forwarder.disconnect / vdagent.disconnect 内部 DispatchQueue 已线程安全.
+        // channel.disconnect / forwarder.disconnect 内部 DispatchQueue 已线程安全.
         channel.disconnect()
         forwarder.disconnect()
-        vdagent.disconnect()
+        // SpiceMainClient 在 host 子进程持有, 这里 GUI 端没东西要 disconnect.
         connectTask?.cancel()
         eventLoopTask?.cancel()
         if cachedSurfaceFD >= 0 {
@@ -198,16 +215,18 @@ final class QemuFanoutSession {
         // resize master 把自己的 drawable size 推给 guest:
         //   1. channel.requestResize → QEMU patch 0002 RESIZE_REQUEST handler →
         //      dpy_set_ui_info (Linux/Asahi guest 内核 virtio-gpu driver 收 EDID 改分辨率)
-        //   2. vdagent.sendMonitorsConfig → 直接通过 vdagent chardev 发
-        //      VDAgentMonitorsConfig (Win guest spice-vdagent 服务收 → SetDisplayConfig).
-        //      Win 的 ramfb / virtio-gpu driver 不响应 EDID, 必须走这条 spice 协议.
+        //   2. spiceClient.sendMonitorsConfig → SPICE main channel 上发 VDAgentMessage
+        //      MONITORS_CONFIG, spice-server 通过 spicevmc multiplex 给 guest 内 vdservice
+        //      → forward 给 user-session vdagent.exe → SetDisplayConfig (Win 路径).
+        //      Win 的 viogpudo driver 不响应 EDID, 必须走这条 spice 协议.
         // 两路并发, guest 哪条 work 哪条生效 (Linux 用 #1, Win 用 #2).
         if isResizeMaster {
             let channel = self.channel
-            let vdagent = self.vdagent
-            view.onDrawableSizeChange = { w, h in
+            // 弱引用 self 给 IPC fire-and-forget 调用 — 拖窗口高频触发, 弱引用避免
+            // 闭包持 self 长时间不释放 (本来 view onDrawableSizeChange 是 view 侧 callback).
+            view.onDrawableSizeChange = { [weak self] w, h in
                 channel.requestResize(width: w, height: h)
-                vdagent.sendMonitorsConfig(width: w, height: h)
+                self?.sendSpiceResizeIPC(width: w, height: h)
             }
         } else {
             view.onDrawableSizeChange = nil

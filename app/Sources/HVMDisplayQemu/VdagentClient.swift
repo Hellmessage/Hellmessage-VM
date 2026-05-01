@@ -1,5 +1,19 @@
 // HVMDisplayQemu/VdagentClient.swift
 //
+// **DEPRECATED** — 已被 SpiceMainClient.swift 替换. 文件保留作 raw chardev 模式参考.
+//
+// 历史: 这是 commit f94d45e 时实现的 raw `-chardev socket,server=on` 模式 vdagent client,
+// 走裸 chardev 直接连 unix socket 发 VDAgentMessage. 实测 vdservice 在 raw 模式下 reply
+// error=1 GENERIC, 不会 forward MONITORS_CONFIG 给 user-session vdagent.exe → 分辨率不变.
+//
+// 替代方案: SpiceMainClient 走 SPICE main channel + `-chardev spicevmc,name=vdagent`,
+// spice-server 中转走「正常 SPICE 通路」, vdservice 接受并 forward 给 vdagent.exe → 分辨率改成功.
+//
+// 为何保留: 如果未来上游 spice-vdagent 修了 raw 模式 forward 行为, 或者要在不引 spice-server
+// 的轻量构建里跑, 这条裸通路有参考价值. 当前不被 wire up, 任何 instantiate 都是错.
+//
+// ---- 以下原文档保留, 请同时阅读 SpiceMainClient.swift ----
+//
 // spice-vdagent client. Host 端通过 QEMU 的 virtio-serial chardev unix socket
 // (path=com.redhat.spice.0) 给 guest 内的 spice-vdagent 服务发 VDAgentMonitorsConfig
 // 消息, 让 guest 调 Win API SetDisplayConfig 改分辨率, 实现拖 HVM 主窗口动态 resize.
@@ -43,6 +57,7 @@ import OSLog
 
 private let log = Logger(subsystem: "com.hellmessage.vm", category: "Vdagent")
 
+@available(*, deprecated, message: "raw -chardev socket 模式 vdservice 不 forward 给 vdagent.exe; 改用 SpiceMainClient (走 SPICE main channel + spicevmc multiplex)")
 public final class VdagentClient: @unchecked Sendable {
 
     // VD_AGENT 协议常量 (跟 spice-protocol/spice/vd_agent.h 同步)

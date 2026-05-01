@@ -87,9 +87,9 @@ public enum BundleLayout {
     public static func serialSocketURL(_ bundle: URL) -> URL {
         bundle.appendingPathComponent("run", isDirectory: true).appendingPathComponent("console.sock")
     }
-    // 注: HDP iosurface / 输入 QMP / spice-vdagent 走的 socket 与 console QMP /
+    // 注: HDP iosurface / 输入 QMP / SPICE main channel 走的 socket 与 console QMP /
     // swtpm 等同走 HVMPaths.runDir 全局风格 (per-uuid), 不在 bundle 内部.
-    // 见 HVMPaths.iosurfaceSocketPath / qmpInputSocketPath / vdagentSocketPath.
+    // 见 HVMPaths.iosurfaceSocketPath / qmpInputSocketPath / spiceSocketPath.
 
     /// swtpm 持久化 TPM 状态目录 (Win11 NVRAM 表征, 跨重启保留 SecureBoot 信任根)
     public static func tpmStateDir(_ bundle: URL) -> URL {
