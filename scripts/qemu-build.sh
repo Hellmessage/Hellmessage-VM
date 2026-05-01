@@ -179,7 +179,22 @@ build_qemu() {
     # meson_options.txt 生成. patch 0002 同时把生成后的 .sh 打进去, 让 reset
     # --hard + apply 后 configure 即可识别 --enable-iosurface (跟 --enable-cocoa
     # 同风格).
-    ( cd "$build_dir" && \
+    # PKG_CONFIG_PATH 优先指 third_party/spice-server-stage/lib/pkgconfig (HVM patched
+     # spice-server, 含 reds.cpp always-forward-monitors-config patch). configure 找到
+    # patched .pc 后, qemu-system-aarch64 link 的就是 patched libspice-server.X.dylib.
+    # 不存在 (用户跳过 make spice-server) 时 fallback 到 brew 装的 stock 版本, 但
+    # ARM Win 11 dynamic resize 不可用 (vdagent 收不到 monitors config).
+    local spice_stage_pc="$ROOT/third_party/spice-server-stage/lib/pkgconfig"
+    local pkg_path
+    if [[ -f "$spice_stage_pc/spice-server.pc" ]]; then
+        pkg_path="$spice_stage_pc:${PKG_CONFIG_PATH:-}"
+        ok "configure 用 patched spice-server: $spice_stage_pc"
+    else
+        pkg_path="${PKG_CONFIG_PATH:-}"
+        warn "third_party/spice-server-stage 不存在, configure 用 brew stock spice-server"
+        warn "  ARM Win 11 dynamic resize 不可用. 跑: scripts/spice-server-build.sh 后再 make qemu"
+    fi
+    ( cd "$build_dir" && PKG_CONFIG_PATH="$pkg_path" \
         ../configure \
             --prefix="$STAGING_DIR" \
             --target-list=aarch64-softmmu \
@@ -634,10 +649,23 @@ EOF
 # 流程: 源码 → 编译 → install --prefix=stage → 裁剪 → 嵌 swtpm/socket_vmnet
 #       → 清 xattr → 写 MANIFEST/LICENSE
 # stage 即 bundle.sh 输入, 不再有中间 third_party/qemu/ vendor 层
+ensure_spice_server() {
+    step "确保 patched spice-server 已 build (third_party/spice-server-stage/)"
+    local stage_dylib="$ROOT/third_party/spice-server-stage/lib/libspice-server.1.dylib"
+    if [[ -f "$stage_dylib" ]]; then
+        ok "patched spice-server 已就绪 (复用; 强制重 build 删 third_party/spice-server-stage/)"
+        return
+    fi
+    warn "patched spice-server 不存在, 调 scripts/spice-server-build.sh 现 build"
+    bash "$ROOT/scripts/spice-server-build.sh" || err "spice-server build 失败"
+    [[ -f "$stage_dylib" ]] || err "spice-server build 跑完但 $stage_dylib 仍缺失"
+}
+
 main() {
     preflight
     ensure_homebrew
     ensure_brew_packages
+    ensure_spice_server
     fetch_qemu_source
     apply_patches
     build_qemu

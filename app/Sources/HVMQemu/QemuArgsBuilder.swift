@@ -65,6 +65,10 @@ public enum QemuArgsBuilder {
         /// 把 host 端 SpiceMainClient 发的 VDAgentMessage 中转到 guest 内 spice-vdagent.
         /// nil 时不启 spice-server, 也不挂 vdagent virtio-serial port (Win 动态 resize 失效).
         public let spiceSocketPath: String?
+        /// UTM Guest Tools ISO 全局缓存绝对路径 (仅 windows guest 用, 由 SpiceToolsCache 提供).
+        /// 非 nil 时挂第三 cdrom; OOBE FirstLogonCommands 扫盘符跑里面的 NSIS installer
+        /// 自动装 ARM64 native vdagent + utmapp 自家 viogpudo, 让 dynamic resize 生效.
+        public let utmGuestToolsISOPath: String?
 
         public init(
             config: VMConfig,
@@ -77,7 +81,8 @@ public enum QemuArgsBuilder {
             unattendISOPath: String? = nil,
             iosurfaceSocketPath: String? = nil,
             qmpInputSocketPath: String? = nil,
-            spiceSocketPath: String? = nil
+            spiceSocketPath: String? = nil,
+            utmGuestToolsISOPath: String? = nil
         ) {
             self.config = config
             self.bundleURL = bundleURL
@@ -90,6 +95,7 @@ public enum QemuArgsBuilder {
             self.iosurfaceSocketPath = iosurfaceSocketPath
             self.qmpInputSocketPath = qmpInputSocketPath
             self.spiceSocketPath = spiceSocketPath
+            self.utmGuestToolsISOPath = utmGuestToolsISOPath
         }
     }
 
@@ -224,6 +230,14 @@ public enum QemuArgsBuilder {
             if let virtioWinPath = inputs.virtioWinISOPath {
                 args += ["-drive", "if=none,id=cdrom_vio,media=cdrom,file=\(virtioWinPath),readonly=on"]
                 args += ["-device", "usb-storage,drive=cdrom_vio,id=cdrom_vio_dev,removable=true,bus=xhci.0"]
+            }
+            // UTM Guest Tools ISO: usb-storage 第四 cdrom (含 ARM64 native vdagent +
+            // utmapp 自家 viogpudo, OOBE FirstLogonCommands 扫盘符跑 NSIS installer 装).
+            // 探测条件 ` for %D in (...) do for %F in (%D:\\utm-guest-tools-*.exe) do ...`,
+            // 没挂这条 ISO 时整条 cmd noop, 不影响 OOBE 流程.
+            if let utmGuestToolsPath = inputs.utmGuestToolsISOPath {
+                args += ["-drive", "if=none,id=cdrom_utm,media=cdrom,file=\(utmGuestToolsPath),readonly=on"]
+                args += ["-device", "usb-storage,drive=cdrom_utm,id=cdrom_utm_dev,removable=true,bus=xhci.0"]
             }
         } else {
             // Linux/macOS: virtio-cdrom 维持原状 (Ubuntu 24.04 已验证)

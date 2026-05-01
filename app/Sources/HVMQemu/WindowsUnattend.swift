@@ -30,26 +30,23 @@ public enum WindowsUnattend {
     ///   - bundle: VM bundle 根目录 (.hvmz)
     ///   - bypassInstallChecks: 加 windowsPE pass reg add LabConfig\Bypass*Check
     ///   - autoInstallVirtioWin: 加 oobeSystem pass FirstLogonCommands pnputil 装驱动
-    ///   - autoInstallSpiceTools: 加 oobeSystem pass FirstLogonCommands spice-guest-tools.exe /S 静默装
-    ///     (依赖全局 cache 里有 spice-guest-tools.exe; 拷进 stage 一起打 ISO. 缓存缺失时
-    ///     fail-soft, 跳过 spice 部分但 unattend ISO 仍生成)
+    ///   - autoInstallSpiceTools: 加 oobeSystem pass FirstLogonCommands 扫所有盘符跑
+    ///     utm-guest-tools-*.exe /S 静默装 (NSIS installer). 依赖 QemuArgsBuilder 把
+    ///     utm-guest-tools.iso 当第三 cdrom 挂给 guest 看到; 缺 ISO 时 cmd 找不到 .exe
+    ///     就 noop 跳过, 不阻塞 OOBE 流程. 注意: utm-guest-tools.iso **不**拷进 unattend
+    ///     ISO (120MB 太大, 改成 cdrom 直接挂)
     /// - Returns: unattend ISO 的 URL (可能是新写也可能复用)
     public static func ensureISO(
         bundle: URL,
         bypassInstallChecks: Bool,
         autoInstallVirtioWin: Bool,
-        autoInstallSpiceTools: Bool = false,
-        spiceToolsExeURL: URL? = nil
+        autoInstallSpiceTools: Bool = false
     ) throws -> URL {
-        // 实际能否带上 spice exe: 开关开 + 缓存文件存在
         let fm = FileManager.default
-        let spiceAvailable = autoInstallSpiceTools
-            && spiceToolsExeURL != nil
-            && fm.fileExists(atPath: spiceToolsExeURL!.path)
         let xml = unattendXML(
             bypassInstallChecks: bypassInstallChecks,
             autoInstallVirtioWin: autoInstallVirtioWin,
-            autoInstallSpiceTools: spiceAvailable
+            autoInstallSpiceTools: autoInstallSpiceTools
         )
         let stageDir = BundleLayout.unattendStageDir(bundle)
         // 三份文件名都写: 不同版本 Win Setup 对大小写要求不一
@@ -59,30 +56,23 @@ public enum WindowsUnattend {
         let canonicalURL = stageDir.appendingPathComponent("Autounattend.xml")
         let lowerURL = stageDir.appendingPathComponent("autounattend.xml")
         let shortURL = stageDir.appendingPathComponent("unattend.xml")
-        let spiceStageURL = stageDir.appendingPathComponent("spice-guest-tools.exe")
         let isoURL = BundleLayout.unattendISOURL(bundle)
 
-        // 幂等: ISO 已存在 + canonical XML 存在 + 内容一致 + spice payload 存在性也一致 → 复用
-        let spiceAlreadyStaged = fm.fileExists(atPath: spiceStageURL.path)
+        // 幂等: ISO 已存在 + canonical XML 存在 + 内容一致 → 复用
         if fm.fileExists(atPath: isoURL.path),
            fm.fileExists(atPath: canonicalURL.path),
            let existing = try? String(contentsOf: canonicalURL, encoding: .utf8),
-           existing == xml,
-           spiceAlreadyStaged == spiceAvailable {
+           existing == xml {
             return isoURL
         }
 
-        // 重建 stage
+        // 重建 stage (只含 unattend xml; utm-guest-tools.iso 不拷, 走 cdrom 挂)
         try? fm.removeItem(at: stageDir)
         do {
             try fm.createDirectory(at: stageDir, withIntermediateDirectories: true)
             try xml.write(to: canonicalURL, atomically: true, encoding: .utf8)
             try xml.write(to: lowerURL, atomically: true, encoding: .utf8)
             try xml.write(to: shortURL, atomically: true, encoding: .utf8)
-            // 把 spice-guest-tools.exe 拷进 stage 一起打 ISO (~30MB)
-            if spiceAvailable, let src = spiceToolsExeURL {
-                try fm.copyItem(at: src, to: spiceStageURL)
-            }
         } catch {
             throw Error.writeFailed(reason: "stage 写入失败: \(error)")
         }
@@ -160,13 +150,19 @@ public enum WindowsUnattend {
             commands.append((cmd, "HVM auto-install virtio-win drivers (ARM64)"))
         }
         if autoInstallSpiceTools {
-            // spice-guest-tools-latest.exe 是 NSIS installer, /S 静默装 spice-vdagent 服务.
-            // 装完后 Windows 收 host 的 monitor config 自动改分辨率, HVM 主窗口拖大小 guest 跟随.
-            // ARM64 Windows 通过 x86 emulation 跑 x86 NSIS installer, spice-space 社区已验证 OK.
-            // 探测条件: %D:\spice-guest-tools.exe (unattend ISO 上由 ensureISO 拷进).
+            // utm-guest-tools-X.Y.ZZZ.exe 是 NSIS installer (UTM 自家打包, 含 ARM64 native
+            // spice-vdagent.exe 服务 + utmapp/virtio-gpu-wddm-dod 自家 viogpudo.sys driver).
+            // 实测 stock spice-guest-tools.exe (spice-space.org) 只有 x86, ARM Win 跑 x86 emu
+            // vdagent + stock viogpudo 走不通 dynamic resize 链路; UTM 这套 ARM64 native 实现
+            // (含 QXL escape SET_CUSTOM_DISPLAY 等) 才能让 host MONITORS_CONFIG 真改分辨率.
+            //
+            // 装包来源: getutm.app/downloads/utm-guest-tools-latest.iso (~120MB),
+            // 通过 SpiceToolsCache 全局缓存; QemuArgsBuilder 把 .iso 当第三 cdrom 挂给 guest.
+            // 探测条件: 扫所有盘符找 utm-guest-tools-*.exe (含版本号, 用 wildcard).
             // 走 start /wait 让 SynchronousCommand 等到装完才进下一条命令.
-            let cmd = "cmd /c for %D in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do @if exist %D:\\spice-guest-tools.exe start /wait %D:\\spice-guest-tools.exe /S"
-            commands.append((cmd, "HVM auto-install spice-guest-tools (vdagent for dynamic resize)"))
+            // 探测失败 (没挂 ISO / 缓存缺) 时整条 cmd noop, 不阻塞 OOBE.
+            let cmd = "cmd /c for %D in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do @for %F in (%D:\\utm-guest-tools-*.exe) do @if exist %F start /wait %F /S"
+            commands.append((cmd, "HVM auto-install UTM Guest Tools (ARM64 vdagent + viogpudo for dynamic resize)"))
         }
 
         var oobeBlock = ""

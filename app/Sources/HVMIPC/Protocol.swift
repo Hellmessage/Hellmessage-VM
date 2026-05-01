@@ -111,6 +111,20 @@ public enum IPCOp: String, Sendable {
     /// vdagent.sendMonitorsConfig). 给 hvm-dbg display-resize 用. 由 AppModel 在
     /// guiControlSocketPath 上提供, 不在 host 子进程 socket.
     case dbgDisplayResize = "dbg.display.resize"
+    /// 通过 QMP screendump 拿 PPM header → guest 真实当前 framebuffer 尺寸. 给
+    /// hvm-dbg display-info 用 — 验证 spice-vdagent dynamic resize 是否实际生效
+    /// (resize 前后两次 display-info 对比 width/height 是否变化).
+    case dbgDisplayInfo = "dbg.display.info"
+}
+
+/// dbg.display.info payload
+public struct IPCDbgDisplayInfoPayload: Codable, Sendable {
+    public let widthPx: Int
+    public let heightPx: Int
+    public init(widthPx: Int, heightPx: Int) {
+        self.widthPx = widthPx
+        self.heightPx = heightPx
+    }
 }
 
 // MARK: - Status payload (JSON-stringified for `data` values)

@@ -1,0 +1,8 @@
+# spice-server 补丁应用顺序; 一行一个文件名; # 开头为注释; 空行忽略
+# 0001: 移植自 UTM PATCH 09/11 (spice-0.14.3.patch:436), 让 spice-server 把
+#       AGENT_MSG_FILTER_MONITORS_CONFIG 既给 server 处理也 forward 给 vdagent.
+#       不打这个 patch ARM Win 11 上 spice-vdagent 收不到 monitors config, dynamic resize 失效.
+0001-reds-always-forward-monitors-config.patch
+# 0002: 移植自 UTM PATCH 08/11, 让 spice-server 0.16.0 在 macOS 上能 build
+#       (跳过 librt / libm 查找, 这俩在 macOS 是 libSystem 自带不是独立 dylib).
+0002-meson-fix-darwin-build.patch

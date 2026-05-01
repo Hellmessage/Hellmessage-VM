@@ -1,0 +1,31 @@
+From: HVM <hvm@hellmessage.com>
+Subject: [PATCH] meson: fix build on Darwin (no librt)
+
+Darwin doesn't have librt — clock_gettime / aio etc. live in libSystem.
+Stock spice-server 0.16.0 meson.build assumes non-Windows = Linux, fails
+to find 'rt' shared library on macOS.
+
+Skip 'rt' / 'm' dep search on darwin (libm is also part of libSystem).
+
+Adapted from UTM PATCH 08/11 in spice-0.14.3.patch (osy 2022-03-04),
+ported to spice-server 0.16.0 (line shifted from 102 to 109).
+
+---
+ meson.build | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/meson.build b/meson.build
+index 0000000..0000001 100644
+--- a/meson.build
++++ b/meson.build
+@@ -106,7 +106,9 @@ foreach dep : ['libjpeg', 'zlib']
+   spice_server_deps += dependency(dep)
+ endforeach
+
+-if host_machine.system() != 'windows'
++if host_machine.system() in ['darwin', 'ios']
++  # librt / libm not required on Darwin (provided by libSystem)
++elif host_machine.system() != 'windows'
+   foreach dep : ['rt', 'm']
+     spice_server_deps += compiler.find_library(dep)
+   endforeach

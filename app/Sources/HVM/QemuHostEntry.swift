@@ -110,26 +110,35 @@ public enum QemuHostEntry {
         // 3.7 AutoUnattend ISO (仅 windows + bypassInstallChecks/autoInstallVirtioWin/autoInstallSpiceTools 任一开).
         // 启动前用 hdiutil makehybrid 现做现挂; 失败 fail-soft (warn + 不挂第二 cdrom),
         // 用户仍可手动按 Shift+F10 在 Setup 里跑 reg add. 不阻塞 VM 启动.
-        // spice-guest-tools.exe 走全局 cache (~/Library/Application Support/HVM/cache/spice-tools/),
-        // 没缓存时 ensureISO 内部 fail-soft (跳过 spice 段, virtio 段照常); user 装机前应当先在
-        // GUI 创建向导触发 SpiceToolsCache.ensureCached 下载.
+        // utm-guest-tools.iso 不再 stage 进 unattend ISO (太大 ~120MB), 改成第四 cdrom 直接挂.
         var unattendISOPath: String? = nil
         if config.guestOS == .windows, let win = config.windows,
            win.bypassInstallChecks || win.autoInstallVirtioWin || win.autoInstallSpiceTools {
             do {
-                let spiceURL: URL? = SpiceToolsCache.isReady ? SpiceToolsCache.cachedExeURL : nil
                 let isoURL = try WindowsUnattend.ensureISO(
                     bundle: bundleURL,
                     bypassInstallChecks: win.bypassInstallChecks,
                     autoInstallVirtioWin: win.autoInstallVirtioWin,
-                    autoInstallSpiceTools: win.autoInstallSpiceTools,
-                    spiceToolsExeURL: spiceURL
+                    autoInstallSpiceTools: win.autoInstallSpiceTools
                 )
                 unattendISOPath = isoURL.path
-                let spiceState = win.autoInstallSpiceTools ? (spiceURL != nil ? "spice=on" : "spice=skip(cache miss)") : "spice=off"
-                fputs("HVMHost(qemu): ✔ unattend ISO 就绪 \(isoURL.path) (bypass=\(win.bypassInstallChecks), virtio=\(win.autoInstallVirtioWin), \(spiceState))\n", stderr)
+                fputs("HVMHost(qemu): ✔ unattend ISO 就绪 \(isoURL.path) (bypass=\(win.bypassInstallChecks), virtio=\(win.autoInstallVirtioWin), spice=\(win.autoInstallSpiceTools))\n", stderr)
             } catch {
                 fputs("HVMHost(qemu): ⚠ unattend ISO 生成失败 (\(error)); Win11 Setup 将不会自动跳过硬件检查, 用户需手动 Shift+F10 跑 reg add\n", stderr)
+            }
+        }
+
+        // 3.8 UTM Guest Tools ISO (仅 windows + autoInstallSpiceTools, 由 SpiceToolsCache 提供
+        // 全局缓存 ~/Library/Application Support/HVM/cache/spice-tools/utm-guest-tools.iso).
+        // 没缓存时跳过, 不阻塞 VM 启动 — user 装机前应当先在 GUI 创建向导触发
+        // SpiceToolsCache.ensureCached 下载.
+        var utmGuestToolsPath: String? = nil
+        if config.guestOS == .windows, let win = config.windows, win.autoInstallSpiceTools {
+            if SpiceToolsCache.isReady {
+                utmGuestToolsPath = SpiceToolsCache.cachedISOURL.path
+                fputs("HVMHost(qemu): ✔ UTM Guest Tools ISO 就绪 \(utmGuestToolsPath!)\n", stderr)
+            } else {
+                fputs("HVMHost(qemu): ⚠ UTM Guest Tools ISO 缓存缺, OOBE 不自动装 vdagent / viogpudo (dynamic resize 失效)\n", stderr)
             }
         }
 
@@ -156,7 +165,8 @@ public enum QemuHostEntry {
                 unattendISOPath: unattendISOPath,
                 iosurfaceSocketPath: iosurfaceSocketURL.path,
                 qmpInputSocketPath: qmpInputSocketURL.path,
-                spiceSocketPath: spiceSocketURL.path
+                spiceSocketPath: spiceSocketURL.path,
+                utmGuestToolsISOPath: utmGuestToolsPath
             )
             buildResult = try QemuArgsBuilder.build(inputs)
         } catch {
@@ -582,6 +592,7 @@ final class QemuHostState {
         case IPCOp.dbgConsoleRead.rawValue:   return handleDbgConsoleRead(req: req)
         case IPCOp.dbgConsoleWrite.rawValue:  return handleDbgConsoleWrite(req: req)
         case IPCOp.dbgDisplayResize.rawValue: return handleDbgDisplayResize(req: req)
+        case IPCOp.dbgDisplayInfo.rawValue:   return await handleDbgDisplayInfo(req: req)
 
         default:
             if req.op.hasPrefix("dbg.") {
@@ -711,11 +722,21 @@ final class QemuHostState {
             return .failure(id: req.id, code: "dbg.vm_not_running",
                             message: "QEMU 进程未运行")
         }
-        // guest framebuffer 尺寸 (与 dbgStatus 同, 估算)
-        let (gw, gh): (Int, Int)
-        if let os = config?.guestOS {
+        // guest framebuffer 真实尺寸 (用 QMP screendump 拿 PPM header). dynamic resize
+        // 后框架尺寸会变, 用写死的 defaultFramebufferSize 会让 mouse 坐标映射错位
+        // (实测 OCR 报 800x600 时 mouse 用 1920x1080 映射 → click 偏到屏幕外).
+        // screendump 失败 fallback 到 defaultFramebufferSize.
+        var gw = 1, gh = 1
+        let tmpURL = HVMPaths.runDir.appendingPathComponent("mouse-fbsize-\(UUID().uuidString.prefix(8)).ppm")
+        if (try? await client.screendump(filename: tmpURL.path)) != nil,
+           let fh = try? FileHandle(forReadingFrom: tmpURL),
+           let dims = try? PPMReader.readDimensions(fh.readData(ofLength: 64)) {
+            (gw, gh) = (dims.width, dims.height)
+            try? fh.close()
+        } else if let os = config?.guestOS {
             let s = os.defaultFramebufferSize; (gw, gh) = (s.width, s.height)
-        } else { (gw, gh) = (1, 1) }
+        }
+        try? FileManager.default.removeItem(at: tmpURL)
         let guestSize = CGSize(width: gw, height: gh)
         let button = req.args["button"] ?? "left"
         do {
@@ -855,6 +876,31 @@ final class QemuHostState {
         }
         spice.sendMonitorsConfig(width: width, height: height)
         return .success(id: req.id, data: ["width": "\(width)", "height": "\(height)"])
+    }
+
+    /// 通过 QMP screendump 拿当前 framebuffer 真实尺寸 (PPM header).
+    /// 用于 hvm-dbg display-info 验证 spice-vdagent dynamic resize 实际生效:
+    /// resize 触发前后两次调用对比 widthPx/heightPx 是否变化.
+    private func handleDbgDisplayInfo(req: IPCRequest) async -> IPCResponse {
+        guard let client = qmpClient else {
+            return .failure(id: req.id, code: "backend.qmp_unavailable", message: "QMP 未就绪")
+        }
+        let tmpURL = HVMPaths.runDir.appendingPathComponent("displayinfo-\(UUID().uuidString.prefix(8)).ppm")
+        defer { try? FileManager.default.removeItem(at: tmpURL) }
+        do {
+            try await client.screendump(filename: tmpURL.path)
+            // 只读前 64 字节就够拿 PPM header (P6\n<width> <height>\n255\n...)
+            guard let fh = try? FileHandle(forReadingFrom: tmpURL) else {
+                return .failure(id: req.id, code: "dbg.frame_unavailable", message: "open ppm failed")
+            }
+            defer { try? fh.close() }
+            let head = fh.readData(ofLength: 64)
+            let dims = try PPMReader.readDimensions(head)
+            let payload = IPCDbgDisplayInfoPayload(widthPx: dims.width, heightPx: dims.height)
+            return .encoded(id: req.id, payload: payload, kind: "display info")
+        } catch {
+            return .failure(id: req.id, code: "dbg.frame_unavailable", message: "\(error)")
+        }
     }
 
     private func handleDbgFindText(req: IPCRequest) async -> IPCResponse {
