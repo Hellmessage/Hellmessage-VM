@@ -115,6 +115,23 @@ public enum IPCOp: String, Sendable {
     /// hvm-dbg display-info 用 — 验证 spice-vdagent dynamic resize 是否实际生效
     /// (resize 前后两次 display-info 对比 width/height 是否变化).
     case dbgDisplayInfo = "dbg.display.info"
+    /// 通过 qemu-guest-agent (qga) 在 guest 内跑 process, 拿 stdout/stderr/exit_code.
+    /// 给 hvm-dbg exec --via-qga 用. 配套 guest 内 qemu-ga.exe 服务 + argv 挂的
+    /// virtio-serial port com.qemu.guest_agent.0 (chardev qga). 不依赖 keyboard typing
+    /// (避 IME 字符替换) / OCR (避识别误差) / GUI mouse (避 USB tablet 坐标问题).
+    case dbgExecGuest = "dbg.exec.guest"
+}
+
+/// dbg.exec.guest payload — 跑 guest 内 process 拿结果. exit_code=-1 表示 timeout.
+public struct IPCDbgExecPayload: Codable, Sendable {
+    public let exitCode: Int
+    public let stdoutBase64: String
+    public let stderrBase64: String
+    public init(exitCode: Int, stdoutBase64: String, stderrBase64: String) {
+        self.exitCode = exitCode
+        self.stdoutBase64 = stdoutBase64
+        self.stderrBase64 = stderrBase64
+    }
 }
 
 /// dbg.display.info payload

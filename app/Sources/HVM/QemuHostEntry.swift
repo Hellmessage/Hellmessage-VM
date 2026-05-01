@@ -148,9 +148,11 @@ public enum QemuHostEntry {
         let iosurfaceSocketURL  = HVMPaths.iosurfaceSocketPath(for: config.id)
         let qmpInputSocketURL   = HVMPaths.qmpInputSocketPath(for: config.id)
         let spiceSocketURL      = HVMPaths.spiceSocketPath(for: config.id)
+        let qgaSocketURL        = HVMPaths.qgaSocketPath(for: config.id)
         try? FileManager.default.removeItem(at: iosurfaceSocketURL)
         try? FileManager.default.removeItem(at: qmpInputSocketURL)
         try? FileManager.default.removeItem(at: spiceSocketURL)
+        try? FileManager.default.removeItem(at: qgaSocketURL)
 
         let buildResult: QemuArgsBuilder.BuildResult
         do {
@@ -164,7 +166,8 @@ public enum QemuHostEntry {
                 iosurfaceSocketPath: iosurfaceSocketURL.path,
                 qmpInputSocketPath: qmpInputSocketURL.path,
                 spiceSocketPath: spiceSocketURL.path,
-                utmGuestToolsISOPath: utmGuestToolsPath
+                utmGuestToolsISOPath: utmGuestToolsPath,
+                qgaSocketPath: qgaSocketURL.path
             )
             buildResult = try QemuArgsBuilder.build(inputs)
         } catch {
@@ -591,6 +594,7 @@ final class QemuHostState {
         case IPCOp.dbgConsoleWrite.rawValue:  return handleDbgConsoleWrite(req: req)
         case IPCOp.dbgDisplayResize.rawValue: return handleDbgDisplayResize(req: req)
         case IPCOp.dbgDisplayInfo.rawValue:   return await handleDbgDisplayInfo(req: req)
+        case IPCOp.dbgExecGuest.rawValue:     return await handleDbgExecGuest(req: req)
 
         default:
             if req.op.hasPrefix("dbg.") {
@@ -898,6 +902,50 @@ final class QemuHostState {
             return .encoded(id: req.id, payload: payload, kind: "display info")
         } catch {
             return .failure(id: req.id, code: "dbg.frame_unavailable", message: "\(error)")
+        }
+    }
+
+    /// 通过 qemu-guest-agent 跑 guest 内 process. 协议:
+    /// 1. connect qga unix socket
+    /// 2. send {"execute":"guest-exec", "arguments":{"path": ..., "arg":[...], "capture-output": true}}
+    /// 3. 拿到 {"return": {"pid": N}}
+    /// 4. 轮询 {"execute":"guest-exec-status","arguments":{"pid": N}}
+    /// 5. 拿到 {"return": {"exited": true, "exitcode": K, "out-data":"base64", "err-data":"base64"}}
+    /// 6. return base64 stdout/stderr/exitcode
+    private func handleDbgExecGuest(req: IPCRequest) async -> IPCResponse {
+        guard let path = req.args["path"], !path.isEmpty else {
+            return .failure(id: req.id, code: "ipc.bad_args",
+                            message: "dbg.exec.guest 需要 args.path (binary 全路径或可执行名)")
+        }
+        // args 解析: arg0|arg1|... (用 \x1f 0x1F unit separator 分隔, 防 shell quote 麻烦);
+        // 参数为空 OK (跑无参数 binary)
+        let argList: [String] = (req.args["argv"] ?? "")
+            .split(separator: "\u{1F}", omittingEmptySubsequences: false)
+            .map(String.init)
+            .filter { !$0.isEmpty }
+        let timeoutSec = Int(req.args["timeoutSec"] ?? "30") ?? 30
+        guard let configID = config?.id else {
+            return .failure(id: req.id, code: "backend.no_vm", message: "VM config 未就绪")
+        }
+        let qgaSocketPath = HVMPaths.qgaSocketPath(for: configID).path
+        guard FileManager.default.fileExists(atPath: qgaSocketPath) else {
+            return .failure(id: req.id, code: "qga.socket_not_found",
+                            message: "qga socket 缺 (\(qgaSocketPath)); 旧 VM bundle 没启 qga chardev, cold restart 让 argv 生效")
+        }
+        do {
+            let result = try await QgaExec.run(
+                socketPath: qgaSocketPath,
+                path: path, args: argList,
+                timeoutSec: timeoutSec
+            )
+            let payload = IPCDbgExecPayload(
+                exitCode: result.exitCode,
+                stdoutBase64: result.stdoutBase64,
+                stderrBase64: result.stderrBase64
+            )
+            return .encoded(id: req.id, payload: payload, kind: "exec result")
+        } catch {
+            return .failure(id: req.id, code: "qga.exec_failed", message: "\(error)")
         }
     }
 

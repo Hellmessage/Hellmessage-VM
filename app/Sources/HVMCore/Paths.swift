@@ -99,6 +99,15 @@ public enum HVMPaths {
     public static func qmpInputSocketPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).qmp.input.sock")
     }
+    /// qemu-guest-agent (qemu-ga.exe in guest, UTM Guest Tools 装包含) 的 virtio-serial
+    /// chardev unix socket. host 通过本 socket 发 JSON `guest-exec` 命令在 guest 内跑
+    /// process (PowerShell / cmd / 任何 .exe), 拿 stdout / stderr / exit_code, 不依赖
+    /// keyboard typing (避开 IME 字符替换) / OCR (避开识别误差) / GUI mouse 操作.
+    /// 由 hvm-dbg exec --via-qga 使用, 是端到端自动化验证 guest 行为的最可靠通路.
+    public static func qgaSocketPath(for id: UUID) -> URL {
+        runDir.appendingPathComponent("\(id.uuidString.lowercased()).qga.sock")
+    }
+
     /// SPICE main channel unix socket; QEMU `-spice unix=on,addr=...` server,
     /// HVMDisplayQemu.SpiceMainClient 作 client 连进去, 在 main channel 上发
     /// SPICE_MSGC_MAIN_AGENT_DATA 包裹 VDAgentMessage(MONITORS_CONFIG), spice-server

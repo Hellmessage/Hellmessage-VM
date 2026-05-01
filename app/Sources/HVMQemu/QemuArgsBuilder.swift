@@ -69,6 +69,11 @@ public enum QemuArgsBuilder {
         /// 非 nil 时挂第三 cdrom; OOBE FirstLogonCommands 扫盘符跑里面的 NSIS installer
         /// 自动装 ARM64 native vdagent + utmapp 自家 viogpudo, 让 dynamic resize 生效.
         public let utmGuestToolsISOPath: String?
+        /// qemu-guest-agent virtio-serial chardev socket. 非 nil 时 argv 加 chardev qga +
+        /// virtserialport name=org.qemu.guest_agent.0, guest 内 qemu-ga.exe 服务 (UTM
+        /// Guest Tools 装包含 qemu-ga-x86_64.msi) 自动 attach. host 通过本 socket 发
+        /// guest-exec JSON 跑 PowerShell / cmd, 是 hvm-dbg exec --via-qga 的底层通路.
+        public let qgaSocketPath: String?
 
         public init(
             config: VMConfig,
@@ -82,7 +87,8 @@ public enum QemuArgsBuilder {
             iosurfaceSocketPath: String? = nil,
             qmpInputSocketPath: String? = nil,
             spiceSocketPath: String? = nil,
-            utmGuestToolsISOPath: String? = nil
+            utmGuestToolsISOPath: String? = nil,
+            qgaSocketPath: String? = nil
         ) {
             self.config = config
             self.bundleURL = bundleURL
@@ -96,6 +102,7 @@ public enum QemuArgsBuilder {
             self.qmpInputSocketPath = qmpInputSocketPath
             self.spiceSocketPath = spiceSocketPath
             self.utmGuestToolsISOPath = utmGuestToolsISOPath
+            self.qgaSocketPath = qgaSocketPath
         }
     }
 
@@ -356,6 +363,19 @@ public enum QemuArgsBuilder {
             args += ["-device", "virtio-serial"]
             args += ["-chardev", "spicevmc,id=vdagent,debug=0,name=vdagent"]
             args += ["-device", "virtserialport,chardev=vdagent,name=com.redhat.spice.0"]
+        }
+
+        // qemu-guest-agent (qemu-ga) 通路 — 给 hvm-dbg exec --via-qga 用, 走 virtio-serial
+        // port com.qemu.guest_agent.0 跑 guest 内 PowerShell / cmd 命令拿 stdout/exit_code.
+        // 配套 guest 内 qemu-ga.exe 服务 (UTM Guest Tools 装包含 qemu-ga-x86_64.msi).
+        // 注意: virtio-serial device 已在 spice 段加过, 不能重复加, 这里直接 reuse 同一个
+        // virtio-serial bus. 若 spice 段没加 (没传 spiceSocketPath), 我们独立加 virtio-serial.
+        if let qgaSocket = inputs.qgaSocketPath {
+            if inputs.spiceSocketPath == nil {
+                args += ["-device", "virtio-serial"]
+            }
+            args += ["-chardev", "socket,id=qga,path=\(qgaSocket),server=on,wait=off"]
+            args += ["-device", "virtserialport,chardev=qga,name=org.qemu.guest_agent.0"]
         }
 
         // ---- QMP 控制 ----
