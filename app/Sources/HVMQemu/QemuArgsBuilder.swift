@@ -230,24 +230,37 @@ public enum QemuArgsBuilder {
             }
         }
 
+        // ---- PCIe root ports ----
+        // ARM virt 机器的默认 root bus `pcie.0` 是 PCIe-to-PCI legacy bridge — 设备挂上去
+        // 走 transitional / PCI 模式, 用 legacy MSI 而不是 MSI-X 中断. virtio-net-pci 在
+        // legacy bus 上**高 frame rate 时丢中断** (实测 vmnet bridged DHCP / broadcast 频次
+        // 下 guest 收不到 frame, NAT 低 traffic 没问题). hell-vm 同款做法: 启动时预定义 4 个
+        // pcie-root-port, NIC 挂上去走 PCIe native MSI-X, 中断可靠.
+        //   chassis 必须 >=1 (chassis 0 保留); 每 root port 独占一个 chassis.
+        //   4 个槽位日常够用, 多 NIC 超出会落回 pcie.0 (legacy fallback, 跟之前行为一致).
+        for i in 0..<4 {
+            args += ["-device", "pcie-root-port,id=rp\(i),chassis=\(i + 1)"]
+        }
+
         // ---- 网络 ----
         // bridged / shared 走系统级 socket_vmnet daemon (launchd 拉起, 见 scripts/install-vmnet-helper.sh).
         // **协议关键**: socket_vmnet daemon 用 4-byte length-prefix framing, 这恰好跟 QEMU
         //   `-netdev stream,addr.type=unix,addr.path=<sock>` 的 framing 一致 (lima / hell-vm 同款).
         // **不要**用 `-netdev socket,fd=K`: 那是 QEMU 早期 VM-to-VM multicast netdev,
-        //   用 2-byte length-prefix, 跟 socket_vmnet 不兼容 — connect 上但 frame 序列化失败,
-        //   guest DHCP request 发出去 daemon 解析失败丢弃, 反向 daemon 发来的 frame guest 也读不了.
-        //   (历史遗留: 之前 hvm-mac 这条路径错用 socket+fd, 实测 guest 拿 169.254 APIPA fallback.)
-        // QEMU 自己 connect unix socket → fd 透传机制 (posix_spawn dup2) 完全不需要,
-        //   BuildResult.vmnetSocketPaths 保留为空 (老接口, 调用方 / Sidecar 兼容代码会跳过透传路径).
+        //   用 2-byte length-prefix, 跟 socket_vmnet 不兼容 — connect 上但 frame 序列化失败.
+        // **bus= 关键**: 必须挂到 pcie-root-port (rp_N) 走 PCIe native, 不能落 pcie.0 legacy
+        //   bridge — 见上节 "PCIe root ports" 注释.
         var vmnetSocketPaths: [String] = []
         for (idx, net) in cfg.networks.enumerated() {
             let netId = "net\(idx)"
+            // NIC 挂哪个 root port: 按 networks 顺序占 rp0..rp3; 超 4 张回落 pcie.0
+            let busOpt = idx < 4 ? ",bus=rp\(idx)" : ""
+            let deviceOpts = "virtio-net-pci,netdev=\(netId),mac=\(net.macAddress)\(busOpt)"
             switch net.mode {
             case .nat:
                 // user-mode NAT: QEMU 自带 SLIRP, 与 VZ NAT 语义对齐 (无需任何 daemon)
                 args += ["-netdev", "user,id=\(netId)"]
-                args += ["-device", "virtio-net-pci,netdev=\(netId),mac=\(net.macAddress)"]
+                args += ["-device", deviceOpts]
             case .bridged(let iface):
                 let sockPath = VmnetDaemonPaths.bridgedSocket(interface: iface)
                 guard VmnetDaemonPaths.isReady(sockPath) else {
@@ -258,7 +271,7 @@ public enum QemuArgsBuilder {
                     ))
                 }
                 args += ["-netdev", "stream,id=\(netId),addr.type=unix,addr.path=\(sockPath)"]
-                args += ["-device", "virtio-net-pci,netdev=\(netId),mac=\(net.macAddress)"]
+                args += ["-device", deviceOpts]
             case .shared:
                 let sockPath = VmnetDaemonPaths.sharedSocket
                 guard VmnetDaemonPaths.isReady(sockPath) else {
@@ -269,7 +282,7 @@ public enum QemuArgsBuilder {
                     ))
                 }
                 args += ["-netdev", "stream,id=\(netId),addr.type=unix,addr.path=\(sockPath)"]
-                args += ["-device", "virtio-net-pci,netdev=\(netId),mac=\(net.macAddress)"]
+                args += ["-device", deviceOpts]
             }
         }
         _ = vmnetSocketPaths  // 避免 unused warning, 字段保留向前兼容 BuildResult API
