@@ -98,6 +98,15 @@ final class QemuFanoutSession {
         self.vdagent = VdagentClient(socketPath: vdagentPath)
     }
 
+    /// 给 hvm-dbg display-resize 用 — 跟 view.onDrawableSizeChange callback 等价的
+    /// 同步触发: HDP RESIZE_REQUEST (Linux EDID 路径) + vdagent MONITORS_CONFIG (Win 路径).
+    /// 不依赖任何 view 实例存在 (只要 fanout 还活着, 即 VM 在跑且 GUI 持有 session).
+    /// hvm-dbg 通过 guiControlSocketPath IPC 转到这里, 自动化测试 resize 链路.
+    func fireResize(width: UInt32, height: UInt32) {
+        channel.requestResize(width: width, height: height)
+        vdagent.sendMonitorsConfig(width: width, height: height)
+    }
+
     /// 启动连接 + 事件循环. 不阻塞调用线程. 多次调用安全 (第二次无效).
     func start() {
         guard connectTask == nil else { return }

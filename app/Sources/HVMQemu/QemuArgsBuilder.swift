@@ -250,7 +250,7 @@ public enum QemuArgsBuilder {
         //   用 2-byte length-prefix, 跟 socket_vmnet 不兼容 — connect 上但 frame 序列化失败.
         // **bus= 关键**: 必须挂到 pcie-root-port (rp_N) 走 PCIe native, 不能落 pcie.0 legacy
         //   bridge — 见上节 "PCIe root ports" 注释.
-        var vmnetSocketPaths: [String] = []
+        let vmnetSocketPaths: [String] = []
         for (idx, net) in cfg.networks.enumerated() {
             let netId = "net\(idx)"
             // NIC 挂哪个 root port: 按 networks 顺序占 rp0..rp3; 超 4 张回落 pcie.0
@@ -289,14 +289,14 @@ public enum QemuArgsBuilder {
 
         // ---- 显示 + 输入 ----
         // QEMU virt 机器默认无显卡, 只有 serial/parallel console; 必须显式加 GPU 才能出 graphical UEFI/OS UI.
-        // Linux: virtio-gpu-pci (内核自带 driver, 加速); Windows ARM64: 必须只挂 ramfb,
-        // 因为 bootmgfw.efi 跟 virtio-gpu-pci GOP 实测有冲突会 hang (hell-vm 同款约束).
-        // ramfb 是 sysbus framebuffer, EDK2 通过 fw_cfg 暴露给 GOP, Win bootmgr 兼容.
-        if cfg.guestOS == .windows {
-            args += ["-device", "ramfb"]
-        } else {
-            args += ["-device", "virtio-gpu-pci"]
-        }
+        // Linux: virtio-gpu-pci (内核自带 driver, 加速 + EDID 动态分辨率).
+        // 单 virtio-gpu-pci (无 ramfb fw_cfg) — Linux + Windows ARM64 共用.
+        // 历史: 之前 Win 用 virtio-ramfb 试图同时给 EDK2 ramfb GOP + viogpudo 接管,
+        // 但 ARM64 viogpudo 没正确 takeover EFI GOP, 导致 Windows 同时看到 viogpudo 的
+        // monitor + basicdisplay.sys 接 EFI GOP 的 phantom monitor = 双屏, RESIZE 不生效.
+        // 改成纯 virtio-gpu-pci: EDK2 用 VirtioGpuDxe 的 GOP 走 boot, OS 接管后由 viogpudo
+        // 接同一 PCI 设备 = 单 display, EDID 路径正确生效.
+        args += ["-device", "virtio-gpu-pci"]
         // USB 键盘 + USB tablet (xhci controller 已在 ISO 之前定义, 避免 bus=xhci.0 forward ref).
         // tablet 给绝对坐标鼠标 (hvm-dbg mouse abs 注入也走它).
         args += ["-device", "usb-kbd,bus=xhci.0"]

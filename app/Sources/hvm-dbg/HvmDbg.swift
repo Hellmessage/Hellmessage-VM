@@ -23,6 +23,7 @@ struct HvmDbg: AsyncParsableCommand {
             ConsoleCommand.self,
             ExecCommand.self,
             QemuLaunchCommand.self,
+            DisplayResizeCommand.self,
         ]
     )
 }

@@ -107,6 +107,10 @@ public enum IPCOp: String, Sendable {
     case dbgBootProgress = "dbg.boot_progress"
     case dbgConsoleRead  = "dbg.console.read"
     case dbgConsoleWrite = "dbg.console.write"
+    /// 触发 GUI 端等价 onDrawableSizeChange 的 resize 链路 (channel.requestResize +
+    /// vdagent.sendMonitorsConfig). 给 hvm-dbg display-resize 用. 由 AppModel 在
+    /// guiControlSocketPath 上提供, 不在 host 子进程 socket.
+    case dbgDisplayResize = "dbg.display.resize"
 }
 
 // MARK: - Status payload (JSON-stringified for `data` values)

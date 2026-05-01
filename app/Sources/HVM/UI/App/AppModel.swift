@@ -48,6 +48,11 @@ public final class AppModel {
     /// qemuFanouts 是 QEMU 通路的 host 子进程 framebuffer 扇出.
     /// internal: QemuFanoutSession 类型本身 internal, 没必要跨模块暴露.
     var qemuFanouts: [UUID: QemuFanoutSession] = [:]
+    /// GUI 端 control IPC server (per VM, 路径 guiControlSocketPath). hvm-dbg
+    /// display-resize 通过它 trigger fanout.fireResize, 自动化测试 resize 链路.
+    /// ensureQemuFanout 时启, tearDownQemuFanout 时停; 跟 fanout 同生命周期.
+    @ObservationIgnored
+    var qemuGUIServers: [UUID: SocketServer] = [:]
     /// QEMU 后端 VM 当前已弹出的独立窗口 (共存式: 主窗口嵌入仍可同时存在).
     /// 用 detachedQemuVMs 集合给 SwiftUI 订阅状态变化以更新 detach 按钮 UI;
     /// 真正持有 controller 的是 detachedQemuWindowControllers (非 @Observable
@@ -208,6 +213,17 @@ public final class AppModel {
             return item.runState != "running"
         }
         for id in staleFanoutIDs { tearDownQemuFanout(id: id) }
+
+        // QEMU 后端 VM 已 running 但还没 fanout (典型: hvm-cli start 拉起 VM 后用户首次
+        // open HVM.app, 此时若不 click 任何 VM, fanout 不会 lazy 启 → .gui.sock 不存在 →
+        // hvm-dbg display-resize 等自动化测试无法连入). 这里 refresh 时主动 ensure
+        // fanout, 让 GUI 一打开就可被 IPC 驱动. 没 view 订阅时 fanout 仍正常拉 surface 事件,
+        // channel.requestResize / vdagent.sendMonitorsConfig 调通 (因为它们不依赖 view).
+        for item in list where item.runState == "running" && item.config.engine == .qemu {
+            if qemuFanouts[item.id] == nil {
+                _ = ensureQemuFanout(id: item.id, bundleURL: item.bundleURL)
+            }
+        }
     }
 
     public var selectedItem: VMListItem? {
@@ -541,7 +557,64 @@ public final class AppModel {
             self?.handleQemuFanoutDisconnected(id: id)
         }
         fanout.start()
+        startQemuGUIControlServer(id: id)
         return fanout
+    }
+
+    /// 启 GUI 端 control IPC server (hvm-dbg display-resize 用). per-VM, 跟 fanout
+    /// 同生命周期. handler 在 IPC 线程被调用 (nonisolated), dispatch 回 MainActor
+    /// 触发 fanout.fireResize, 然后用 DispatchSemaphore 把结果同步回 IPC 线程
+    /// (SocketServer.Handler 是 sync 接口).
+    private func startQemuGUIControlServer(id: UUID) {
+        guard qemuGUIServers[id] == nil else { return }
+        let socketURL = HVMPaths.guiControlSocketPath(for: id)
+        let server = SocketServer(socketPath: socketURL)
+        // weakSelf: 允许 AppModel 在 GUI 退出时被释放 — handler 闭包不长留 main 引用
+        let weakBox = WeakAppModelBox(self)
+        let handler: SocketServer.Handler = { @Sendable req in
+            return Self.dispatchGUIControl(weakBox: weakBox, vmID: id, req: req)
+        }
+        do {
+            try server.start(handler: handler)
+            qemuGUIServers[id] = server
+        } catch {
+            // 失败不阻塞主路径 — 只是 hvm-dbg display-resize 用不了 (等同 GUI 关闭).
+            HVMLog.logger("ipc.gui").error("GUI control server start failed for vm=\(id.uuidString): \(String(describing: error))")
+        }
+    }
+
+    /// nonisolated 入口 — 在 SocketServer accept 线程被调. 解析 op, 跳到 MainActor
+    /// 调 fanout.fireResize, 同步等结果. 单连接单请求/响应模式, semaphore 不会死锁.
+    nonisolated private static func dispatchGUIControl(
+        weakBox: WeakAppModelBox, vmID: UUID, req: IPCRequest
+    ) -> IPCResponse {
+        switch req.op {
+        case IPCOp.dbgDisplayResize.rawValue:
+            guard let widthStr = req.args["width"], let heightStr = req.args["height"],
+                  let width = UInt32(widthStr), let height = UInt32(heightStr),
+                  width > 0, height > 0 else {
+                return .failure(id: req.id, code: "ipc.bad_args",
+                                message: "dbg.display.resize 需要 width / height 正整数")
+            }
+            let sem = DispatchSemaphore(value: 0)
+            // result 在 MainActor 内写, accept 线程读 — DispatchSemaphore 提供 happens-before
+            nonisolated(unsafe) var result: IPCResponse = .failure(
+                id: req.id, code: "gui.fanout_unavailable",
+                message: "GUI 内 fanout 已释放 (VM 停止 / GUI 关闭中)"
+            )
+            DispatchQueue.main.async {
+                if let model = weakBox.value, let fanout = model.qemuFanouts[vmID] {
+                    fanout.fireResize(width: width, height: height)
+                    result = .success(id: req.id, data: ["width": "\(width)", "height": "\(height)"])
+                }
+                sem.signal()
+            }
+            sem.wait()
+            return result
+        default:
+            return .failure(id: req.id, code: "ipc.unknown_op",
+                            message: "GUI control 不认 op: \(req.op)")
+        }
     }
 
     /// fanout channel 断开 (host 子进程退出 / 远端 GOODBYE / IO 错误) 时调.
@@ -564,6 +637,9 @@ public final class AppModel {
     public func tearDownQemuFanout(id: UUID) {
         if let fanout = qemuFanouts.removeValue(forKey: id) {
             fanout.stop()
+        }
+        if let server = qemuGUIServers.removeValue(forKey: id) {
+            server.stop()
         }
         closeDetachedQemuWindow(id: id)
     }
@@ -611,4 +687,12 @@ public final class AppModel {
             openDetachedQemu(id: id, item: item)
         }
     }
+}
+
+/// AppModel 是 @MainActor 类, 不能直接被 SocketServer 的 @Sendable handler 闭包
+/// 通过 weak 引用. 包一层裸 weak class 容器, 让闭包持 nonisolated WeakBox 即可.
+/// 读 .value 必须在 MainActor (因为 AppModel 是 MainActor-isolated).
+private final class WeakAppModelBox: @unchecked Sendable {
+    weak var value: AppModel?
+    init(_ value: AppModel) { self.value = value }
 }

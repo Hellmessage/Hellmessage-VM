@@ -4,3 +4,8 @@
 # 0002: HVM iosurface display backend (-display iosurface,socket=...), AF_UNIX + POSIX shm + SCM_RIGHTS
 #       配套协议规范: docs/QEMU_DISPLAY_PROTOCOL.md v1.0.0
 0002-ui-iosurface-display-backend.patch
+# 0003: 移植 utmapp/qemu 的 virtio-ramfb-pci 设备 + 启 CONFIG_VIRTIO_RAMFB.
+#       Windows ARM64 单设备双模 GPU: boot 阶段 ramfb GOP 给 EDK2/bootmgfw,
+#       viogpudo driver 加载后切 virtio-gpu 渲染, 同 console 内切换不漂.
+#       配套: hw/display/virtio-ramfb.{c,h} + Kconfig + meson.build + aarch64-softmmu defconfig
+0003-virtio-ramfb-pci.patch

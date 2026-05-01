@@ -101,6 +101,13 @@ public enum HVMPaths {
     public static func vdagentSocketPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).vdagent.sock")
     }
+    /// GUI 主进程 control socket; 由 AppModel.ensureQemuFanout 时启的 SocketServer 监听.
+    /// 跟 socketPath() (host 子进程的 IPC socket) 区分开. 仅 hvm-dbg display-resize 这种
+    /// 需要驱动 GUI 端 onDrawableSizeChange 等价路径的 op 走这条; 其他 dbg.* op 仍走
+    /// host 子进程那条 socket. GUI 关闭时该 socket 停, hvm-dbg 拿不到不算 bug.
+    public static func guiControlSocketPath(for id: UUID) -> URL {
+        runDir.appendingPathComponent("\(id.uuidString.lowercased()).gui.sock")
+    }
     // vmnetSocketPath / vmnetPidPath 已废弃: socket_vmnet 改成系统级 launchd daemon
     // (路径见 HVMQemu/VmnetDaemonPaths), 不再 per-VM 起 sidecar.
 
