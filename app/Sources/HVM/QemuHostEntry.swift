@@ -242,10 +242,19 @@ public enum QemuHostEntry {
             QemuHostState.shared.spiceClient = spice
             fputs("HVMHost(qemu): SPICE main client connect → \(spiceSocketURL.lastPathComponent)\n", stderr)
 
-            // (6.0 EFI Shell auto-inject 已删除: bootmgfw "Press any key to boot from CD or DVD"
-            // 倒计时 5s 内 user 手动按一次任意键即可进 Setup, 跟物理 USB 装机一致, 不再
-            // host 端 spam Enter — 之前 spam 在 NVRAM 探测漏判 / Win 装好但 user 没切
-            // bootFromDiskOnly 这种边缘场景下会砸到 OOBE 让焦点元素被反复 click.)
+            // 6.0 Win11 装机阶段 bootmgfw "Press any key to boot from CD or DVD" 5s timeout 自动注入.
+            // 实测: bootmgfw 该 prompt 不渲染到 virtio-ramfb (display 层 bug 单独 track), guest 视觉
+            // 上看不到提示, 5s 后超时 BdsDxe fall through 到 EFI Shell. host 端 spam Enter 接住,
+            // 跟之前 (commit 6675f21) 行为对齐. 触发条件 windows + bootFromDiskOnly=false +
+            // NVRAM 没写过 "Windows Boot Manager" — Win 装完后 NVRAM 出该字串, 不再 spam (避免
+            // 砸到 OOBE 当前焦点元素被反复 click).
+            if config.guestOS == .windows && !config.bootFromDiskOnly {
+                let nvramURL = BundleLayout.nvramURL(bundleURL)
+                Task.detached {
+                    await EFIShellAutoboot.injectBootISO(via: client, nvramURL: nvramURL)
+                    fputs("HVMHost(qemu): EFI Shell auto-inject 完成\n", stderr)
+                }
+            }
 
             // 6.1 thumbnail 抓帧定时器 (M-4): 与 VZ 路径周期一致, 抓 → 写 bundle/meta/thumbnail.png
             QemuHostState.shared.startThumbnailTimer()

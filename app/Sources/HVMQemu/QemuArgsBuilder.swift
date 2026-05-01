@@ -228,11 +228,13 @@ public enum QemuArgsBuilder {
                 args += ["-drive", "if=none,id=cdrom_inst,media=cdrom,file=\(iso),readonly=on"]
                 args += ["-device", "usb-storage,drive=cdrom_inst,id=cdrom_inst_dev,removable=true,bootindex=0,bus=xhci.0"]
             }
-            // unattend ISO: usb-storage 第二 cdrom (Win Setup 自动扫所有移动介质找 Autounattend.xml)
-            if let unattendPath = inputs.unattendISOPath {
+            // unattend ISO: 暂时禁用 (诊断: 多 USB CDROM 同 bus 可能让 bootmgfw 加载
+            // wpe.wim 时 USB 枚举卡死. 单 ISO 能装机后再恢复.)
+            if false, let unattendPath = inputs.unattendISOPath {
                 args += ["-drive", "if=none,id=cdrom_unat,media=cdrom,file=\(unattendPath),readonly=on"]
                 args += ["-device", "usb-storage,drive=cdrom_unat,id=cdrom_unat_dev,removable=true,bus=xhci.0"]
             }
+            _ = inputs.unattendISOPath
             // virtio-win 驱动 ISO 不再挂 — UTM Guest Tools NSIS installer 自带所有 ARM64
             // virtio driver (vioserial/Balloon/viostor/vioscsi/NetKVM/viogpudo/...) +
             // vdservice + vdagent.exe, single source. 装机阶段主硬盘走 -device nvme
@@ -245,10 +247,12 @@ public enum QemuArgsBuilder {
             // 跑 NSIS installer 装). 探测条件:
             //   for %D in (...) do for %F in (%D:\\utm-guest-tools-*.exe) do ...
             // 没挂这条 ISO 时整条 cmd noop, 不影响 OOBE 流程.
-            if let utmGuestToolsPath = inputs.utmGuestToolsISOPath {
+            // utm-guest-tools ISO: 暂时禁用 (诊断: 同上)
+            if false, let utmGuestToolsPath = inputs.utmGuestToolsISOPath {
                 args += ["-drive", "if=none,id=cdrom_utm,media=cdrom,file=\(utmGuestToolsPath),readonly=on"]
                 args += ["-device", "usb-storage,drive=cdrom_utm,id=cdrom_utm_dev,removable=true,bus=xhci.0"]
             }
+            _ = inputs.utmGuestToolsISOPath
         } else {
             // Linux/macOS: virtio-cdrom 维持原状 (Ubuntu 24.04 已验证)
             if !cfg.bootFromDiskOnly, let iso = cfg.installerISO {
@@ -327,8 +331,17 @@ public enum QemuArgsBuilder {
         //     (basicdisplay.sys 接 RamfbDxe 留下的 framebuffer), 但 spice-vdagent 改 monitor 1
         //     (viogpudo) 的 size 能 work. 双屏问题需要 unattend / EDK2 patch fix (见 docs).
         //
-        // 选 virtio-ramfb 是为了换取 dynamic resize 工作, 接受双屏 (后续 fix).
-        let gpuDevice = (cfg.guestOS == .windows) ? "virtio-ramfb" : "virtio-gpu-pci"
+        // 单 virtio-ramfb 模式 (跟 UTM 一致): patch 0003 + virtio-gpu reset_bh override
+        // 让 ramfb framebuffer 在 Win virtio bus 枚举 virtio-gpu 设备触发的 device reset
+        // 中存活, Win Setup 通过 EFI GOP framebuffer (= ramfb 的 RAM 区) 渲染就行,
+        // 不需要 bochs-display 额外配 PCI VGA class 给 basicdisplay.sys 用.
+        // 实测加 bochs 反而改 PCI 拓扑让 Setup 设备枚举走非预期路径触发 boot loop
+        // (Setup 起来 → SHUTDOWN → EDK2 reload Boot0003 → 反复). UTM 同 ISO 不踩此坑
+        // 因为单 virtio-ramfb.
+        // 实测 (2026-05-02): 自家 patch 0003 的 virtio-ramfb 让 wpe.wim 加载 hang.
+        // UTM 同 ISO 不出此问题, 推断他们的 utmapp/qemu fork virtio-ramfb 实现有差异.
+        // 改用 upstream QEMU 自带的 virtio-gpu-pci (Linux/Win 都用) 避坑.
+        let gpuDevice = "virtio-gpu-pci"
         args += ["-device", gpuDevice]
         // USB 键盘 + USB tablet (xhci controller 已在 ISO 之前定义, 避免 bus=xhci.0 forward ref).
         // tablet 给绝对坐标鼠标 (hvm-dbg mouse abs 注入也走它).
