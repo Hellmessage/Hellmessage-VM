@@ -109,23 +109,32 @@ public enum QemuHostEntry {
         // 3.7 AutoUnattend ISO (仅 windows + bypassInstallChecks/autoInstallVirtioWin/autoInstallSpiceTools 任一开).
         // 启动前用 hdiutil makehybrid 现做现挂; 失败 fail-soft (warn + 不挂第二 cdrom),
         // 用户仍可手动按 Shift+F10 在 Setup 里跑 reg add. 不阻塞 VM 启动.
-        // spice-guest-tools.exe 走全局 cache (~/Library/Application Support/HVM/cache/spice-tools/),
-        // 没缓存时 ensureISO 内部 fail-soft (跳过 spice 段, virtio 段照常); user 装机前应当先在
-        // GUI 创建向导触发 SpiceToolsCache.ensureCached 下载.
+        // UTM Guest Tools ISO 走全局 cache (~/Library/Application Support/HVM/cache/spice-tools/utm-guest-tools.iso),
+        // 不打进 unattend ISO (~120MB 太大), QemuArgsBuilder 把它当第四 cdrom 单独挂.
+        // 缓存缺失时, 我们传 utmGuestToolsISOPath = nil → 不挂 cdrom; OOBE 那条 cmd 找不到
+        // utm-guest-tools-*.exe 也 noop, 不阻塞流程. user 装机前应当先在 GUI 创建向导
+        // 触发 SpiceToolsCache.ensureCached 下载.
         var unattendISOPath: String? = nil
+        var utmGuestToolsPath: String? = nil
         if config.guestOS == .windows, let win = config.windows,
            win.bypassInstallChecks || win.autoInstallVirtioWin || win.autoInstallSpiceTools {
             do {
-                let spiceURL: URL? = SpiceToolsCache.isReady ? SpiceToolsCache.cachedExeURL : nil
                 let isoURL = try WindowsUnattend.ensureISO(
                     bundle: bundleURL,
                     bypassInstallChecks: win.bypassInstallChecks,
                     autoInstallVirtioWin: win.autoInstallVirtioWin,
-                    autoInstallSpiceTools: win.autoInstallSpiceTools,
-                    spiceToolsExeURL: spiceURL
+                    autoInstallSpiceTools: win.autoInstallSpiceTools
                 )
                 unattendISOPath = isoURL.path
-                let spiceState = win.autoInstallSpiceTools ? (spiceURL != nil ? "spice=on" : "spice=skip(cache miss)") : "spice=off"
+                if win.autoInstallSpiceTools, SpiceToolsCache.isReady {
+                    utmGuestToolsPath = SpiceToolsCache.cachedISOURL.path
+                }
+                let spiceState: String
+                if win.autoInstallSpiceTools {
+                    spiceState = utmGuestToolsPath != nil ? "spice=on(utm-tools)" : "spice=skip(cache miss)"
+                } else {
+                    spiceState = "spice=off"
+                }
                 fputs("HVMHost(qemu): ✔ unattend ISO 就绪 \(isoURL.path) (bypass=\(win.bypassInstallChecks), virtio=\(win.autoInstallVirtioWin), \(spiceState))\n", stderr)
             } catch {
                 fputs("HVMHost(qemu): ⚠ unattend ISO 生成失败 (\(error)); Win11 Setup 将不会自动跳过硬件检查, 用户需手动 Shift+F10 跑 reg add\n", stderr)
@@ -140,9 +149,11 @@ public enum QemuHostEntry {
         let iosurfaceSocketURL  = HVMPaths.iosurfaceSocketPath(for: config.id)
         let qmpInputSocketURL   = HVMPaths.qmpInputSocketPath(for: config.id)
         let vdagentSocketURL    = HVMPaths.vdagentSocketPath(for: config.id)
+        let qgaSocketURL        = HVMPaths.qgaSocketPath(for: config.id)
         try? FileManager.default.removeItem(at: iosurfaceSocketURL)
         try? FileManager.default.removeItem(at: qmpInputSocketURL)
         try? FileManager.default.removeItem(at: vdagentSocketURL)
+        try? FileManager.default.removeItem(at: qgaSocketURL)
 
         let buildResult: QemuArgsBuilder.BuildResult
         do {
@@ -155,7 +166,9 @@ public enum QemuHostEntry {
                 unattendISOPath: unattendISOPath,
                 iosurfaceSocketPath: iosurfaceSocketURL.path,
                 qmpInputSocketPath: qmpInputSocketURL.path,
-                vdagentSocketPath: vdagentSocketURL.path
+                vdagentSocketPath: vdagentSocketURL.path,
+                utmGuestToolsISOPath: utmGuestToolsPath,
+                qgaSocketPath: qgaSocketURL.path
             )
             buildResult = try QemuArgsBuilder.build(inputs)
         } catch {
@@ -559,6 +572,8 @@ final class QemuHostState {
         case IPCOp.dbgBootProgress.rawValue:  return await handleDbgBootProgress(req: req)
         case IPCOp.dbgConsoleRead.rawValue:   return handleDbgConsoleRead(req: req)
         case IPCOp.dbgConsoleWrite.rawValue:  return handleDbgConsoleWrite(req: req)
+        case IPCOp.dbgDisplayInfo.rawValue:   return await handleDbgDisplayInfo(req: req)
+        case IPCOp.dbgExecGuest.rawValue:     return await handleDbgExecGuest(req: req)
 
         default:
             if req.op.hasPrefix("dbg.") {
@@ -688,11 +703,21 @@ final class QemuHostState {
             return .failure(id: req.id, code: "dbg.vm_not_running",
                             message: "QEMU 进程未运行")
         }
-        // guest framebuffer 尺寸 (与 dbgStatus 同, 估算)
-        let (gw, gh): (Int, Int)
-        if let os = config?.guestOS {
+        // guest framebuffer 真实尺寸 (用 QMP screendump 拿 PPM header). dynamic resize
+        // 后框架尺寸会变, 用写死的 defaultFramebufferSize 会让 mouse 坐标映射错位
+        // (实测 OCR 报 800x600 时 mouse 用 1920x1080 映射 → click 偏到屏幕外).
+        // screendump 失败 fallback 到 defaultFramebufferSize.
+        var gw = 1, gh = 1
+        let tmpURL = HVMPaths.runDir.appendingPathComponent("mouse-fbsize-\(UUID().uuidString.prefix(8)).ppm")
+        if (try? await client.screendump(filename: tmpURL.path)) != nil,
+           let fh = try? FileHandle(forReadingFrom: tmpURL),
+           let dims = try? PPMReader.readDimensions(fh.readData(ofLength: 64)) {
+            (gw, gh) = (dims.width, dims.height)
+            try? fh.close()
+        } else if let os = config?.guestOS {
             let s = os.defaultFramebufferSize; (gw, gh) = (s.width, s.height)
-        } else { (gw, gh) = (1, 1) }
+        }
+        try? FileManager.default.removeItem(at: tmpURL)
         let guestSize = CGSize(width: gw, height: gh)
         let button = req.args["button"] ?? "left"
         do {
@@ -812,6 +837,75 @@ final class QemuHostState {
             return .success(id: req.id)
         } catch {
             return .failure(id: req.id, code: "dbg.console_write_failed", message: "\(error)")
+        }
+    }
+
+    /// 通过 QMP screendump 拿当前 framebuffer 真实尺寸 (PPM header).
+    /// 用于 hvm-dbg display-info 验证 spice-vdagent dynamic resize 实际生效:
+    /// resize 触发前后两次调用对比 widthPx/heightPx 是否变化.
+    private func handleDbgDisplayInfo(req: IPCRequest) async -> IPCResponse {
+        guard let client = qmpClient else {
+            return .failure(id: req.id, code: "backend.qmp_unavailable", message: "QMP 未就绪")
+        }
+        let tmpURL = HVMPaths.runDir.appendingPathComponent("displayinfo-\(UUID().uuidString.prefix(8)).ppm")
+        defer { try? FileManager.default.removeItem(at: tmpURL) }
+        do {
+            try await client.screendump(filename: tmpURL.path)
+            // 只读前 64 字节就够拿 PPM header (P6\n<width> <height>\n255\n...)
+            guard let fh = try? FileHandle(forReadingFrom: tmpURL) else {
+                return .failure(id: req.id, code: "dbg.frame_unavailable", message: "open ppm failed")
+            }
+            defer { try? fh.close() }
+            let head = fh.readData(ofLength: 64)
+            let dims = try PPMReader.readDimensions(head)
+            let payload = IPCDbgDisplayInfoPayload(widthPx: dims.width, heightPx: dims.height)
+            return .encoded(id: req.id, payload: payload, kind: "display info")
+        } catch {
+            return .failure(id: req.id, code: "dbg.frame_unavailable", message: "\(error)")
+        }
+    }
+
+    /// 通过 qemu-guest-agent 跑 guest 内 process. 协议:
+    /// 1. connect qga unix socket
+    /// 2. send {"execute":"guest-exec", "arguments":{"path":..., "arg":[...], "capture-output":true}}
+    /// 3. 拿到 {"return": {"pid": N}}
+    /// 4. 轮询 {"execute":"guest-exec-status","arguments":{"pid": N}}
+    /// 5. 拿到 {"return": {"exited": true, "exitcode": K, "out-data":"base64", "err-data":"base64"}}
+    /// 6. return base64 stdout/stderr/exitcode
+    private func handleDbgExecGuest(req: IPCRequest) async -> IPCResponse {
+        guard let path = req.args["path"], !path.isEmpty else {
+            return .failure(id: req.id, code: "ipc.bad_args",
+                            message: "dbg.exec.guest 需要 args.path (binary 全路径或可执行名)")
+        }
+        // args 解析: arg0|arg1|... (用 \x1f 0x1F unit separator 分隔, 防 shell quote 麻烦);
+        // 参数为空 OK (跑无参数 binary)
+        let argList: [String] = (req.args["argv"] ?? "")
+            .split(separator: "\u{1F}", omittingEmptySubsequences: false)
+            .map(String.init)
+            .filter { !$0.isEmpty }
+        let timeoutSec = Int(req.args["timeoutSec"] ?? "30") ?? 30
+        guard let configID = config?.id else {
+            return .failure(id: req.id, code: "backend.no_vm", message: "VM config 未就绪")
+        }
+        let qgaSocketPath = HVMPaths.qgaSocketPath(for: configID).path
+        guard FileManager.default.fileExists(atPath: qgaSocketPath) else {
+            return .failure(id: req.id, code: "qga.socket_not_found",
+                            message: "qga socket 缺 (\(qgaSocketPath)); 旧 VM bundle 没启 qga chardev, cold restart 让 argv 生效")
+        }
+        do {
+            let result = try await QgaExec.run(
+                socketPath: qgaSocketPath,
+                path: path, args: argList,
+                timeoutSec: timeoutSec
+            )
+            let payload = IPCDbgExecPayload(
+                exitCode: result.exitCode,
+                stdoutBase64: result.stdoutBase64,
+                stderrBase64: result.stderrBase64
+            )
+            return .encoded(id: req.id, payload: payload, kind: "exec result")
+        } catch {
+            return .failure(id: req.id, code: "qga.exec_failed", message: "\(error)")
         }
     }
 

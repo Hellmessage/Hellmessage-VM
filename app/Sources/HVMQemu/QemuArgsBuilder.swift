@@ -63,6 +63,16 @@ public enum QemuArgsBuilder {
         /// virtio-serial-pci + chardev + virtserialport 三件套, guest 内安装
         /// spice-vdagent 后即可响应 host 的 RESIZE_REQUEST → EDID 变化做动态分辨率.
         public let vdagentSocketPath: String?
+        /// UTM Guest Tools ISO 绝对路径 (仅 windows + 由 SpiceToolsCache 提供). 非 nil 时
+        /// 挂第四 cdrom (usb-storage), guest 内 OOBE FirstLogonCommands 扫所有盘符跑
+        /// utm-guest-tools-*.exe /S 静默装 ARM64 native vdagent + utmapp 自家 viogpudo
+        /// + qemu-ga.exe 服务. 缺时 OOBE 那条 cmd noop, 不阻塞流程.
+        public let utmGuestToolsISOPath: String?
+        /// qemu-guest-agent virtio-serial chardev socket. 非 nil 时 argv 加 chardev qga +
+        /// virtserialport name=org.qemu.guest_agent.0, guest 内 qemu-ga.exe 服务 (UTM
+        /// Guest Tools 装包含 qemu-ga-x86_64.msi) 自动 attach. host 通过本 socket 发
+        /// guest-exec JSON 跑 PowerShell / cmd, 是 hvm-dbg exec-guest 的底层通路.
+        public let qgaSocketPath: String?
 
         public init(
             config: VMConfig,
@@ -75,7 +85,9 @@ public enum QemuArgsBuilder {
             unattendISOPath: String? = nil,
             iosurfaceSocketPath: String? = nil,
             qmpInputSocketPath: String? = nil,
-            vdagentSocketPath: String? = nil
+            vdagentSocketPath: String? = nil,
+            utmGuestToolsISOPath: String? = nil,
+            qgaSocketPath: String? = nil
         ) {
             self.config = config
             self.bundleURL = bundleURL
@@ -88,6 +100,8 @@ public enum QemuArgsBuilder {
             self.iosurfaceSocketPath = iosurfaceSocketPath
             self.qmpInputSocketPath = qmpInputSocketPath
             self.vdagentSocketPath = vdagentSocketPath
+            self.utmGuestToolsISOPath = utmGuestToolsISOPath
+            self.qgaSocketPath = qgaSocketPath
         }
     }
 
@@ -223,6 +237,13 @@ public enum QemuArgsBuilder {
                 args += ["-drive", "if=none,id=cdrom_vio,media=cdrom,file=\(virtioWinPath),readonly=on"]
                 args += ["-device", "usb-storage,drive=cdrom_vio,id=cdrom_vio_dev,removable=true,bus=xhci.0"]
             }
+            // UTM Guest Tools ISO: usb-storage 第四 cdrom (含 ARM64 native vdagent + utmapp
+            // 自家 viogpudo + qemu-ga). OOBE FirstLogonCommands 扫所有盘符跑里面的
+            // utm-guest-tools-*.exe NSIS installer /S 静默装. ~120MB 不打进 unattend ISO.
+            if let utmToolsPath = inputs.utmGuestToolsISOPath {
+                args += ["-drive", "if=none,id=cdrom_utm,media=cdrom,file=\(utmToolsPath),readonly=on"]
+                args += ["-device", "usb-storage,drive=cdrom_utm,id=cdrom_utm_dev,removable=true,bus=xhci.0"]
+            }
         } else {
             // Linux/macOS: virtio-cdrom 维持原状 (Ubuntu 24.04 已验证)
             if !cfg.bootFromDiskOnly, let iso = cfg.installerISO {
@@ -309,13 +330,26 @@ public enum QemuArgsBuilder {
             args += ["-display", "cocoa"]
         }
 
+        // virtio-serial bus (vsp0): vdagent / qga 任一启用就加, 共用同一条 bus 防重复.
+        // (QEMU 不允许 -device virtio-serial-pci 加两次同 id; 也不能两个 id 各占总线
+        //  浪费 PCI slot — 一条 vsp0 挂多 port 是 spice/qga 共用模式)
+        let needsVirtioSerial = inputs.vdagentSocketPath != nil || inputs.qgaSocketPath != nil
+        if needsVirtioSerial {
+            args += ["-device", "virtio-serial-pci,id=vsp0"]
+        }
         // spice-vdagent virtio-serial 通道: 给 guest 内 spice-vdagent agent 用,
         // host 端不连接此 socket. 装了 vdagent 的 guest 收到 EDID 变化会自动改
         // 分辨率, 配合 HDP RESIZE_REQUEST 实现动态分辨率.
         if let vdagentSocket = inputs.vdagentSocketPath {
-            args += ["-device", "virtio-serial-pci,id=vsp0"]
             args += ["-chardev", "socket,id=vdagent,path=\(vdagentSocket),server=on,wait=off"]
             args += ["-device", "virtserialport,bus=vsp0.0,chardev=vdagent,name=com.redhat.spice.0"]
+        }
+        // qemu-guest-agent (qemu-ga) 通路 — 给 hvm-dbg exec-guest 用, 走 virtio-serial
+        // port org.qemu.guest_agent.0 跑 guest 内 PowerShell / cmd 命令拿 stdout/exit_code.
+        // 配套 guest 内 qemu-ga.exe 服务 (UTM Guest Tools 装包含 qemu-ga-x86_64.msi).
+        if let qgaSocket = inputs.qgaSocketPath {
+            args += ["-chardev", "socket,id=qga,path=\(qgaSocket),server=on,wait=off"]
+            args += ["-device", "virtserialport,bus=vsp0.0,chardev=qga,name=org.qemu.guest_agent.0"]
         }
 
         // ---- QMP 控制 ----

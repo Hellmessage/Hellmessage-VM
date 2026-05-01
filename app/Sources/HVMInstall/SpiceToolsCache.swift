@@ -1,25 +1,29 @@
 // HVMInstall/SpiceToolsCache.swift
-// spice-guest-tools.exe 全局缓存 + 按需下载.
+// UTM Guest Tools ISO 全局缓存 + 按需下载.
 //
-// 用途: Windows guest 内安装 spice-vdagent 服务后, 能响应 host 通过 vdagent
-// virtio-serial 通道发的 monitor config (HDP RESIZE_REQUEST → QEMU dpy_set_ui_info →
-// vdagent), 实现拖 HVM 主窗口动态切 guest 分辨率. 不装的话 host 拖窗口 guest
-// 不改分辨率 (frame buffer 拉伸 / 黑边).
+// 用途: Windows ARM64 guest 内安装 utmapp 自家 SPICE 客户端套件 (含 ARM64 native
+// spice-vdagent.exe + utmapp/virtio-gpu-wddm-dod 自家 viogpudo.sys), 才能让 host 通过
+// SPICE main channel 发的 VDAgentMonitorsConfig 真改 guest 分辨率, 实现拖窗口 dynamic
+// resize.
+//
+// **不再用** stock spice-guest-tools.exe (spice-space.org 上游): 它只有 x86 binary,
+// ARM Win 跑 x86 emu vdagent 调 D3DKMTEscape 路径走不通; 而且它装的 stock viogpudo
+// 没实现 QXL escape SET_CUSTOM_DISPLAY 等关键路径. 切到 UTM Guest Tools 后, ARM64
+// native vdagent + utmapp viogpudo 完整跑通 dynamic resize 链路.
 //
 // 缓存策略 (跟 VirtioWinCache 同模式):
-//   - 全局共享: ~/Library/Application Support/HVM/cache/spice-tools/spice-guest-tools.exe
-//     所有 Win VM 引用同一份 (~30MB 一次, 不每个 VM 复制)
+//   - 全局共享: ~/Library/Application Support/HVM/cache/spice-tools/utm-guest-tools.iso
+//     所有 Win VM 引用同一份 (~120MB 一次, 不每个 VM 复制)
 //   - 创建 Win VM 时按需下载 (前台 modal 进度); 已存在 + 文件大小合理 → 直接复用
-//   - WindowsUnattend.ensureISO 把这个 .exe 拷进 unattend ISO stage,
-//     OOBE FirstLogonCommands 静默 NSIS /S 安装. ARM64 Windows 通过 x86 emulation
-//     跑 x86 NSIS installer, spice-space 社区已验证 OK.
+//   - QemuArgsBuilder 把 ISO 当第三 cdrom 挂给 Win guest, OOBE FirstLogonCommands
+//     扫所有盘符找 utm-guest-tools-*.exe 跑 NSIS /S 静默安装
 //
-// 失败策略: 下载失败允许跳过, VM 仍能启动, 只是 Windows guest 拖窗口不自动
-// resize (Linux guest 不受影响, kernel 自带 virtio-gpu 驱动响应 EDID 变化).
+// 失败策略: 下载失败允许跳过, VM 仍能启动, 只是 Windows guest 拖窗口不 resize
+// (Linux guest 不受影响, kernel 自带 virtio-gpu 驱动响应 EDID 变化).
 //
-// 下载源: spice-space.org 官方 latest 直链.
-//   https://www.spice-space.org/download/binaries/spice-guest-tools/spice-guest-tools-latest.exe
-// 环境变量 HVM_SPICE_TOOLS_URL 可覆盖 (内部镜像 / 离线分发).
+// 下载源: getutm.app 官方 latest 直链 (重定向到 utmapp/qemu releases).
+//   https://getutm.app/downloads/utm-guest-tools-latest.iso
+// 环境变量 HVM_SPICE_TOOLS_URL 可覆盖 (内部镜像 / 离线分发, 名字保留向后兼容).
 
 import Foundation
 import HVMCore
@@ -33,29 +37,30 @@ public enum SpiceToolsCache {
             return u
         }
         return URL(string:
-            "https://www.spice-space.org/download/binaries/spice-guest-tools/spice-guest-tools-latest.exe"
+            "https://getutm.app/downloads/utm-guest-tools-latest.iso"
         )!
     }
 
-    /// 缓存文件绝对路径
-    public static var cachedExeURL: URL {
-        HVMPaths.spiceToolsCacheDir.appendingPathComponent("spice-guest-tools.exe")
+    /// 缓存文件绝对路径. 文件名固定 utm-guest-tools.iso (上游 release 是 utm-guest-tools-X.Y.ZZZ.iso,
+    /// 我们 normalize 成无版本号文件名, 升级时直接覆盖)
+    public static var cachedISOURL: URL {
+        HVMPaths.spiceToolsCacheDir.appendingPathComponent("utm-guest-tools.iso")
     }
 
-    /// 缓存就绪判定 (存在 + 大小 ≥ 5MB sanity; 上游 .exe 实际 ~30MB)
+    /// 缓存就绪判定 (存在 + 大小 ≥ 50MB sanity; 上游 ISO 实际 ~120MB)
     public static var isReady: Bool {
-        let path = cachedExeURL.path
+        let path = cachedISOURL.path
         let fm = FileManager.default
         guard let attrs = try? fm.attributesOfItem(atPath: path),
               let size = attrs[.size] as? Int64,
-              size >= 5 * 1024 * 1024
+              size >= 50 * 1024 * 1024
         else { return false }
         return true
     }
 
     /// 已缓存文件大小 (bytes); 不存在返 nil
     public static var cachedSizeBytes: Int64? {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: cachedExeURL.path),
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: cachedISOURL.path),
               let n = attrs[.size] as? Int64 else { return nil }
         return n
     }
@@ -90,33 +95,33 @@ public enum SpiceToolsCache {
         progress: @escaping @Sendable (Progress) -> Void
     ) async throws -> URL {
         if isReady {
-            return cachedExeURL
+            return cachedISOURL
         }
         try HVMPaths.ensure(HVMPaths.spiceToolsCacheDir)
 
-        let partialURL = cachedExeURL.appendingPathExtension("partial")
+        let partialURL = cachedISOURL.appendingPathExtension("partial")
         try? FileManager.default.removeItem(at: partialURL)
 
         try await streamDownload(from: downloadURL, to: partialURL, progress: progress)
 
-        try? FileManager.default.removeItem(at: cachedExeURL)
-        try FileManager.default.moveItem(at: partialURL, to: cachedExeURL)
+        try? FileManager.default.removeItem(at: cachedISOURL)
+        try FileManager.default.moveItem(at: partialURL, to: cachedISOURL)
 
         guard isReady else {
             throw DownloadError.downloadFailed(
                 reason: "下载完成但文件大小异常 (\(cachedSizeBytes ?? 0) bytes)"
             )
         }
-        return cachedExeURL
+        return cachedISOURL
     }
 
     /// 删除已缓存文件 (UI 提供"重新下载"或排错时用)
     public static func purge() throws {
         let fm = FileManager.default
-        if fm.fileExists(atPath: cachedExeURL.path) {
-            try fm.removeItem(at: cachedExeURL)
+        if fm.fileExists(atPath: cachedISOURL.path) {
+            try fm.removeItem(at: cachedISOURL)
         }
-        let partial = cachedExeURL.appendingPathExtension("partial")
+        let partial = cachedISOURL.appendingPathExtension("partial")
         if fm.fileExists(atPath: partial.path) {
             try fm.removeItem(at: partial)
         }

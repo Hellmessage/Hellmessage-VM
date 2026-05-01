@@ -62,8 +62,10 @@ public enum HVMPaths {
         appSupport.appendingPathComponent("cache/virtio-win", isDirectory: true)
     }
 
-    /// spice-guest-tools.exe 缓存目录, ~/Library/Application Support/HVM/cache/spice-tools
-    /// (Win guest 装拖窗口动态 resize 用的 spice-vdagent 服务; ~30MB; 全局共享一份)
+    /// UTM Guest Tools ISO 缓存目录, ~/Library/Application Support/HVM/cache/spice-tools
+    /// (Win guest 装拖窗口动态 resize 用的 ARM64 native vdagent + utmapp 自家 viogpudo;
+    ///  ~120MB; 全局共享一份). 目录名仍叫 spice-tools 是历史原因 (老 cache 用 spice-space.org
+    ///  上游 spice-guest-tools.exe), 现迁到 UTM Guest Tools 但目录名保留, 避免迁移老缓存逻辑.
     public static var spiceToolsCacheDir: URL {
         appSupport.appendingPathComponent("cache/spice-tools", isDirectory: true)
     }
@@ -100,6 +102,14 @@ public enum HVMPaths {
     /// spice-vdagent virtio-serial chardev socket; host 不连, 仅留给 guest agent.
     public static func vdagentSocketPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).vdagent.sock")
+    }
+    /// qemu-guest-agent (qemu-ga.exe in guest, UTM Guest Tools 装包含) 的 virtio-serial
+    /// chardev unix socket. host 通过本 socket 发 JSON `guest-exec` 命令在 guest 内跑
+    /// process (PowerShell / cmd / 任何 .exe), 拿 stdout / stderr / exit_code, 不依赖
+    /// keyboard typing (避开 IME 字符替换) / OCR (避开识别误差) / GUI mouse 操作.
+    /// 由 hvm-dbg exec-guest 使用, 是端到端自动化验证 guest 行为的最可靠通路.
+    public static func qgaSocketPath(for id: UUID) -> URL {
+        runDir.appendingPathComponent("\(id.uuidString.lowercased()).qga.sock")
     }
     // vmnetSocketPath / vmnetPidPath 已废弃: socket_vmnet 改成系统级 launchd daemon
     // (路径见 HVMQemu/VmnetDaemonPaths), 不再 per-VM 起 sidecar.

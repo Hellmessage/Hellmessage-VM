@@ -107,6 +107,37 @@ public enum IPCOp: String, Sendable {
     case dbgBootProgress = "dbg.boot_progress"
     case dbgConsoleRead  = "dbg.console.read"
     case dbgConsoleWrite = "dbg.console.write"
+    /// hvm-dbg display-info — 通过 QMP screendump 拿 guest 真实当前 framebuffer 尺寸
+    /// (PPM header). 用于验证 spice-vdagent dynamic resize 是否真生效 (resize 触发前后
+    /// 两次 display-info 对比 widthPx/heightPx 是否变化).
+    case dbgDisplayInfo  = "dbg.display.info"
+    /// 通过 qemu-guest-agent (qga) 在 guest 内跑 process, 拿 stdout/stderr/exit_code.
+    /// 给 hvm-dbg exec-guest 用. 配套 guest 内 qemu-ga.exe 服务 + argv 挂的
+    /// virtio-serial port org.qemu.guest_agent.0 (chardev qga). 不依赖 keyboard typing
+    /// (避 IME 字符替换) / OCR (避识别误差) / GUI mouse (避 USB tablet 坐标问题).
+    case dbgExecGuest    = "dbg.exec.guest"
+}
+
+/// dbg.display.info payload — guest 真实当前 framebuffer 尺寸.
+public struct IPCDbgDisplayInfoPayload: Codable, Sendable {
+    public let widthPx: Int
+    public let heightPx: Int
+    public init(widthPx: Int, heightPx: Int) {
+        self.widthPx = widthPx
+        self.heightPx = heightPx
+    }
+}
+
+/// dbg.exec.guest payload — 跑 guest 内 process 拿结果. exit_code=-1 表示 timeout.
+public struct IPCDbgExecPayload: Codable, Sendable {
+    public let exitCode: Int
+    public let stdoutBase64: String
+    public let stderrBase64: String
+    public init(exitCode: Int, stdoutBase64: String, stderrBase64: String) {
+        self.exitCode = exitCode
+        self.stdoutBase64 = stdoutBase64
+        self.stderrBase64 = stderrBase64
+    }
 }
 
 // MARK: - Status payload (JSON-stringified for `data` values)

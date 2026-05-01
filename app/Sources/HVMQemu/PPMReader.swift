@@ -25,6 +25,23 @@ public enum PPMReader {
     }
 
     /// 解码 PPM P6 bytes → CGImage. 读 header 跳注释 + 二进制 RGB → CGContext → makeImage.
+    /// 只读 PPM 头拿 width/height, 不解 binary pixel 数据. 用于 hvm-dbg display-info
+    /// 验证 spice-vdagent dynamic resize 是否实际生效 (resize 前后两次 display-info
+    /// 对比 width/height 是否变化), 不必传输完整 PNG.
+    public static func readDimensions(_ data: Data) throws -> (width: Int, height: Int) {
+        var idx = 0
+        guard data.count >= 3 else { throw ParseError.notP6 }
+        guard data[0] == 0x50, data[1] == 0x36 else {       // 'P', '6'
+            throw ParseError.notP6
+        }
+        idx = 2
+        skipWhitespaceAndComments(data, &idx)
+        let width = try readASCIIInt(data, &idx)
+        skipWhitespaceAndComments(data, &idx)
+        let height = try readASCIIInt(data, &idx)
+        return (width, height)
+    }
+
     public static func decode(_ data: Data) throws -> CGImage {
         var idx = 0
 

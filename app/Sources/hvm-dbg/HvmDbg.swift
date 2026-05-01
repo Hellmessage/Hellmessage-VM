@@ -22,6 +22,8 @@ struct HvmDbg: AsyncParsableCommand {
             BootProgressCommand.self,
             ConsoleCommand.self,
             ExecCommand.self,
+            ExecGuestCommand.self,
+            DisplayInfoCommand.self,
             QemuLaunchCommand.self,
         ]
     )
