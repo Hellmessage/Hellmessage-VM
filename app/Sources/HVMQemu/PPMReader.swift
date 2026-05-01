@@ -61,12 +61,34 @@ public enum PPMReader {
         idx += 1
 
         // 6. binary RGB
-        let pixelBytes = width * height * 3
+        // **关键**: QEMU virtio-gpu / viogpudo framebuffer 用 2-pixel alignment, 物理 width
+        // 取 ceil(w/2)*2 (e.g. logical 839 → physical 840), 每行 stride = physical_w * 3
+        // 字节. 但 QEMU screendump 在 PPM header 里写**逻辑 width** (839), 让 packed
+        // assumption (stride = w*3) 漂移每行 3 字节, 累积成 hvm-dbg screenshot 输出图片
+        // 倾斜的视觉效果. PPM spec 规定 stride = w*3 (no padding), 但 QEMU 这一路违反.
+        // Fix: 用 (body_size / height) 推 actual stride, 每行只取前 width*3 字节, 重组
+        // packed buffer 给 CGImage.
+        let logicalRowBytes = width * 3
         let remaining = data.count - idx
-        guard remaining >= pixelBytes else {
-            throw ParseError.truncatedPixelData(expected: pixelBytes, got: remaining)
+        guard remaining >= logicalRowBytes * height else {
+            throw ParseError.truncatedPixelData(expected: logicalRowBytes * height, got: remaining)
         }
-        let pixelData = data.subdata(in: idx..<(idx + pixelBytes))
+        let actualStride = remaining / height
+        let pixelData: Data
+        if actualStride == logicalRowBytes {
+            // 标准 packed PPM, 直接 slice
+            pixelData = data.subdata(in: idx..<(idx + logicalRowBytes * height))
+        } else if actualStride > logicalRowBytes {
+            // 有 row padding (QEMU viogpudo / virtio-gpu): 逐行抽 width*3 字节重组 packed
+            var repacked = Data(capacity: logicalRowBytes * height)
+            for row in 0..<height {
+                let rowStart = idx + row * actualStride
+                repacked.append(data.subdata(in: rowStart..<(rowStart + logicalRowBytes)))
+            }
+            pixelData = repacked
+        } else {
+            throw ParseError.truncatedPixelData(expected: logicalRowBytes * height, got: remaining)
+        }
 
         // 7. CGImage from RGB bytes (no alpha)
         let colorSpace = CGColorSpaceCreateDeviceRGB()

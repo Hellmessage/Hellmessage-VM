@@ -27,7 +27,17 @@ public enum QemuInput {
         }
     }
 
-    /// 按组合键: "ctrl+c" / "cmd+space" 等. 一次按下后释放.
+    /// 按组合键: "ctrl+c" / "cmd+space" / "meta+r" 等. 显式 modifier-then-key sequence:
+    ///   modifier 1 down → ... → modifier N down → 25ms → key down → 60ms → key up
+    ///   → modifier N up → ... → modifier 1 up
+    ///
+    /// **关键**: USB HID 模式下 modifier byte 必须**先**置位再发 key code, 不能跟 key
+    /// 同 frame 一起发 (QEMU send-key 在 USB-kbd 模式下偶尔合成单一 HID report,
+    /// modifier+key 同帧 Windows HID stack 接不全, system shortcut 如 Win+R / Ctrl+Shift+Esc
+    /// 直接失效). 实测 25ms modifier-key 间隔 + 60ms hold + 显式分帧 release 后
+    /// Win+R / Ctrl+Shift+Esc / Ctrl+Alt+Delete 等系统快捷键稳定 trigger.
+    ///
+    /// 兜底: 单 key (无 modifier) 走旧 send-key 路径 (简单字符 / 功能键 send-key 已稳定).
     public static func pressCombo(_ combo: String, via client: QmpClient) async throws {
         let qkeys: [String]
         do {
@@ -35,7 +45,34 @@ public enum QemuInput {
         } catch let QemuKeyMap.MapError.unknownKey(k) {
             throw InputError.unknownKey(k)
         }
-        try await client.sendKey(qkeys, holdTimeMs: 100)
+        // 单键 (无 modifier 组合) 直接 send-key, 不走分帧路径
+        if qkeys.count <= 1 {
+            try await client.sendKey(qkeys, holdTimeMs: 100)
+            return
+        }
+        // qkeys 末位是 main key, 前面全是 modifier (parseCombo 按 token 顺序保留 modifier 在前)
+        let modifiers = Array(qkeys.dropLast())
+        let mainKey = qkeys.last!
+        // 1) modifier down (一次 input-send-event 多个 key down event, 全都 down)
+        let modDownEvents: [[String: Any]] = modifiers.map { qk in
+            ["type": "key", "data": ["down": true, "key": ["type": "qcode", "data": qk]]]
+        }
+        try await client.inputSendEvent(events: modDownEvents)
+        try await Task.sleep(nanoseconds: 25_000_000)
+        // 2) main key down → 60ms → key up
+        try await client.inputSendEvent(events: [
+            ["type": "key", "data": ["down": true, "key": ["type": "qcode", "data": mainKey]]],
+        ])
+        try await Task.sleep(nanoseconds: 60_000_000)
+        try await client.inputSendEvent(events: [
+            ["type": "key", "data": ["down": false, "key": ["type": "qcode", "data": mainKey]]],
+        ])
+        try await Task.sleep(nanoseconds: 25_000_000)
+        // 3) modifier up (反序 release)
+        let modUpEvents: [[String: Any]] = modifiers.reversed().map { qk in
+            ["type": "key", "data": ["down": false, "key": ["type": "qcode", "data": qk]]]
+        }
+        try await client.inputSendEvent(events: modUpEvents)
     }
 
     /// 鼠标移动: guest 像素坐标 → input-send-event 0..32767 abs 范围.
@@ -48,7 +85,12 @@ public enum QemuInput {
         try await client.inputSendEvent(events: events)
     }
 
-    /// 鼠标点击: 移动 → 按下 → 释放. button: "left"/"right"/"middle".
+    /// 鼠标点击: 移动 → 按下 → 等 80ms → 释放. button: "left"/"right"/"middle".
+    /// **关键**: button down 跟 up 必须**分开 input-send-event 发**, 中间 sleep, 否则
+    /// QEMU USB-tablet 把 down/up 合成一次 USB HID report (modifier byte 不变), Windows
+    /// HID stack 没 trigger 完整 click event, 接成 "hover/short tap" UI 状态 → app
+    /// 收不到 click. 实测 80ms 间隔 Win 11 + ARM viogpudo 稳定 register, 50ms 偶尔
+    /// 仍接成 hover (DWM 跨 frame 取样). 高于 100ms 会有视觉延迟感, 取 80ms 折中.
     public static func mouseClick(
         x: Int, y: Int,
         button: String = "left",
@@ -58,13 +100,19 @@ public enum QemuInput {
         guard ["left", "right", "middle"].contains(button) else {
             throw InputError.unsupportedButton(button)
         }
-        var events = absMoveEvents(x: x, y: y, guestSize: guestSize)
-        events.append(["type": "btn", "data": ["button": button, "down": true]])
-        events.append(["type": "btn", "data": ["button": button, "down": false]])
-        try await client.inputSendEvent(events: events)
+        // 1) 先 move + button down (合一帧, 减少 RTT)
+        var downEvents = absMoveEvents(x: x, y: y, guestSize: guestSize)
+        downEvents.append(["type": "btn", "data": ["button": button, "down": true]])
+        try await client.inputSendEvent(events: downEvents)
+        // 2) 等 USB HID + Windows DWM 注册 down
+        try await Task.sleep(nanoseconds: 80_000_000)
+        // 3) button up (单独一帧)
+        try await client.inputSendEvent(events: [
+            ["type": "btn", "data": ["button": button, "down": false]]
+        ])
     }
 
-    /// 双击: 两次 click 中间留点儿间隔
+    /// 双击: 两次 click 中间留点儿间隔 (跟 click 内部 down→80ms→up 间隔叠加, 总 ~240ms 完成)
     public static func mouseDoubleClick(
         x: Int, y: Int,
         button: String = "left",
