@@ -55,6 +55,16 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
     /// 多 hide 没匹配 unhide 鼠标会一直消失; view 销毁前必须保证净 hide 计数 = 0.
     private var cursorHidden = false
 
+    /// guest 通过 HDP CURSOR_DEFINE 推过来的硬件光标 (viogpudo / virtio-gpu cursor virtqueue).
+    /// 跟 BDD 软件画法不同: hardware cursor 不在 framebuffer 像素里, host 必须自画 overlay.
+    /// host 鼠标 ↔ guest tablet 走 usb-tablet 1:1 绝对坐标, host 鼠标位置即 guest 位置,
+    /// 所以光标位置不用我们维护 — 让 macOS 自己跟踪 host 鼠标 + 我们替换 cursor 图像即可.
+    private var guestCursor: NSCursor?
+    /// guest 主动隐藏光标 (CURSOR_POS.visible=false). 此时 host 也跟着藏, 光标重新出现要等 visible=true.
+    private var guestCursorHidden: Bool = false
+    /// view 内/外标记. mouseEntered/Exited 维护; 决定要不要立即生效 cursor 替换.
+    private var isMouseInside: Bool = false
+
     /// 输入捕获总开关. 默认 true; 设 false 时:
     ///   - acceptsFirstResponder = false (键盘事件 fall through 给 NSWindow / 别的 control)
     ///   - mouse/key/scroll 处理函数全部直接 return, 不发 forwarder
@@ -70,6 +80,9 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
                     window?.makeFirstResponder(nil)
                 }
                 showHostCursor()
+            } else if isMouseInside {
+                // 重新 capture 且鼠标已在 view 内: 重新生效 cursor 替换
+                applyCurrentCursor()
             }
         }
     }
@@ -125,6 +138,67 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
         expectedGuestCaps = leds.capsLock
     }
 
+    /// 接 HDP CURSOR_DEFINE: 把 BGRA pixels 装成 NSCursor; mouse inside 时立即 set.
+    /// 失败 (无 pixels / 无效 width-height) 退化到 NSCursor.arrow.
+    @MainActor
+    public func applyGuestCursorDefine(_ def: HDP.CursorDefine) {
+        guestCursor = Self.makeCursor(from: def)
+        if isMouseInside, inputCaptureEnabled {
+            applyCurrentCursor()
+        }
+    }
+
+    /// 接 HDP CURSOR_POS: x/y 不用 (host 鼠标位置 = guest, usb-tablet 1:1);
+    /// 仅消费 visible — guest 主动藏光标时 host 也跟着藏, 重新可见时还原 guestCursor.
+    @MainActor
+    public func applyGuestCursorPos(_ pos: HDP.CursorPos) {
+        let visible = (pos.visible != 0)
+        guard visible != !guestCursorHidden else { return }
+        guestCursorHidden = !visible
+        if isMouseInside, inputCaptureEnabled {
+            applyCurrentCursor()
+        }
+    }
+
+    /// 把 BGRA cursor data 转 NSCursor. premultipliedFirst+byteOrder32Little 在 little-endian
+    /// (Apple Silicon) 下内存布局即 BGRA (b0=B, b1=G, b2=R, b3=A), 跟 wire 格式对齐.
+    private static func makeCursor(from def: HDP.CursorDefine) -> NSCursor? {
+        let w = Int(def.width), h = Int(def.height)
+        guard w > 0, h > 0, def.pixelsBGRA.count >= w * h * 4 else { return nil }
+        guard let provider = CGDataProvider(data: def.pixelsBGRA as CFData) else { return nil }
+        let bitmap = CGBitmapInfo(rawValue:
+            CGBitmapInfo.byteOrder32Little.rawValue |
+            CGImageAlphaInfo.premultipliedFirst.rawValue)
+        guard let cg = CGImage(width: w, height: h,
+                                bitsPerComponent: 8, bitsPerPixel: 32,
+                                bytesPerRow: w * 4,
+                                space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: bitmap,
+                                provider: provider, decode: nil,
+                                shouldInterpolate: false, intent: .defaultIntent) else {
+            return nil
+        }
+        let img = NSImage(cgImage: cg, size: NSSize(width: w, height: h))
+        let hot = NSPoint(x: max(0, Int(def.hotX)), y: max(0, Int(def.hotY)))
+        return NSCursor(image: img, hotSpot: hot)
+    }
+
+    /// 在 mouse 仍在 view 内 + 仍 capture 的前提下把 cursor 状态推到 macOS.
+    /// 三态: guest 隐藏 → NSCursor.hide(); guest 有自画 → set 我们的 NSCursor; 都没有 → hide host.
+    private func applyCurrentCursor() {
+        if guestCursorHidden {
+            if !cursorHidden { NSCursor.hide(); cursorHidden = true }
+            return
+        }
+        if let gc = guestCursor {
+            if cursorHidden { NSCursor.unhide(); cursorHidden = false }
+            gc.set()
+        } else {
+            // BDD 软件路径 (老 ramfb-only): cursor 已在 framebuffer 里, host 鼠标必须藏
+            if !cursorHidden { NSCursor.hide(); cursorHidden = true }
+        }
+    }
+
     // MARK: - first responder
 
     public override var acceptsFirstResponder: Bool { inputCaptureEnabled }
@@ -157,14 +231,15 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
     }
 
     public override func mouseEntered(with event: NSEvent) {
+        isMouseInside = true
         guard inputCaptureEnabled else { return }
-        hideHostCursor()
+        applyCurrentCursor()
     }
-    public override func mouseExited(with event: NSEvent)  { showHostCursor() }
+    public override func mouseExited(with event: NSEvent) {
+        isMouseInside = false
+        showHostCursor()
+    }
 
-    private func hideHostCursor() {
-        if !cursorHidden { NSCursor.hide(); cursorHidden = true }
-    }
     private func showHostCursor() {
         if cursorHidden { NSCursor.unhide(); cursorHidden = false }
     }

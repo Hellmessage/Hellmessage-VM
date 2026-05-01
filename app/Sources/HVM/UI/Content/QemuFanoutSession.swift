@@ -75,6 +75,13 @@ final class QemuFanoutSession {
     /// 当前 LED 状态. 新 subscriber 加入立即下发, 防止 caps 指示灯滞后一拍.
     private var cachedLED: HDP.LedState?
 
+    /// 最近一次 hardware cursor 数据 (viogpudo / virtio-gpu cursor virtqueue 推过来的).
+    /// 新 subscriber 加入时 replay 一次, 防止 detached 窗口拉起后光标隐形.
+    /// CURSOR_DEFINE 推 BGRA pixels + hot spot; CURSOR_POS 推 visible flag (x/y 不用,
+    /// host 鼠标 ↔ guest tablet 已 1:1, 位置由 macOS 自己跟踪 host 鼠标).
+    private var cachedCursorDefine: HDP.CursorDefine?
+    private var cachedCursorPos: HDP.CursorPos?
+
     /// channel 收到 disconnected 事件 (QEMU host 子进程退出 / GOODBYE / 网络错误)
     /// 时回调. 上层 (AppModel) 用这个回调及时拆 fanout + 关 detached + refresh
     /// list, 否则 detached 窗口会停在最后一帧、主嵌入会黑屏不响应, 直到下次
@@ -220,6 +227,12 @@ final class QemuFanoutSession {
         if let leds = cachedLED {
             view.updateGuestLEDState(leds)
         }
+        if let def = cachedCursorDefine {
+            view.applyGuestCursorDefine(def)
+        }
+        if let pos = cachedCursorPos {
+            view.applyGuestCursorPos(pos)
+        }
     }
 
     /// 显式注销. View 销毁后不调也无所谓 (weak 自然失效), 但显式调可立即释放
@@ -282,8 +295,20 @@ final class QemuFanoutSession {
                 case .ledState(let leds):
                     log.info("event ledState caps=\(leds.capsLock) num=\(leds.numLock) scroll=\(leds.scrollLock)")
                     await MainActor.run { self.broadcastLED(leds) }
-                case .cursorDefine, .cursorPos:
-                    break
+                case .cursorDefine(let def):
+                    await MainActor.run {
+                        self.cachedCursorDefine = def
+                        for box in self.subscribers {
+                            box.view?.applyGuestCursorDefine(def)
+                        }
+                    }
+                case .cursorPos(let pos):
+                    await MainActor.run {
+                        self.cachedCursorPos = pos
+                        for box in self.subscribers {
+                            box.view?.applyGuestCursorPos(pos)
+                        }
+                    }
                 case .disconnected(let reason):
                     log.info("event disconnected reason=\(String(describing: reason))")
                     // 关键判断: host 子进程是否仍持 BundleLock.
