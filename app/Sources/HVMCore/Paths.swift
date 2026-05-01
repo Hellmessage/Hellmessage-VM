@@ -62,12 +62,12 @@ public enum HVMPaths {
         appSupport.appendingPathComponent("cache/virtio-win", isDirectory: true)
     }
 
-    /// UTM Guest Tools ISO 缓存目录, ~/Library/Application Support/HVM/cache/spice-tools
+    /// UTM Guest Tools ISO 缓存目录, ~/Library/Application Support/HVM/cache/utm-guest-tools
     /// (Win guest 装拖窗口动态 resize 用的 ARM64 native vdagent + utmapp 自家 viogpudo;
-    ///  ~120MB; 全局共享一份). 目录名仍叫 spice-tools 是历史原因 (老 cache 用 spice-space.org
-    ///  上游 spice-guest-tools.exe), 现迁到 UTM Guest Tools 但目录名保留, 避免迁移老缓存逻辑.
-    public static var spiceToolsCacheDir: URL {
-        appSupport.appendingPathComponent("cache/spice-tools", isDirectory: true)
+    ///  ~120MB; 全局共享一份). 老 cache `cache/spice-tools/` (上游 spice-guest-tools.exe
+    ///  时代) 不自动迁移, 由 user 自行清理 orphan.
+    public static var utmGuestToolsCacheDir: URL {
+        appSupport.appendingPathComponent("cache/utm-guest-tools", isDirectory: true)
     }
 
     /// 对给定 uuid 返回默认 IPC socket 路径 (HVMHost ↔ hvm-cli/hvm-dbg)

@@ -193,7 +193,7 @@ public struct WindowsSpec: Codable, Sendable, Equatable {
     /// 默认 true. 走 oobeSystem pass FirstLogonCommands 找 unattend ISO 上的 .exe 跑 /S 装.
     /// 装完后 host 拖 HVM 主窗口 → guest 自动改分辨率 (vdagent 响应 monitor config 协议).
     /// 关掉则 user 需进系统后手动跑 spice-guest-tools-latest.exe.
-    /// 依赖 SpiceToolsCache 已下载到全局缓存; 缓存缺失时 ensureISO fail-soft 跳过 (warn).
+    /// 依赖 UtmGuestToolsCache 已下载到全局缓存; 缓存缺失时 ensureISO fail-soft 跳过 (warn).
     public var autoInstallSpiceTools: Bool
 
     public init(secureBoot: Bool = true, tpmEnabled: Bool = true,

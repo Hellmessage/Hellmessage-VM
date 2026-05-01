@@ -157,7 +157,7 @@ public enum WindowsUnattend {
             // (含 QXL escape SET_CUSTOM_DISPLAY 等) 才能让 host MONITORS_CONFIG 真改分辨率.
             //
             // 装包来源: getutm.app/downloads/utm-guest-tools-latest.iso (~120MB),
-            // 通过 SpiceToolsCache 全局缓存; QemuArgsBuilder 把 .iso 当第三 cdrom 挂给 guest.
+            // 通过 UtmGuestToolsCache 全局缓存; QemuArgsBuilder 把 .iso 当第三 cdrom 挂给 guest.
             // 探测条件: 扫所有盘符找 utm-guest-tools-*.exe (含版本号, 用 wildcard).
             // 走 start /wait 让 SynchronousCommand 等到装完才进下一条命令.
             // 探测失败 (没挂 ISO / 缓存缺) 时整条 cmd noop, 不阻塞 OOBE.

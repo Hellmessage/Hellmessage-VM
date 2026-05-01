@@ -63,7 +63,7 @@ public enum QemuArgsBuilder {
         /// virtio-serial-pci + chardev + virtserialport 三件套, guest 内安装
         /// spice-vdagent 后即可响应 host 的 RESIZE_REQUEST → EDID 变化做动态分辨率.
         public let vdagentSocketPath: String?
-        /// UTM Guest Tools ISO 绝对路径 (仅 windows + 由 SpiceToolsCache 提供). 非 nil 时
+        /// UTM Guest Tools ISO 绝对路径 (仅 windows + 由 UtmGuestToolsCache 提供). 非 nil 时
         /// 挂第四 cdrom (usb-storage), guest 内 OOBE FirstLogonCommands 扫所有盘符跑
         /// utm-guest-tools-*.exe /S 静默装 ARM64 native vdagent + utmapp 自家 viogpudo
         /// + qemu-ga.exe 服务. 缺时 OOBE 那条 cmd noop, 不阻塞流程.

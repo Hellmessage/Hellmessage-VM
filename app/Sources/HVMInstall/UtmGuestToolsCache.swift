@@ -1,5 +1,8 @@
-// HVMInstall/SpiceToolsCache.swift
+// HVMInstall/UtmGuestToolsCache.swift
 // UTM Guest Tools ISO 全局缓存 + 按需下载.
+//
+// 老 cache (`cache/spice-tools/spice-guest-tools.exe` 或 `cache/spice-tools/utm-guest-tools.iso`)
+// 不会自动迁移; 用户旧版本下过的产物会成为 orphan, 自行清理或随其他维护操作删除.
 //
 // 用途: Windows ARM64 guest 内安装 utmapp 自家 SPICE 客户端套件 (含 ARM64 native
 // spice-vdagent.exe + utmapp/virtio-gpu-wddm-dod 自家 viogpudo.sys), 才能让 host 通过
@@ -12,7 +15,7 @@
 // native vdagent + utmapp viogpudo 完整跑通 dynamic resize 链路.
 //
 // 缓存策略 (跟 VirtioWinCache 同模式):
-//   - 全局共享: ~/Library/Application Support/HVM/cache/spice-tools/utm-guest-tools.iso
+//   - 全局共享: ~/Library/Application Support/HVM/cache/utm-guest-tools/utm-guest-tools.iso
 //     所有 Win VM 引用同一份 (~120MB 一次, 不每个 VM 复制)
 //   - 创建 Win VM 时按需下载 (前台 modal 进度); 已存在 + 文件大小合理 → 直接复用
 //   - QemuArgsBuilder 把 ISO 当第三 cdrom 挂给 Win guest, OOBE FirstLogonCommands
@@ -23,16 +26,16 @@
 //
 // 下载源: getutm.app 官方 latest 直链 (重定向到 utmapp/qemu releases).
 //   https://getutm.app/downloads/utm-guest-tools-latest.iso
-// 环境变量 HVM_SPICE_TOOLS_URL 可覆盖 (内部镜像 / 离线分发, 名字保留向后兼容).
+// 环境变量 HVM_UTM_GUEST_TOOLS_URL 可覆盖 (内部镜像 / 离线分发).
 
 import Foundation
 import HVMCore
 
-public enum SpiceToolsCache {
+public enum UtmGuestToolsCache {
 
-    /// 上游 latest 直链. HVM_SPICE_TOOLS_URL env 覆盖 (内部镜像).
+    /// 上游 latest 直链. HVM_UTM_GUEST_TOOLS_URL env 覆盖 (内部镜像).
     public static var downloadURL: URL {
-        if let env = ProcessInfo.processInfo.environment["HVM_SPICE_TOOLS_URL"],
+        if let env = ProcessInfo.processInfo.environment["HVM_UTM_GUEST_TOOLS_URL"],
            let u = URL(string: env) {
             return u
         }
@@ -44,7 +47,7 @@ public enum SpiceToolsCache {
     /// 缓存文件绝对路径. 文件名固定 utm-guest-tools.iso (上游 release 是 utm-guest-tools-X.Y.ZZZ.iso,
     /// 我们 normalize 成无版本号文件名, 升级时直接覆盖)
     public static var cachedISOURL: URL {
-        HVMPaths.spiceToolsCacheDir.appendingPathComponent("utm-guest-tools.iso")
+        HVMPaths.utmGuestToolsCacheDir.appendingPathComponent("utm-guest-tools.iso")
     }
 
     /// 缓存就绪判定 (存在 + 大小 ≥ 50MB sanity; 上游 ISO 实际 ~120MB)
@@ -97,7 +100,7 @@ public enum SpiceToolsCache {
         if isReady {
             return cachedISOURL
         }
-        try HVMPaths.ensure(HVMPaths.spiceToolsCacheDir)
+        try HVMPaths.ensure(HVMPaths.utmGuestToolsCacheDir)
 
         let partialURL = cachedISOURL.appendingPathExtension("partial")
         try? FileManager.default.removeItem(at: partialURL)
@@ -135,7 +138,7 @@ public enum SpiceToolsCache {
         progress: @escaping @Sendable (Progress) -> Void
     ) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            let delegate = SpiceDownloadDelegate(destination: dest, progress: progress, continuation: cont)
+            let delegate = UtmGuestToolsDownloadDelegate(destination: dest, progress: progress, continuation: cont)
             let session = URLSession(configuration: .default,
                                      delegate: delegate,
                                      delegateQueue: nil)
@@ -147,16 +150,16 @@ public enum SpiceToolsCache {
 }
 
 /// URLSessionDownloadDelegate (一次性). 跟 VirtioWinCache 内 DownloadDelegate 同形.
-private final class SpiceDownloadDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+private final class UtmGuestToolsDownloadDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     let destination: URL
-    let progressCb: @Sendable (SpiceToolsCache.Progress) -> Void
+    let progressCb: @Sendable (UtmGuestToolsCache.Progress) -> Void
     var continuation: CheckedContinuation<Void, Error>?
     var session: URLSession?
     private let lock = NSLock()
     private var resolved = false
 
     init(destination: URL,
-         progress: @escaping @Sendable (SpiceToolsCache.Progress) -> Void,
+         progress: @escaping @Sendable (UtmGuestToolsCache.Progress) -> Void,
          continuation: CheckedContinuation<Void, Error>) {
         self.destination = destination
         self.progressCb = progress
@@ -183,7 +186,7 @@ private final class SpiceDownloadDelegate: NSObject, URLSessionDownloadDelegate,
                     didFinishDownloadingTo location: URL) {
         if let http = downloadTask.response as? HTTPURLResponse,
            !(200...299).contains(http.statusCode) {
-            resolve(with: .failure(SpiceToolsCache.DownloadError.httpStatus(http.statusCode)))
+            resolve(with: .failure(UtmGuestToolsCache.DownloadError.httpStatus(http.statusCode)))
             return
         }
         do {
@@ -191,7 +194,7 @@ private final class SpiceDownloadDelegate: NSObject, URLSessionDownloadDelegate,
             try FileManager.default.moveItem(at: location, to: destination)
             resolve(with: .success(()))
         } catch {
-            resolve(with: .failure(SpiceToolsCache.DownloadError.writeFailed(reason: "\(error)")))
+            resolve(with: .failure(UtmGuestToolsCache.DownloadError.writeFailed(reason: "\(error)")))
         }
     }
 
@@ -201,7 +204,7 @@ private final class SpiceDownloadDelegate: NSObject, URLSessionDownloadDelegate,
                     totalBytesWritten: Int64,
                     totalBytesExpectedToWrite: Int64) {
         let total: Int64? = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : nil
-        progressCb(SpiceToolsCache.Progress(
+        progressCb(UtmGuestToolsCache.Progress(
             receivedBytes: totalBytesWritten,
             totalBytes: total
         ))

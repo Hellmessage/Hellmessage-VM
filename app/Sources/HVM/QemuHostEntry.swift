@@ -109,11 +109,11 @@ public enum QemuHostEntry {
         // 3.7 AutoUnattend ISO (仅 windows + bypassInstallChecks/autoInstallVirtioWin/autoInstallSpiceTools 任一开).
         // 启动前用 hdiutil makehybrid 现做现挂; 失败 fail-soft (warn + 不挂第二 cdrom),
         // 用户仍可手动按 Shift+F10 在 Setup 里跑 reg add. 不阻塞 VM 启动.
-        // UTM Guest Tools ISO 走全局 cache (~/Library/Application Support/HVM/cache/spice-tools/utm-guest-tools.iso),
+        // UTM Guest Tools ISO 走全局 cache (~/Library/Application Support/HVM/cache/utm-guest-tools/utm-guest-tools.iso),
         // 不打进 unattend ISO (~120MB 太大), QemuArgsBuilder 把它当第四 cdrom 单独挂.
         // 缓存缺失时, 我们传 utmGuestToolsISOPath = nil → 不挂 cdrom; OOBE 那条 cmd 找不到
         // utm-guest-tools-*.exe 也 noop, 不阻塞流程. user 装机前应当先在 GUI 创建向导
-        // 触发 SpiceToolsCache.ensureCached 下载.
+        // 触发 UtmGuestToolsCache.ensureCached 下载.
         var unattendISOPath: String? = nil
         var utmGuestToolsPath: String? = nil
         if config.guestOS == .windows, let win = config.windows,
@@ -126,8 +126,8 @@ public enum QemuHostEntry {
                     autoInstallSpiceTools: win.autoInstallSpiceTools
                 )
                 unattendISOPath = isoURL.path
-                if win.autoInstallSpiceTools, SpiceToolsCache.isReady {
-                    utmGuestToolsPath = SpiceToolsCache.cachedISOURL.path
+                if win.autoInstallSpiceTools, UtmGuestToolsCache.isReady {
+                    utmGuestToolsPath = UtmGuestToolsCache.cachedISOURL.path
                 }
                 let spiceState: String
                 if win.autoInstallSpiceTools {
