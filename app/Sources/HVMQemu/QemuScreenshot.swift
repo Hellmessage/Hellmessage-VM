@@ -39,7 +39,15 @@ public enum QemuScreenshot {
     ) async throws -> Result {
         // 1. 写到 tempDir/<uuid>.ppm
         let ppmURL = tempDir.appendingPathComponent("hvm-shot-\(UUID().uuidString.prefix(8)).ppm")
-        defer { try? FileManager.default.removeItem(at: ppmURL) }
+        // env HVM_DEBUG_KEEP_PPM=1 时不删, 给倾斜 / stride 类 bug 排查 (打日志看 ppm 路径).
+        let keepPPM = ProcessInfo.processInfo.environment["HVM_DEBUG_KEEP_PPM"] == "1"
+        defer {
+            if keepPPM {
+                fputs("[QemuScreenshot] kept PPM at \(ppmURL.path)\n", stderr)
+            } else {
+                try? FileManager.default.removeItem(at: ppmURL)
+            }
+        }
 
         do {
             try await client.screendump(filename: ppmURL.path)
