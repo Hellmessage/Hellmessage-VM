@@ -263,7 +263,7 @@ new file mode 100644
 index 0000000..eb3cc6c
 --- /dev/null
 +++ b/ui/iosurface.m
-@@ -0,0 +1,701 @@
+@@ -0,0 +1,724 @@
 +/*
 + * HVM iosurface display backend
 + *
@@ -773,16 +773,39 @@ index 0000000..eb3cc6c
 +    }
 +
 +    case HVM_DISP_MSG_RESIZE_REQUEST: {
-+        if (!(c->neg_caps & HVM_DISP_CAP_VDAGENT_RESIZE)) return 0;
-+        if (payload_len < sizeof(struct hvm_disp_resize_request)) return 0;
++        if (payload_len < sizeof(struct hvm_disp_resize_request)) {
++            error_report(IOS_LOG "RESIZE_REQUEST payload_len=%u too small (need %zu)",
++                         payload_len, sizeof(struct hvm_disp_resize_request));
++            return 0;
++        }
 +        const struct hvm_disp_resize_request *r = payload;
-+        if (r->width  < 640  || r->height < 480)  return 0;
-+        if (r->width  > 7680 || r->height > 4320) return 0;
++        error_report(IOS_LOG "RESIZE_REQUEST recv %ux%u neg_caps=0x%016llx con=%p",
++                     r->width, r->height,
++                     (unsigned long long)c->neg_caps, (void*)d->dcl.con);
++        if (!(c->neg_caps & HVM_DISP_CAP_VDAGENT_RESIZE)) {
++            error_report(IOS_LOG "RESIZE_REQUEST dropped: cap VDAGENT_RESIZE not negotiated");
++            return 0;
++        }
++        if (r->width  < 640  || r->height < 480)  {
++            error_report(IOS_LOG "RESIZE_REQUEST dropped: dims too small %ux%u",
++                         r->width, r->height);
++            return 0;
++        }
++        if (r->width  > 7680 || r->height > 4320) {
++            error_report(IOS_LOG "RESIZE_REQUEST dropped: dims too large %ux%u",
++                         r->width, r->height);
++            return 0;
++        }
 +        QemuUIInfo info = {0};
 +        info.width  = r->width;
 +        info.height = r->height;
 +        if (d->dcl.con) {
++            error_report(IOS_LOG "RESIZE_REQUEST → dpy_set_ui_info(%ux%u) con=%p",
++                         info.width, info.height, (void*)d->dcl.con);
 +            dpy_set_ui_info(d->dcl.con, &info, false);
++            error_report(IOS_LOG "RESIZE_REQUEST ← dpy_set_ui_info returned");
++        } else {
++            error_report(IOS_LOG "RESIZE_REQUEST dropped: d->dcl.con == NULL");
 +        }
 +        return 0;
 +    }

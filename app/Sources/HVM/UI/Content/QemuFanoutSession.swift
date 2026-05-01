@@ -196,7 +196,9 @@ final class QemuFanoutSession {
         if isResizeMaster {
             let channel = self.channel
             let vdagent = self.vdagent
+            let vmIDStr = self.vmID.uuidString
             view.onDrawableSizeChange = { w, h in
+                log.info("FanoutSession[\(vmIDStr)] onDrawableSizeChange \(w)x\(h) → fan out to HDP+vdagent")
                 channel.requestResize(width: w, height: h)
                 vdagent.sendMonitorsConfig(width: w, height: h)
             }

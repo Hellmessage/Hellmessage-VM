@@ -18,6 +18,7 @@ import HVMBackend
 import HVMBundle
 import HVMCore
 import HVMDisplay
+import HVMDisplayQemu
 import HVMInstall
 import HVMIPC
 import HVMQemu
@@ -573,6 +574,7 @@ final class QemuHostState {
         case IPCOp.dbgConsoleRead.rawValue:   return handleDbgConsoleRead(req: req)
         case IPCOp.dbgConsoleWrite.rawValue:  return handleDbgConsoleWrite(req: req)
         case IPCOp.dbgDisplayInfo.rawValue:   return await handleDbgDisplayInfo(req: req)
+        case IPCOp.dbgDisplayResize.rawValue: return await handleDbgDisplayResize(req: req)
         case IPCOp.dbgExecGuest.rawValue:     return await handleDbgExecGuest(req: req)
 
         default:
@@ -907,6 +909,72 @@ final class QemuHostState {
         } catch {
             return .failure(id: req.id, code: "qga.exec_failed", message: "\(error)")
         }
+    }
+
+    /// dbg.display.resize — 模拟 GUI 拖窗口触发 host → guest resize.
+    /// 双通路并发: HDP RESIZE_REQUEST + vdagent MONITORS_CONFIG.
+    /// **要求**: GUI 没在 attach (iosurface / vdagent chardev 都是 single-client).
+    /// 结果只标 "sent / connect_failed", 真实生效与否需 hvm-dbg display-info 验.
+    private func handleDbgDisplayResize(req: IPCRequest) async -> IPCResponse {
+        guard let widthStr = req.args["width"], let w = UInt32(widthStr) else {
+            return .failure(id: req.id, code: "ipc.bad_args", message: "需要 args.width")
+        }
+        guard let heightStr = req.args["height"], let h = UInt32(heightStr) else {
+            return .failure(id: req.id, code: "ipc.bad_args", message: "需要 args.height")
+        }
+        guard w >= 640, w <= 7680, h >= 480, h <= 4320 else {
+            return .failure(id: req.id, code: "ipc.bad_args", message: "width/height 越界")
+        }
+        guard let configID = config?.id else {
+            return .failure(id: req.id, code: "backend.no_vm", message: "VM config 未就绪")
+        }
+
+        // ---- A. HDP RESIZE_REQUEST (适用 Linux virtio-gpu, 对 ramfb 是诊断信号) ----
+        var hdpResult = "skipped"
+        let iosurfacePath = HVMPaths.iosurfaceSocketPath(for: configID).path
+        if FileManager.default.fileExists(atPath: iosurfacePath) {
+            let channel = DisplayChannel(socketPath: iosurfacePath)
+            do {
+                fputs("HVMHost(qemu): dbg.display.resize → HDP connect \(iosurfacePath)\n", stderr)
+                try channel.connect()
+                fputs("HVMHost(qemu): dbg.display.resize → HDP requestResize(\(w)x\(h))\n", stderr)
+                channel.requestResize(width: w, height: h)
+                // 给 send queue + read thread 一点时间把 bytes 推过去并收 ack
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                channel.disconnect(reason: .normal)
+                hdpResult = "sent"
+            } catch {
+                fputs("HVMHost(qemu): dbg.display.resize → HDP connect_failed: \(error)\n", stderr)
+                hdpResult = "connect_failed: \(error)"
+            }
+        } else {
+            hdpResult = "skipped: iosurface socket 不存在"
+        }
+
+        // ---- B. vdagent MONITORS_CONFIG (适用 Win spice-vdagent → SetDisplayConfig) ----
+        var vdagentResult = "skipped"
+        let vdagentPath = HVMPaths.vdagentSocketPath(for: configID).path
+        if FileManager.default.fileExists(atPath: vdagentPath) {
+            let vdagent = VdagentClient(socketPath: vdagentPath)
+            fputs("HVMHost(qemu): dbg.display.resize → vdagent connect \(vdagentPath)\n", stderr)
+            vdagent.connect()
+            // 等 connect 完成 (异步 dispatch queue) 再发 monitors config
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            fputs("HVMHost(qemu): dbg.display.resize → vdagent sendMonitorsConfig(\(w)x\(h))\n", stderr)
+            vdagent.sendMonitorsConfig(width: w, height: h)
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            vdagent.disconnect()
+            vdagentResult = "sent"
+        } else {
+            vdagentResult = "skipped: vdagent socket 不存在"
+        }
+
+        let payload = IPCDbgDisplayResizePayload(
+            widthPx: w, heightPx: h,
+            hdpResult: hdpResult,
+            vdagentResult: vdagentResult
+        )
+        return .encoded(id: req.id, payload: payload, kind: "display resize")
     }
 
     private func handleDbgFindText(req: IPCRequest) async -> IPCResponse {

@@ -111,6 +111,12 @@ public enum IPCOp: String, Sendable {
     /// (PPM header). 用于验证 spice-vdagent dynamic resize 是否真生效 (resize 触发前后
     /// 两次 display-info 对比 widthPx/heightPx 是否变化).
     case dbgDisplayInfo  = "dbg.display.info"
+    /// hvm-dbg display-resize — 模拟 GUI 拖窗口触发 host → guest resize. 在 host 进程
+    /// 内 spawn 临时 DisplayChannel + VdagentClient, 走两条通路:
+    ///   A. HDP RESIZE_REQUEST (适用 Linux virtio-gpu, ramfb 不消费)
+    ///   B. vdagent MONITORS_CONFIG (适用 Win spice-vdagent → SetDisplayConfig)
+    /// 测试规约: 调用此 op 时 GUI **不能**同时 attach (iosurface/vdagent chardev 单 client).
+    case dbgDisplayResize = "dbg.display.resize"
     /// 通过 qemu-guest-agent (qga) 在 guest 内跑 process, 拿 stdout/stderr/exit_code.
     /// 给 hvm-dbg exec-guest 用. 配套 guest 内 qemu-ga.exe 服务 + argv 挂的
     /// virtio-serial port org.qemu.guest_agent.0 (chardev qga). 不依赖 keyboard typing
@@ -125,6 +131,20 @@ public struct IPCDbgDisplayInfoPayload: Codable, Sendable {
     public init(widthPx: Int, heightPx: Int) {
         self.widthPx = widthPx
         self.heightPx = heightPx
+    }
+}
+
+/// dbg.display.resize 响应 — 双通路 send 结果, 任一通路结果由日志为准, 这里只摘要.
+public struct IPCDbgDisplayResizePayload: Codable, Sendable {
+    public let widthPx: UInt32
+    public let heightPx: UInt32
+    public let hdpResult: String   // "sent" / "skipped" / "connect_failed: ..."
+    public let vdagentResult: String  // "sent" / "connect_failed: ..." / "skipped"
+    public init(widthPx: UInt32, heightPx: UInt32, hdpResult: String, vdagentResult: String) {
+        self.widthPx = widthPx
+        self.heightPx = heightPx
+        self.hdpResult = hdpResult
+        self.vdagentResult = vdagentResult
     }
 }
 

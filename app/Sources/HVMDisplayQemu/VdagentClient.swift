@@ -113,10 +113,11 @@ public final class VdagentClient: @unchecked Sendable {
 
             // 写 socket. 短写 / 错误 → close, 下次 send 时 lazy 重连.
             if !self.sendAll(chunkBuf) {
-                log.warning("vdagent send failed (\(width)x\(height)), 关连接等下次 lazy 重连")
+                log.warning("vdagent send failed (\(width)x\(height)) errno=\(errno), 关连接等下次 lazy 重连")
                 self.doDisconnect()
             } else {
-                log.debug("vdagent MONITORS_CONFIG sent \(width)x\(height) (\(chunkBuf.count) bytes)")
+                // info 级 (从 debug 提到 info) — debug 默认不打印, info 上 .log 文件
+                log.info("vdagent MONITORS_CONFIG sent \(width)x\(height) (\(chunkBuf.count) bytes) → fd=\(self.sockFD)")
             }
         }
     }

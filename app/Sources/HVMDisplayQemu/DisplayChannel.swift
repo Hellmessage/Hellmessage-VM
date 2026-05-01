@@ -15,7 +15,10 @@
 
 import Foundation
 import Darwin
+import OSLog
 import HVMScmRecv
+
+private let log = Logger(subsystem: "com.hellmessage.vm", category: "HDP")
 
 public final class DisplayChannel: @unchecked Sendable {
 
@@ -119,14 +122,22 @@ public final class DisplayChannel: @unchecked Sendable {
     /// 只检查 sockFD 是否就绪 (channel 已 connect 才发).
     public func requestResize(width: UInt32, height: UInt32) {
         guard sockFD >= 0 else {
+            log.warning("requestResize dropped: not connected (\(width)x\(height))")
             return
         }
+        log.info("requestResize \(width)x\(height) → enqueue (negotiatedCaps=0x\(String(self.negotiatedCaps.rawValue, radix: 16)))")
         let req = HDP.ResizeRequest(width: width, height: height)
         let hdr = HDP.Header(type: .resizeRequest, flags: [],
                              payloadLen: UInt32(HDP.ResizeRequest.byteSize))
         let msg = hdr.encode() + req.encode()
         sendQueue.async { [weak self] in
-            _ = self?.sendAll(msg)
+            guard let self else { return }
+            let ok = self.sendAll(msg)
+            if ok {
+                log.info("requestResize \(width)x\(height) → sendAll OK (\(msg.count) bytes)")
+            } else {
+                log.error("requestResize \(width)x\(height) → sendAll FAILED")
+            }
         }
     }
 
