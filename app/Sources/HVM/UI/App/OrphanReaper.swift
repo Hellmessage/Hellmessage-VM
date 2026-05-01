@@ -1,13 +1,19 @@
 // OrphanReaper.swift
 //
-// 启动时清理上一次 GUI 异常死亡 (SIGKILL / 崩溃 / 强制退出) 留下的孤儿:
+// 启动时清理上一次 GUI 异常死亡 (SIGKILL / 崩溃 / 强制退出) 留下的孤儿 +
+// 顺手刷新 socket_vmnet daemon 防 stale:
 //   - 孤儿 QEMU / swtpm 进程: host 子进程死了, child 被 launchd reparent (PPID=1),
 //     仍在跑 — 占大量 RAM (4G+) / CPU, 阻碍后续 VM 启动. 用 SIGTERM → SIGKILL 杀掉.
 //   - 残留 socket / .lock 文件: 对应 VM 的 BundleLock 不 busy 时, run/<uuid>.* 都是
 //     stale, 删掉避免下次启 VM 时 QEMU bind 失败的潜在问题.
+//   - socket_vmnet bridged daemon 长跑 (>1.5h 实测) 进入 stale 状态: 能 accept QEMU
+//     connect 但 vmnet kext frame 转发僵死 → guest 拿 169.254 APIPA. launchctl
+//     kickstart -k 重启 daemon 立即恢复. 没 sudoers NOPASSWD 时 fail-soft 跳过 (生产
+//     需 user 跑过 install-vmnet-helper.sh 装 sudoers entry).
 //
 // 触发时机: HVMAppDelegate.applicationDidFinishLaunching, 在主窗口建立 / 列 VM 之前.
-// 杜绝 "上次 HVM 崩溃 → 这次 HVM 启不起来 / 启 VM 报 socket exists" 的连锁故障.
+// 杜绝 "上次 HVM 崩溃 → 这次 HVM 启不起来 / 启 VM 报 socket exists" + "bridged 突然没网"
+// 的连锁故障.
 //
 // 设计:
 //   - 不依赖任何 HVM 自身状态 (因为 GUI 刚启动, 还没载入 sessions / fanouts).
@@ -34,6 +40,52 @@ enum OrphanReaper {
             killAndWait(orphans)
         }
         cleanStaleSockets()
+        kickstartVmnetDaemons()
+    }
+
+    // MARK: - vmnet daemon 刷新
+
+    /// 通过 sudo -n launchctl kickstart -k 重启所有 hvm 的 socket_vmnet daemon.
+    /// 失败 fail-soft (没 sudoers NOPASSWD entry / launchctl 不在 / daemon 不存在 等场景).
+    /// 用途: 见文件头注释 "socket_vmnet bridged daemon 长跑进入 stale" 段.
+    /// label 列表覆盖现行 com.hellmessage.hvm.vmnet.* 跟旧版 io.hell.vmnet.* (跟 hell-vm 同款).
+    private static func kickstartVmnetDaemons() {
+        // 列 /Library/LaunchDaemons 找匹配的 plist, 提取 label.
+        let daemonDir = "/Library/LaunchDaemons"
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: daemonDir) else {
+            return
+        }
+        let labels = entries.compactMap { name -> String? in
+            guard name.hasSuffix(".plist") else { return nil }
+            let label = String(name.dropLast(6))   // 去 .plist
+            // 只 kickstart hvm vmnet daemon, 不动别人的
+            if label.hasPrefix("com.hellmessage.hvm.vmnet.") || label.hasPrefix("io.hell.vmnet.") {
+                return label
+            }
+            return nil
+        }
+        for label in labels {
+            // sudo -n launchctl kickstart -k system/<label>
+            // -n: 不 prompt (没 NOPASSWD 立即 fail), -k: 强 SIGTERM 后 launchd KeepAlive 重启.
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+            proc.arguments = ["-n", "/bin/launchctl", "kickstart", "-k", "system/\(label)"]
+            // 静默 stderr (没 sudoers entry 时不刷屏)
+            proc.standardOutput = Pipe()
+            proc.standardError = Pipe()
+            do {
+                try proc.run()
+                proc.waitUntilExit()
+                if proc.terminationStatus == 0 {
+                    log.info("vmnet daemon kickstarted: \(label, privacy: .public)")
+                } else {
+                    log.debug("vmnet daemon kickstart 跳过 (无 sudoers / 不存在): \(label, privacy: .public) status=\(proc.terminationStatus)")
+                }
+            } catch {
+                // sudo 跑不起来不当 fatal
+                log.debug("kickstart \(label, privacy: .public) failed: \(String(describing: error))")
+            }
+        }
     }
 
     // MARK: - 进程扫描
