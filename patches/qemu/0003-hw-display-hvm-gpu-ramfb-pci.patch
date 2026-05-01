@@ -1,0 +1,339 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: HVM <noreply@hellmessage.com>
+Date: Sat, 2 May 2026 00:00:00 +0800
+Subject: [PATCH] hw/display: add hvm-gpu-ramfb-pci hybrid display device
+
+新 PCI 设备 `hvm-gpu-ramfb-pci`, 单设备同时挂 ramfb (UEFI/bootmgfw GOP 兼容)
++ virtio-gpu-pci (OS 期 viogpudo.sys / 内核 virtio-gpu driver 接管):
+
+  - boot 期 (g->enable == 0): 走 ramfb 路径, fw_cfg etc/ramfb 接口给 EDK2 GOP /
+    bootmgfw.efi, framebuffer 在 cpu_physical_memory_map 出来的 guest RAM 区里;
+    ramfb_display_update 走 dpy_gfx_replace_surface 把 surface 推给 console.
+  - OS-time (g->enable == 1, guest virtio-gpu driver 装好, 第一条
+    VIRTIO_GPU_CMD_SET_SCANOUT 到达): 走 virtio-gpu 路径, virtio-gpu cmd handler
+    自己 dpy_gfx_update / dpy_gfx_replace_surface 把 dynamic 大小 framebuffer
+    推给同一个 console.
+
+vendor/device id 复用 0x1AF4/0x1050 (Red Hat virtio-gpu, viogpudo.inf 自动 match,
+不需要改 guest driver). PCI class 仍 DISPLAY_OTHER.
+
+套版自 hw/display/virtio-vga.c (VGA + virtio-gpu 融合), 仅把 VGA 路径换成 ramfb.
+
+只暴露 PCI 形态 (TYPE_HVM_GPU_RAMFB_PCI = "hvm-gpu-ramfb-pci"); virtio-bus
+(non-PCI) 的 transport 当前用例不需要.
+
+Signed-off-by: HVM <noreply@hellmessage.com>
+---
+ hw/display/Kconfig                       |   9 +
+ hw/display/hvm-gpu-ramfb-pci.c           | 219 +++++++++++++++++++++++
+ hw/display/meson.build                   |   8 +
+ include/hw/display/hvm-gpu-ramfb-pci.h   |  35 ++++
+ 4 files changed, 271 insertions(+)
+ create mode 100644 hw/display/hvm-gpu-ramfb-pci.c
+ create mode 100644 include/hw/display/hvm-gpu-ramfb-pci.h
+
+diff --git a/hw/display/Kconfig b/hw/display/Kconfig
+index 1e95ab2..29cf4c9 100644
+--- a/hw/display/Kconfig
++++ b/hw/display/Kconfig
+@@ -106,6 +106,15 @@ config VIRTIO_VGA
+     depends on VIRTIO_PCI
+     select VGA
+ 
++config HVM_GPU_RAMFB
++    bool
++    # HVM hybrid display: ramfb (boot/UEFI/bootmgfw GOP friendly) + virtio-gpu (runtime).
++    # 默认 y, 用 PCI + VIRTIO_PCI 即可使用 -device hvm-gpu-ramfb-pci.
++    default y
++    depends on VIRTIO_PCI
++    select VIRTIO_GPU
++    select FW_CFG_DMA
++
+ config VHOST_USER_GPU
+     bool
+     default y
+diff --git a/hw/display/hvm-gpu-ramfb-pci.c b/hw/display/hvm-gpu-ramfb-pci.c
+new file mode 100644
+index 0000000..d0139c7
+--- /dev/null
++++ b/hw/display/hvm-gpu-ramfb-pci.c
+@@ -0,0 +1,220 @@
++/*
++ * HVM hybrid display device — virtio-gpu-pci + ramfb fallback
++ *
++ * 一个 PCI device 同时挂两个角色:
++ *   - boot 期 (g->enable == 0, 即 guest virtio-gpu driver 未加载):
++ *       走 ramfb 路径, fw_cfg etc/ramfb 接口给 EDK2 GOP / bootmgfw.efi 使用,
++ *       framebuffer 在 cpu_physical_memory_map 出来的 guest RAM 区里,
++ *       ramfb_display_update 走 dpy_gfx_replace_surface 把 surface 推给 console.
++ *   - OS-time (g->enable == 1, viogpudo / qxl-dod / virtio-gpu kernel driver 装好,
++ *     发了第一条 VIRTIO_GPU_CMD_SET_SCANOUT):
++ *       走 virtio-gpu 路径, virtio-gpu 命令处理函数自己 dpy_gfx_update / dpy_gfx_replace_surface
++ *       把 dynamic 大小的 framebuffer 推给同一个 console.
++ *
++ * vendor/device id 复用 0x1AF4/0x1050 (Red Hat virtio-gpu, viogpudo.inf 自动 match,
++ * 不需要改 guest driver). PCI class 仍 DISPLAY_OTHER.
++ *
++ * 套版自 hw/display/virtio-vga.c (VGA + virtio-gpu 融合), 仅把 VGA 路径换成 ramfb.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qemu/module.h"
++#include "hw/pci/pci.h"
++#include "hw/qdev-properties.h"
++#include "hw/virtio/virtio.h"
++#include "hw/virtio/virtio-bus.h"
++#include "hw/virtio/virtio-gpu-pci.h"
++#include "hw/virtio/virtio-gpu.h"
++#include "hw/display/ramfb.h"
++#include "hw/display/hvm-gpu-ramfb-pci.h"
++#include "qom/object.h"
++
++static void hvm_ramfb_invalidate_display(void *opaque)
++{
++    HVMGPURamfbBase *vrf = opaque;
++    VirtIOGPUBase *g = vrf->vgpu;
++
++    if (g->enable) {
++        if (g->hw_ops->invalidate) {
++            g->hw_ops->invalidate(g);
++        }
++    }
++    /* ramfb 路径: dpy_gfx_replace_surface 在 display_update 内自动 invalidate, 这里不用做 */
++}
++
++static void hvm_ramfb_update_display(void *opaque)
++{
++    HVMGPURamfbBase *vrf = opaque;
++    VirtIOGPUBase *g = vrf->vgpu;
++
++    if (g->enable) {
++        g->hw_ops->gfx_update(g);
++    } else {
++        ramfb_display_update(g->scanout[0].con, vrf->ramfb);
++    }
++}
++
++static void hvm_ramfb_text_update(void *opaque, console_ch_t *chardata)
++{
++    HVMGPURamfbBase *vrf = opaque;
++    VirtIOGPUBase *g = vrf->vgpu;
++
++    if (g->enable) {
++        if (g->hw_ops->text_update) {
++            g->hw_ops->text_update(g, chardata);
++        }
++    }
++    /* ramfb 不支持 text mode, 静默 */
++}
++
++static void hvm_ramfb_ui_info(void *opaque, uint32_t idx, QemuUIInfo *info)
++{
++    HVMGPURamfbBase *vrf = opaque;
++    VirtIOGPUBase *g = vrf->vgpu;
++
++    /* ui_info 始终转给 virtio-gpu — 即使 driver 还没起,
++     * vdagent / EDID 通路依赖 g->req_state 被更新, 让 driver 起来后立刻拿到 host 端的尺寸 hint. */
++    if (g->hw_ops->ui_info) {
++        g->hw_ops->ui_info(g, idx, info);
++    }
++}
++
++static void hvm_ramfb_gl_block(void *opaque, bool block)
++{
++    HVMGPURamfbBase *vrf = opaque;
++    VirtIOGPUBase *g = vrf->vgpu;
++
++    if (g->hw_ops->gl_block) {
++        g->hw_ops->gl_block(g, block);
++    }
++}
++
++static int hvm_ramfb_get_flags(void *opaque)
++{
++    HVMGPURamfbBase *vrf = opaque;
++    VirtIOGPUBase *g = vrf->vgpu;
++
++    return g->hw_ops->get_flags(g);
++}
++
++static const GraphicHwOps hvm_ramfb_ops = {
++    .get_flags   = hvm_ramfb_get_flags,
++    .invalidate  = hvm_ramfb_invalidate_display,
++    .gfx_update  = hvm_ramfb_update_display,
++    .text_update = hvm_ramfb_text_update,
++    .ui_info     = hvm_ramfb_ui_info,
++    .gl_block    = hvm_ramfb_gl_block,
++};
++
++static const Property hvm_ramfb_properties[] = {
++    DEFINE_VIRTIO_GPU_PCI_PROPERTIES(VirtIOPCIProxy),
++};
++
++/* PCI device wrapper: virtio-gpu PCI base 套上 ramfb fallback */
++static void hvm_ramfb_realize(VirtIOPCIProxy *vpci_dev, Error **errp)
++{
++    HVMGPURamfbBase *vrf = HVM_GPU_RAMFB_PCI_BASE(vpci_dev);
++    VirtIOGPUBase *g = vrf->vgpu;
++    DeviceState *vdev = DEVICE(g);
++    int i;
++
++    /* virtio-gpu PCI bars (clone of virtio_gpu_pci_base_realize) */
++    if (virtio_gpu_hostmem_enabled(g->conf)) {
++        vpci_dev->msix_bar_idx = 1;
++        vpci_dev->modern_mem_bar_idx = 2;
++        memory_region_init(&g->hostmem, OBJECT(g), "virtio-gpu-hostmem",
++                           g->conf.hostmem);
++        pci_register_bar(&vpci_dev->pci_dev, 4,
++                         PCI_BASE_ADDRESS_SPACE_MEMORY |
++                         PCI_BASE_ADDRESS_MEM_PREFETCH |
++                         PCI_BASE_ADDRESS_MEM_TYPE_64,
++                         &g->hostmem);
++        virtio_pci_add_shm_cap(vpci_dev, 4, 0, g->conf.hostmem,
++                               VIRTIO_GPU_SHM_ID_HOST_VISIBLE);
++    }
++
++    virtio_pci_force_virtio_1(vpci_dev);
++    if (!qdev_realize(vdev, BUS(&vpci_dev->bus), errp)) {
++        return;
++    }
++
++    /* ramfb fallback (registers fw_cfg etc/ramfb interface).
++     * 必须在 qdev_realize 之后跑 — virtio-gpu base 在 realize 时建 g->scanout[0].con,
++     * ramfb_setup 自己不持 console, 所有渲染都走 g->scanout[0].con. */
++    vrf->ramfb = ramfb_setup(false, errp);
++    if (!vrf->ramfb) {
++        return;
++    }
++
++    /* 把同一个 console 的 hw_ops 换成我们的双 dispatcher.
++     * virtio-gpu base 注册的 virtio_gpu_ops 只剩 ui_info / get_flags 有效路径,
++     * gfx_update 在那个套版下是 no-op (实际渲染走 virtio-gpu 命令处理函数 dpy_gfx_update),
++     * 我们的 dispatcher 在 enable=0 时改走 ramfb_display_update, enable=1 时仍 noop
++     * 让 virtio-gpu 命令处理函数自己 dpy_gfx_update — 行为完全等价. */
++    graphic_console_set_hwops(g->scanout[0].con, &hvm_ramfb_ops, vrf);
++
++    for (i = 0; i < g->conf.max_outputs; i++) {
++        object_property_set_link(OBJECT(g->scanout[i].con), "device",
++                                 OBJECT(vpci_dev), &error_abort);
++    }
++}
++
++static void hvm_ramfb_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    VirtioPCIClass *k = VIRTIO_PCI_CLASS(klass);
++    PCIDeviceClass *pcidev_k = PCI_DEVICE_CLASS(klass);
++
++    set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
++    device_class_set_props(dc, hvm_ramfb_properties);
++    dc->desc = "HVM hybrid display: ramfb (boot) + virtio-gpu (runtime)";
++    dc->hotpluggable = false;
++    k->realize = hvm_ramfb_realize;
++    pcidev_k->class_id = PCI_CLASS_DISPLAY_OTHER;
++}
++
++static const TypeInfo hvm_ramfb_base_info = {
++    .name = TYPE_HVM_GPU_RAMFB_PCI_BASE,
++    .parent = TYPE_VIRTIO_PCI,
++    .instance_size = sizeof(HVMGPURamfbBase),
++    .class_size = sizeof(HVMGPURamfbBaseClass),
++    .class_init = hvm_ramfb_class_init,
++    .abstract = true,
++};
++module_obj(TYPE_HVM_GPU_RAMFB_PCI_BASE);
++module_kconfig(VIRTIO_PCI);
++
++typedef struct HVMGPURamfb {
++    HVMGPURamfbBase parent_obj;
++    VirtIOGPU       vdev;
++} HVMGPURamfb;
++
++DECLARE_INSTANCE_CHECKER(HVMGPURamfb, HVM_GPU_RAMFB_PCI, TYPE_HVM_GPU_RAMFB_PCI)
++
++static void hvm_ramfb_inst_initfn(Object *obj)
++{
++    HVMGPURamfb *dev = HVM_GPU_RAMFB_PCI(obj);
++
++    virtio_instance_init_common(obj, &dev->vdev, sizeof(dev->vdev),
++                                TYPE_VIRTIO_GPU);
++    HVM_GPU_RAMFB_PCI_BASE(dev)->vgpu = VIRTIO_GPU_BASE(&dev->vdev);
++}
++
++static const VirtioPCIDeviceTypeInfo hvm_ramfb_pci_info = {
++    .generic_name = TYPE_HVM_GPU_RAMFB_PCI,
++    .parent = TYPE_HVM_GPU_RAMFB_PCI_BASE,
++    .instance_size = sizeof(HVMGPURamfb),
++    .instance_init = hvm_ramfb_inst_initfn,
++};
++module_obj(TYPE_HVM_GPU_RAMFB_PCI);
++
++static void hvm_ramfb_register_types(void)
++{
++    type_register_static(&hvm_ramfb_base_info);
++    virtio_pci_types_register(&hvm_ramfb_pci_info);
++}
++
++type_init(hvm_ramfb_register_types)
+diff --git a/hw/display/meson.build b/hw/display/meson.build
+index 90e6c04..4d8f1d1 100644
+--- a/hw/display/meson.build
++++ b/hw/display/meson.build
+@@ -99,6 +99,14 @@ if config_all_devices.has_key('CONFIG_VIRTIO_PCI')
+                         if_true: files('vhost-user-gpu-pci.c'))
+   hw_display_modules += {'virtio-gpu-pci': virtio_gpu_pci_ss}
+ 
++  # HVM hybrid: ramfb (UEFI/bootmgfw friendly) + virtio-gpu (runtime resize)
++  if config_all_devices.has_key('CONFIG_HVM_GPU_RAMFB')
++    hvm_gpu_ramfb_pci_ss = ss.source_set()
++    hvm_gpu_ramfb_pci_ss.add(when: ['CONFIG_HVM_GPU_RAMFB', 'CONFIG_VIRTIO_PCI'],
++                             if_true: [files('hvm-gpu-ramfb-pci.c'), pixman])
++    hw_display_modules += {'hvm-gpu-ramfb-pci': hvm_gpu_ramfb_pci_ss}
++  endif
++
+   if virgl.found() and opengl.found()
+     virtio_gpu_pci_gl_ss = ss.source_set()
+     virtio_gpu_pci_gl_ss.add(when: ['CONFIG_VIRTIO_GPU', 'CONFIG_VIRTIO_PCI', virgl, opengl],
+diff --git a/include/hw/display/hvm-gpu-ramfb-pci.h b/include/hw/display/hvm-gpu-ramfb-pci.h
+new file mode 100644
+index 0000000..135417f
+--- /dev/null
++++ b/include/hw/display/hvm-gpu-ramfb-pci.h
+@@ -0,0 +1,34 @@
++/*
++ * HVM hybrid display device: virtio-gpu-pci + ramfb fallback
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_DISPLAY_HVM_GPU_RAMFB_PCI_H
++#define HW_DISPLAY_HVM_GPU_RAMFB_PCI_H
++
++#include "hw/virtio/virtio-pci.h"
++#include "hw/virtio/virtio-gpu.h"
++#include "hw/display/ramfb.h"
++#include "qom/object.h"
++
++#define TYPE_HVM_GPU_RAMFB_PCI_BASE "hvm-gpu-ramfb-pci-base"
++#define TYPE_HVM_GPU_RAMFB_PCI      "hvm-gpu-ramfb-pci"
++
++typedef struct HVMGPURamfbBase HVMGPURamfbBase;
++typedef struct HVMGPURamfbBaseClass HVMGPURamfbBaseClass;
++
++DECLARE_OBJ_CHECKERS(HVMGPURamfbBase, HVMGPURamfbBaseClass,
++                     HVM_GPU_RAMFB_PCI_BASE, TYPE_HVM_GPU_RAMFB_PCI_BASE)
++
++struct HVMGPURamfbBase {
++    VirtIOPCIProxy parent_obj;
++    VirtIOGPUBase *vgpu;
++    RAMFBState   *ramfb;
++};
++
++struct HVMGPURamfbBaseClass {
++    VirtioPCIClass parent_class;
++};
++
++#endif /* HW_DISPLAY_HVM_GPU_RAMFB_PCI_H */

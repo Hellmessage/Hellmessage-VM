@@ -316,11 +316,17 @@ public enum QemuArgsBuilder {
         }
         // ---- 显示 + 输入 ----
         // QEMU virt 机器默认无显卡, 只有 serial/parallel console; 必须显式加 GPU 才能出 graphical UEFI/OS UI.
-        // Linux: virtio-gpu-pci (内核自带 driver, 加速); Windows ARM64: 必须只挂 ramfb,
-        // 因为 bootmgfw.efi 跟 virtio-gpu-pci GOP 实测有冲突会 hang (hell-vm 同款约束).
-        // ramfb 是 sysbus framebuffer, EDK2 通过 fw_cfg 暴露给 GOP, Win bootmgr 兼容.
+        //
+        // Linux:   virtio-gpu-pci (内核自带 driver, 加速; OS 期 set_scanout 即可 dynamic resize)
+        // Windows ARM64: hvm-gpu-ramfb-pci (自家 patch 0003 融合设备, 内置 ramfb + virtio-gpu-pci):
+        //                 - boot 期 (g->enable=0) 走 ramfb 路径 → fw_cfg etc/ramfb 给 EDK2 GOP /
+        //                   bootmgfw.efi (绕开历史上单挂 virtio-gpu-pci 时 bootmgfw GOP hang 的问题)
+        //                 - OS 期 viogpudo.sys 绑 PCI 1AF4:1050 + 发 SET_SCANOUT 后切到 virtio-gpu
+        //                   路径, 实现真 dynamic resize (vdagent → SetDisplayConfig → SET_SCANOUT
+        //                   → 改 framebuffer 大小)
+        //                 单 PCI 设备同时挂两角色, 不需要在 argv 里两个设备并列
         if cfg.guestOS == .windows {
-            args += ["-device", "ramfb"]
+            args += ["-device", "hvm-gpu-ramfb-pci"]
         } else {
             args += ["-device", "virtio-gpu-pci"]
         }

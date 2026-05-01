@@ -4,3 +4,6 @@
 # 0002: HVM iosurface display backend (-display iosurface,socket=...), AF_UNIX + POSIX shm + SCM_RIGHTS
 #       配套协议规范: docs/QEMU_DISPLAY_PROTOCOL.md v1.0.0
 0002-ui-iosurface-display-backend.patch
+# 0003: HVM hybrid display device (-device hvm-gpu-ramfb-pci): ramfb (UEFI/bootmgfw GOP)
+#       + virtio-gpu-pci (OS time, viogpudo / 内核 driver 接管做 dynamic resize)
+0003-hw-display-hvm-gpu-ramfb-pci.patch
