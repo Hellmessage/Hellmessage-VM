@@ -186,8 +186,11 @@ public struct WindowsSpec: Codable, Sendable, Equatable {
     /// 关掉则不挂 unattend.iso, 用户需要在 Setup 里按 Shift+F10 自己跑命令.
     public var bypassInstallChecks: Bool
     /// 装完 Windows 后首次登录自动从 virtio-win.iso 静默装 virtio 驱动 (NetKVM/viostor/viogpudo).
-    /// 默认 true. 走 oobeSystem pass 的 FirstLogonCommands 跑 certutil + pnputil /add-driver /subdirs /install.
-    /// 关掉则用户需进系统后手动从 virtio-win cdrom 装驱动.
+    /// **当前默认 false** — UTM Guest Tools ISO 已含 ARM64 native 驱动 (NetKVM/viostor/viogpudo
+    /// + qemu-ga), virtio-win.iso 不再是 Win VM 装机硬依赖. QemuArgsBuilder 也已禁用 cdrom_vio
+    /// 挂载 (即便此字段为 true). 后续若要恢复老 virtio-win.iso 通路, 同时改这里 default + 解除
+    /// QemuArgsBuilder 的 `if false` + 重新打开 CreateVMDialog 的 startVirtioWinFetch 触发.
+    /// 走 oobeSystem pass 的 FirstLogonCommands 跑 certutil + pnputil /add-driver /subdirs /install.
     public var autoInstallVirtioWin: Bool
     /// 装完 Windows 后首次登录自动 NSIS /S 静默装 spice-guest-tools.exe (含 spice-vdagent 服务).
     /// 默认 true. 走 oobeSystem pass FirstLogonCommands 找 unattend ISO 上的 .exe 跑 /S 装.
@@ -197,7 +200,7 @@ public struct WindowsSpec: Codable, Sendable, Equatable {
     public var autoInstallSpiceTools: Bool
 
     public init(secureBoot: Bool = true, tpmEnabled: Bool = true,
-                bypassInstallChecks: Bool = true, autoInstallVirtioWin: Bool = true,
+                bypassInstallChecks: Bool = true, autoInstallVirtioWin: Bool = false,
                 autoInstallSpiceTools: Bool = true) {
         self.secureBoot = secureBoot
         self.tpmEnabled = tpmEnabled
@@ -211,12 +214,14 @@ public struct WindowsSpec: Codable, Sendable, Equatable {
     }
 
     /// 老 config (新增字段前) 缺字段 → 默认 true 兜底.
+    /// 例外: autoInstallVirtioWin 缺字段 → false (UTM Guest Tools 已替代 virtio-win.iso,
+    /// 老 VM 也无须再走 pnputil 段).
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.secureBoot = try c.decodeIfPresent(Bool.self, forKey: .secureBoot) ?? true
         self.tpmEnabled = try c.decodeIfPresent(Bool.self, forKey: .tpmEnabled) ?? true
         self.bypassInstallChecks = try c.decodeIfPresent(Bool.self, forKey: .bypassInstallChecks) ?? true
-        self.autoInstallVirtioWin = try c.decodeIfPresent(Bool.self, forKey: .autoInstallVirtioWin) ?? true
+        self.autoInstallVirtioWin = try c.decodeIfPresent(Bool.self, forKey: .autoInstallVirtioWin) ?? false
         self.autoInstallSpiceTools = try c.decodeIfPresent(Bool.self, forKey: .autoInstallSpiceTools) ?? true
     }
 }

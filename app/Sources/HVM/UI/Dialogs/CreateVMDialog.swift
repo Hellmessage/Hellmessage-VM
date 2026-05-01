@@ -657,12 +657,9 @@ struct CreateVMDialog: View {
 
     private func createAction() {
         creating = true
-        if guestOS == .windows {
-            model.startVirtioWinFetch(errors: errors) {
-                self.proceedWithBundleCreation()
-            }
-            return
-        }
+        // 注: virtio-win.iso 拉取已默认禁用 — UTM Guest Tools ISO 已替代它的角色
+        // (UtmGuestToolsCache 由其他地方触发拉取). 后续若恢复 virtio-win 通路, 在
+        // guestOS==.windows 分支重新串 model.startVirtioWinFetch(errors:) {...} 即可.
         proceedWithBundleCreation()
     }
 

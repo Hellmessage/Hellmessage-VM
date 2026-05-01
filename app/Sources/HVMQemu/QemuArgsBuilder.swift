@@ -232,8 +232,13 @@ public enum QemuArgsBuilder {
                 args += ["-drive", "if=none,id=cdrom_unat,media=cdrom,file=\(unattendPath),readonly=on"]
                 args += ["-device", "usb-storage,drive=cdrom_unat,id=cdrom_unat_dev,removable=true,bus=xhci.0"]
             }
-            // virtio-win 驱动 ISO: usb-storage 第三 cdrom (装机看不到 virtio-blk 主盘必经)
-            if let virtioWinPath = inputs.virtioWinISOPath {
+            // virtio-win 驱动 ISO: **当前默认禁用** — UTM Guest Tools ISO 内含 ARM64
+            // native NetKVM/viostor/viogpudo + qemu-ga, 已覆盖 virtio-win.iso 该负责的
+            // 驱动事项. 主硬盘走 nvme (Win 自带 inbox driver) 装机阶段也不依赖 virtio-blk.
+            // virtioWinISOPath 字段保留为 fallback 入口, 后续若需要老 virtio-win.iso 通路
+            // 把下面 `false &&` 去掉即恢复挂 cdrom_vio. (相应 unattend pnputil 段由
+            // VMConfig.windows.autoInstallVirtioWin 控制, 同样默认关闭.)
+            if false, let virtioWinPath = inputs.virtioWinISOPath {
                 args += ["-drive", "if=none,id=cdrom_vio,media=cdrom,file=\(virtioWinPath),readonly=on"]
                 args += ["-device", "usb-storage,drive=cdrom_vio,id=cdrom_vio_dev,removable=true,bus=xhci.0"]
             }
