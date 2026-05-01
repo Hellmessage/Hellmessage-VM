@@ -106,20 +106,27 @@ public enum QemuHostEntry {
         let consoleSocketURL = HVMPaths.consoleSocketPath(for: config.id)
         try? FileManager.default.removeItem(at: consoleSocketURL)
 
-        // 3.7 AutoUnattend ISO (仅 windows + bypassInstallChecks/autoInstallVirtioWin 任一开).
+        // 3.7 AutoUnattend ISO (仅 windows + bypassInstallChecks/autoInstallVirtioWin/autoInstallSpiceTools 任一开).
         // 启动前用 hdiutil makehybrid 现做现挂; 失败 fail-soft (warn + 不挂第二 cdrom),
         // 用户仍可手动按 Shift+F10 在 Setup 里跑 reg add. 不阻塞 VM 启动.
+        // spice-guest-tools.exe 走全局 cache (~/Library/Application Support/HVM/cache/spice-tools/),
+        // 没缓存时 ensureISO 内部 fail-soft (跳过 spice 段, virtio 段照常); user 装机前应当先在
+        // GUI 创建向导触发 SpiceToolsCache.ensureCached 下载.
         var unattendISOPath: String? = nil
         if config.guestOS == .windows, let win = config.windows,
-           win.bypassInstallChecks || win.autoInstallVirtioWin {
+           win.bypassInstallChecks || win.autoInstallVirtioWin || win.autoInstallSpiceTools {
             do {
+                let spiceURL: URL? = SpiceToolsCache.isReady ? SpiceToolsCache.cachedExeURL : nil
                 let isoURL = try WindowsUnattend.ensureISO(
                     bundle: bundleURL,
                     bypassInstallChecks: win.bypassInstallChecks,
-                    autoInstallVirtioWin: win.autoInstallVirtioWin
+                    autoInstallVirtioWin: win.autoInstallVirtioWin,
+                    autoInstallSpiceTools: win.autoInstallSpiceTools,
+                    spiceToolsExeURL: spiceURL
                 )
                 unattendISOPath = isoURL.path
-                fputs("HVMHost(qemu): ✔ unattend ISO 就绪 \(isoURL.path) (bypass=\(win.bypassInstallChecks), virtio=\(win.autoInstallVirtioWin))\n", stderr)
+                let spiceState = win.autoInstallSpiceTools ? (spiceURL != nil ? "spice=on" : "spice=skip(cache miss)") : "spice=off"
+                fputs("HVMHost(qemu): ✔ unattend ISO 就绪 \(isoURL.path) (bypass=\(win.bypassInstallChecks), virtio=\(win.autoInstallVirtioWin), \(spiceState))\n", stderr)
             } catch {
                 fputs("HVMHost(qemu): ⚠ unattend ISO 生成失败 (\(error)); Win11 Setup 将不会自动跳过硬件检查, 用户需手动 Shift+F10 跑 reg add\n", stderr)
             }

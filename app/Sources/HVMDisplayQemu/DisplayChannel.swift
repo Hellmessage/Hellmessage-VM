@@ -112,9 +112,15 @@ public final class DisplayChannel: @unchecked Sendable {
         continuation.finish()
     }
 
-    /// 请求 guest 调分辨率. 仅在协商阶段拿到 vdagentResize cap 后生效.
+    /// 请求 guest 调分辨率. 不检查 negotiatedCaps (跟 hell-vm 一致):
+    /// QEMU patch 0002 的 iosurface backend 不一定 advertise vdagentResize cap,
+    /// 但仍能处理 RESIZE_REQUEST → dpy_set_ui_info → vdagent 通道. cap check 静默
+    /// 丢请求会让 user 拖 HVM 主窗口 guest 不改分辨率, 即使 vdagent 已装好.
+    /// 只检查 sockFD 是否就绪 (channel 已 connect 才发).
     public func requestResize(width: UInt32, height: UInt32) {
-        guard negotiatedCaps.contains(.vdagentResize) else { return }
+        guard sockFD >= 0 else {
+            return
+        }
         let req = HDP.ResizeRequest(width: width, height: height)
         let hdr = HDP.Header(type: .resizeRequest, flags: [],
                              payloadLen: UInt32(HDP.ResizeRequest.byteSize))

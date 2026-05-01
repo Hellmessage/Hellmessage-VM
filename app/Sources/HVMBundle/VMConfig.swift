@@ -189,26 +189,35 @@ public struct WindowsSpec: Codable, Sendable, Equatable {
     /// 默认 true. 走 oobeSystem pass 的 FirstLogonCommands 跑 certutil + pnputil /add-driver /subdirs /install.
     /// 关掉则用户需进系统后手动从 virtio-win cdrom 装驱动.
     public var autoInstallVirtioWin: Bool
+    /// 装完 Windows 后首次登录自动 NSIS /S 静默装 spice-guest-tools.exe (含 spice-vdagent 服务).
+    /// 默认 true. 走 oobeSystem pass FirstLogonCommands 找 unattend ISO 上的 .exe 跑 /S 装.
+    /// 装完后 host 拖 HVM 主窗口 → guest 自动改分辨率 (vdagent 响应 monitor config 协议).
+    /// 关掉则 user 需进系统后手动跑 spice-guest-tools-latest.exe.
+    /// 依赖 SpiceToolsCache 已下载到全局缓存; 缓存缺失时 ensureISO fail-soft 跳过 (warn).
+    public var autoInstallSpiceTools: Bool
 
     public init(secureBoot: Bool = true, tpmEnabled: Bool = true,
-                bypassInstallChecks: Bool = true, autoInstallVirtioWin: Bool = true) {
+                bypassInstallChecks: Bool = true, autoInstallVirtioWin: Bool = true,
+                autoInstallSpiceTools: Bool = true) {
         self.secureBoot = secureBoot
         self.tpmEnabled = tpmEnabled
         self.bypassInstallChecks = bypassInstallChecks
         self.autoInstallVirtioWin = autoInstallVirtioWin
+        self.autoInstallSpiceTools = autoInstallSpiceTools
     }
 
     private enum CodingKeys: String, CodingKey {
-        case secureBoot, tpmEnabled, bypassInstallChecks, autoInstallVirtioWin
+        case secureBoot, tpmEnabled, bypassInstallChecks, autoInstallVirtioWin, autoInstallSpiceTools
     }
 
-    /// 老 config (新增字段前) 缺这两个字段 → 默认 true 兜底.
+    /// 老 config (新增字段前) 缺字段 → 默认 true 兜底.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.secureBoot = try c.decodeIfPresent(Bool.self, forKey: .secureBoot) ?? true
         self.tpmEnabled = try c.decodeIfPresent(Bool.self, forKey: .tpmEnabled) ?? true
         self.bypassInstallChecks = try c.decodeIfPresent(Bool.self, forKey: .bypassInstallChecks) ?? true
         self.autoInstallVirtioWin = try c.decodeIfPresent(Bool.self, forKey: .autoInstallVirtioWin) ?? true
+        self.autoInstallSpiceTools = try c.decodeIfPresent(Bool.self, forKey: .autoInstallSpiceTools) ?? true
     }
 }
 

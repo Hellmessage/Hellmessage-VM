@@ -30,15 +30,26 @@ public enum WindowsUnattend {
     ///   - bundle: VM bundle 根目录 (.hvmz)
     ///   - bypassInstallChecks: 加 windowsPE pass reg add LabConfig\Bypass*Check
     ///   - autoInstallVirtioWin: 加 oobeSystem pass FirstLogonCommands pnputil 装驱动
+    ///   - autoInstallSpiceTools: 加 oobeSystem pass FirstLogonCommands spice-guest-tools.exe /S 静默装
+    ///     (依赖全局 cache 里有 spice-guest-tools.exe; 拷进 stage 一起打 ISO. 缓存缺失时
+    ///     fail-soft, 跳过 spice 部分但 unattend ISO 仍生成)
     /// - Returns: unattend ISO 的 URL (可能是新写也可能复用)
     public static func ensureISO(
         bundle: URL,
         bypassInstallChecks: Bool,
-        autoInstallVirtioWin: Bool
+        autoInstallVirtioWin: Bool,
+        autoInstallSpiceTools: Bool = false,
+        spiceToolsExeURL: URL? = nil
     ) throws -> URL {
+        // 实际能否带上 spice exe: 开关开 + 缓存文件存在
+        let fm = FileManager.default
+        let spiceAvailable = autoInstallSpiceTools
+            && spiceToolsExeURL != nil
+            && fm.fileExists(atPath: spiceToolsExeURL!.path)
         let xml = unattendXML(
             bypassInstallChecks: bypassInstallChecks,
-            autoInstallVirtioWin: autoInstallVirtioWin
+            autoInstallVirtioWin: autoInstallVirtioWin,
+            autoInstallSpiceTools: spiceAvailable
         )
         let stageDir = BundleLayout.unattendStageDir(bundle)
         // 三份文件名都写: 不同版本 Win Setup 对大小写要求不一
@@ -48,15 +59,16 @@ public enum WindowsUnattend {
         let canonicalURL = stageDir.appendingPathComponent("Autounattend.xml")
         let lowerURL = stageDir.appendingPathComponent("autounattend.xml")
         let shortURL = stageDir.appendingPathComponent("unattend.xml")
+        let spiceStageURL = stageDir.appendingPathComponent("spice-guest-tools.exe")
         let isoURL = BundleLayout.unattendISOURL(bundle)
 
-        let fm = FileManager.default
-
-        // 幂等: ISO 已存在 + canonical XML 存在 + 内容一致 → 复用
+        // 幂等: ISO 已存在 + canonical XML 存在 + 内容一致 + spice payload 存在性也一致 → 复用
+        let spiceAlreadyStaged = fm.fileExists(atPath: spiceStageURL.path)
         if fm.fileExists(atPath: isoURL.path),
            fm.fileExists(atPath: canonicalURL.path),
            let existing = try? String(contentsOf: canonicalURL, encoding: .utf8),
-           existing == xml {
+           existing == xml,
+           spiceAlreadyStaged == spiceAvailable {
             return isoURL
         }
 
@@ -67,6 +79,10 @@ public enum WindowsUnattend {
             try xml.write(to: canonicalURL, atomically: true, encoding: .utf8)
             try xml.write(to: lowerURL, atomically: true, encoding: .utf8)
             try xml.write(to: shortURL, atomically: true, encoding: .utf8)
+            // 把 spice-guest-tools.exe 拷进 stage 一起打 ISO (~30MB)
+            if spiceAvailable, let src = spiceToolsExeURL {
+                try fm.copyItem(at: src, to: spiceStageURL)
+            }
         } catch {
             throw Error.writeFailed(reason: "stage 写入失败: \(error)")
         }
@@ -107,12 +123,14 @@ public enum WindowsUnattend {
     /// AutoUnattend.xml 内容. 端口自 hell-vm WindowsUnattend.unattendXML.
     ///
     /// windowsPE pass: reg add LabConfig\Bypass*Check=0x1 让 Setup 跳硬件检查.
-    /// oobeSystem pass: FirstLogonCommands 跑 cmd /c for ... pnputil 装 virtio 驱动.
+    /// oobeSystem pass: FirstLogonCommands 跑 cmd /c for ... pnputil 装 virtio 驱动 +
+    ///                  spice-guest-tools.exe /S 静默装 (依赖 unattend ISO 上已有 .exe).
     static func unattendXML(
         bypassInstallChecks: Bool,
-        autoInstallVirtioWin: Bool
+        autoInstallVirtioWin: Bool,
+        autoInstallSpiceTools: Bool = false
     ) -> String {
-        var oobeBlock = ""
+        var commands: [(cmd: String, desc: String)] = []
         if autoInstallVirtioWin {
             // ARM64 Windows: virtio-win.iso 不带 ARM64 MSI, 走 inf 分发.
             // 1) certutil 把 Red Hat 代码签名证书装进 TrustedPublisher (否则 inf 因证书链不受信任被拒).
@@ -139,17 +157,38 @@ public enum WindowsUnattend {
             &amp; echo --- scan-devices --- &gt;&gt; \(log) \
             &amp; pnputil /scan-devices &gt;&gt; \(log) 2&gt;&amp;1
             """.replacingOccurrences(of: "\n", with: "")
+            commands.append((cmd, "HVM auto-install virtio-win drivers (ARM64)"))
+        }
+        if autoInstallSpiceTools {
+            // spice-guest-tools-latest.exe 是 NSIS installer, /S 静默装 spice-vdagent 服务.
+            // 装完后 Windows 收 host 的 monitor config 自动改分辨率, HVM 主窗口拖大小 guest 跟随.
+            // ARM64 Windows 通过 x86 emulation 跑 x86 NSIS installer, spice-space 社区已验证 OK.
+            // 探测条件: %D:\spice-guest-tools.exe (unattend ISO 上由 ensureISO 拷进).
+            // 走 start /wait 让 SynchronousCommand 等到装完才进下一条命令.
+            let cmd = "cmd /c for %D in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do @if exist %D:\\spice-guest-tools.exe start /wait %D:\\spice-guest-tools.exe /S"
+            commands.append((cmd, "HVM auto-install spice-guest-tools (vdagent for dynamic resize)"))
+        }
+
+        var oobeBlock = ""
+        if !commands.isEmpty {
+            var synchronousCommands = ""
+            for (idx, item) in commands.enumerated() {
+                synchronousCommands += """
+                    <SynchronousCommand wcm:action="add">
+                      <Order>\(idx + 1)</Order>
+                      <CommandLine>\(item.cmd)</CommandLine>
+                      <Description>\(item.desc)</Description>
+                      <RequiresUserInput>false</RequiresUserInput>
+                    </SynchronousCommand>
+
+                """
+            }
             oobeBlock = """
 
               <settings pass="oobeSystem">
                 <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
                   <FirstLogonCommands>
-                    <SynchronousCommand wcm:action="add">
-                      <Order>1</Order>
-                      <CommandLine>\(cmd)</CommandLine>
-                      <Description>HVM auto-install virtio-win drivers (ARM64)</Description>
-                      <RequiresUserInput>false</RequiresUserInput>
-                    </SynchronousCommand>
+            \(synchronousCommands.trimmingCharacters(in: .whitespacesAndNewlines))
                   </FirstLogonCommands>
                 </component>
               </settings>

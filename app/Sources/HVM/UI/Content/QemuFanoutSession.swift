@@ -54,6 +54,13 @@ final class QemuFanoutSession {
     /// NSEvent 一时刻只送一个 view, 序列化无竞争.
     private let forwarder: InputForwarder
 
+    /// spice-vdagent client. user 拖 HVM 主窗口 → resize master view 的
+    /// onDrawableSizeChange 调 sendMonitorsConfig(w, h), 直接通过 vdagent
+    /// virtio-serial chardev 发 VDAgentMonitorsConfig 给 guest 内 spice-vdagent
+    /// 服务 → SetDisplayConfig → 改分辨率. 没装 vdagent 的 guest 不响应没事
+    /// (chardev 写穿过去, guest 端没 reader 静默丢, 主路径不阻塞).
+    private let vdagent: VdagentClient
+
     /// 弱引用包. View 销毁后 fanout 自动跳过 (不需要显式 unsubscribe 也安全).
     private final class WeakBox {
         weak var view: FramebufferHostView?
@@ -85,8 +92,10 @@ final class QemuFanoutSession {
         self.bundleURL = bundleURL
         let iosurfacePath = HVMPaths.iosurfaceSocketPath(for: vmID).path
         let qmpInputPath  = HVMPaths.qmpInputSocketPath(for: vmID).path
+        let vdagentPath   = HVMPaths.vdagentSocketPath(for: vmID).path
         self.channel = DisplayChannel(socketPath: iosurfacePath)
         self.forwarder = InputForwarder(qmpSocketPath: qmpInputPath)
+        self.vdagent = VdagentClient(socketPath: vdagentPath)
     }
 
     /// 启动连接 + 事件循环. 不阻塞调用线程. 多次调用安全 (第二次无效).
@@ -94,6 +103,7 @@ final class QemuFanoutSession {
         guard connectTask == nil else { return }
         log.info("start: retry connecting HDP channel for vm=\(self.vmID.uuidString)")
         forwarder.connect()
+        vdagent.connect()
         startThumbnailTimer()
         runConnectLoop()
     }
@@ -141,6 +151,7 @@ final class QemuFanoutSession {
         eventLoopTask?.cancel(); eventLoopTask = nil
         channel.disconnect()
         forwarder.disconnect()
+        vdagent.disconnect()
         if cachedSurfaceFD >= 0 {
             Darwin.close(cachedSurfaceFD); cachedSurfaceFD = -1
         }
@@ -150,9 +161,10 @@ final class QemuFanoutSession {
 
     deinit {
         // deinit 跨线程, 不能 call MainActor-isolated 方法.
-        // channel.disconnect / forwarder.disconnect 内部 DispatchQueue 已线程安全.
+        // channel.disconnect / forwarder.disconnect / vdagent.disconnect 内部 DispatchQueue 已线程安全.
         channel.disconnect()
         forwarder.disconnect()
+        vdagent.disconnect()
         connectTask?.cancel()
         eventLoopTask?.cancel()
         if cachedSurfaceFD >= 0 {
@@ -174,11 +186,19 @@ final class QemuFanoutSession {
         // 注入唯一的 forwarder (weak), view 走 NSEvent → forwarder.mouseMove 等.
         view.forwarder = self.forwarder
 
-        // resize master 把自己的 drawable size 通过 HDP 请求 guest 改分辨率
+        // resize master 把自己的 drawable size 推给 guest:
+        //   1. channel.requestResize → QEMU patch 0002 RESIZE_REQUEST handler →
+        //      dpy_set_ui_info (Linux/Asahi guest 内核 virtio-gpu driver 收 EDID 改分辨率)
+        //   2. vdagent.sendMonitorsConfig → 直接通过 vdagent chardev 发
+        //      VDAgentMonitorsConfig (Win guest spice-vdagent 服务收 → SetDisplayConfig).
+        //      Win 的 ramfb / virtio-gpu driver 不响应 EDID, 必须走这条 spice 协议.
+        // 两路并发, guest 哪条 work 哪条生效 (Linux 用 #1, Win 用 #2).
         if isResizeMaster {
             let channel = self.channel
+            let vdagent = self.vdagent
             view.onDrawableSizeChange = { w, h in
                 channel.requestResize(width: w, height: h)
+                vdagent.sendMonitorsConfig(width: w, height: h)
             }
         } else {
             view.onDrawableSizeChange = nil

@@ -62,6 +62,12 @@ public enum HVMPaths {
         appSupport.appendingPathComponent("cache/virtio-win", isDirectory: true)
     }
 
+    /// spice-guest-tools.exe 缓存目录, ~/Library/Application Support/HVM/cache/spice-tools
+    /// (Win guest 装拖窗口动态 resize 用的 spice-vdagent 服务; ~30MB; 全局共享一份)
+    public static var spiceToolsCacheDir: URL {
+        appSupport.appendingPathComponent("cache/spice-tools", isDirectory: true)
+    }
+
     /// 对给定 uuid 返回默认 IPC socket 路径 (HVMHost ↔ hvm-cli/hvm-dbg)
     public static func socketPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).sock")
