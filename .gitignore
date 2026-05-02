@@ -8,6 +8,7 @@ build/
 error/
 
 # Claude 锁文件
+.claude/settings.local.json
 .claude/*.lock
 
 # Xcode
@@ -46,4 +47,6 @@ third_party/qemu-stage/
 third_party/edk2-src/
 third_party/edk2-stage/
 
-third_party
+third_party/spice-server-src/
+third_party/spice-server-stage/
+

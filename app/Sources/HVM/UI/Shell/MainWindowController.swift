@@ -114,14 +114,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         overlay.sizingOptions = .minSize
         // 实时检测, 避开 withObservationTracking 异步 onChange 的 timing race
         overlay.isAnyDialogActive = { [weak model, weak errors, weak confirms] in
-            (model?.showCreateWizard ?? false)
-                || (model?.installState != nil)
-                || (model?.ipswFetchState != nil)
-                || (model?.ipswCatalogPicker != nil)
-                || (model?.editConfigItem != nil)
-                || (model?.snapshotCreateItem != nil)
-                || (errors?.current != nil)
-                || (confirms?.current != nil)
+            guard let model, let errors, let confirms else { return false }
+            return model.anyDialogActive(errors: errors, confirms: confirms)
         }
         observeDialogActivity(overlay: overlay)
 
@@ -188,14 +182,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// 的 cursor rect 压不过, 所以必须在 HVMView 自己里 inputSuspended 屏蔽 VZ 的 mouse* 处理.
     private func observeDialogActivity(overlay: PassthroughHostingView<DialogOverlay>) {
         withObservationTracking {
-            let active = model.showCreateWizard
-                || model.installState != nil
-                || model.ipswFetchState != nil
-                || model.ipswCatalogPicker != nil
-                || model.editConfigItem != nil
-                || model.snapshotCreateItem != nil
-                || errors.current != nil
-                || confirms.current != nil
+            let active = model.anyDialogActive(errors: errors, confirms: confirms)
             overlay.dialogActive = active
             for session in model.sessions.values {
                 session.attachment.view.inputSuspended = active

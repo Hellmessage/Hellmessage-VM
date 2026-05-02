@@ -105,6 +105,24 @@ public final class AppModel {
         }
     }
 
+    /// 是否有任意一个 dialog 正在显示. 单一来源, DialogOverlay 的 hit-test 区
+    /// 与 MainWindowController 的 cursor / inputSuspended 同步都读这个, 防止新加
+    /// dialog state 时三处之一漏掉导致 overlay 被当透明区点击穿透.
+    public func anyDialogActive(errors: ErrorPresenter, confirms: ConfirmPresenter) -> Bool {
+        showCreateWizard
+            || installState != nil
+            || ipswFetchState != nil
+            || virtioWinFetchState != nil
+            || utmGuestToolsFetchState != nil
+            || ipswCatalogPicker != nil
+            || editConfigItem != nil
+            || snapshotCreateItem != nil
+            || diskAddItem != nil
+            || diskResizeRequest != nil
+            || errors.current != nil
+            || confirms.current != nil
+    }
+
     public struct InstallProgressState: Sendable, Equatable {
         public let id: UUID
         public let displayName: String

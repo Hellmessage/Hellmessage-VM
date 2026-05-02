@@ -143,17 +143,14 @@ public enum QemuArgsBuilder {
         args += ["-m", "\(cfg.memoryMiB)M"]
         args += ["-name", cfg.displayName]
 
-        // -no-reboot 仅 Windows 装机阶段加 (cfg.bootFromDiskOnly=false): 第一次 Win Setup
-        // 拷完文件触发 reboot 时让 QEMU 直接退出, 给用户决策点 — 切到 bootFromDiskOnly=true
-        // 后再 cold start, argv 切到 hvm-gpu-ramfb-pci 接管 OS 期通路.
-        // 这条分流的根因: 装机期单挂 ramfb 跟 BDD 软件画法兼容; 装好后切融合设备让
-        // viogpudo.sys 绑 virtio-gpu 通路做 dynamic resize. 两者公用一个 argv 时
-        // virtio-gpu reset_bh 会清 ramfb 已 push 的 console surface 显 placeholder,
-        // 实测 Win Setup / "Press any key to boot from CD" 频繁触发 → 装机黑屏.
-        // 详见 patches/qemu/0003 注释.
-        // bootFromDiskOnly=true (运行期): 不加 -no-reboot, guest reboot 走 system_reset
-        // host 子进程不退 — Win OOBE 链上 reboot 也是这条路.
-        if cfg.guestOS == .windows && !cfg.bootFromDiskOnly {
+        // -no-reboot 仅装机阶段加 (cfg.bootFromDiskOnly=false): installer 拷完文件触发
+        // reboot 时让 QEMU 直接退出, 给用户决策点 — 在 GUI 点"安装完成"切到
+        // bootFromDiskOnly=true 后再 cold start, 不再挂 ISO 直接 boot 主硬盘.
+        //   Windows: 阶段 1 (装机) 加, 阶段 2 (安装完成) / 阶段 3 (驱动完成) 都不加,
+        //            guest reboot 走 system_reset host 子进程不退 — OOBE / 装驱动重启走这条.
+        //   Linux:   装机阶段加, bootFromDiskOnly=true 之后不加 — 跟 Win 阶段 1→2 同语义.
+        // 设备分流见下方 -device 段三态注释 (仅 Windows 三态).
+        if (cfg.guestOS == .windows || cfg.guestOS == .linux) && !cfg.bootFromDiskOnly {
             args += ["-no-reboot"]
         }
         // 关人类 monitor (仅 QMP 控制, 防 stdio 干扰)
@@ -231,13 +228,16 @@ public enum QemuArgsBuilder {
         //          virtio-cdrom 在 BdsDxe loading Boot0002 后 hang 不进 wpe.wim).
         //          挂法跟 hell-vm graphical 模式一致.
         if cfg.guestOS == .windows {
+            // 阶段 3 (驱动已装完, hvm-gpu-ramfb-pci 接管): 把 unattend / UTM Guest Tools cdrom 卸掉,
+            // OS 已自给, 不需要再挂安装期辅助介质. installerISO 也由 !bootFromDiskOnly 自然不挂.
+            let windowsFullyInstalled = cfg.bootFromDiskOnly && cfg.windowsDriversInstalled
             // Windows 装机 ISO: usb-storage cdrom (bootindex=0)
             if !cfg.bootFromDiskOnly, let iso = cfg.installerISO {
                 args += ["-drive", "if=none,id=cdrom_inst,media=cdrom,file=\(iso),readonly=on"]
                 args += ["-device", "usb-storage,drive=cdrom_inst,id=cdrom_inst_dev,removable=true,bootindex=0,bus=xhci.0"]
             }
             // unattend ISO: usb-storage 第二 cdrom (Win Setup 自动扫所有移动介质找 Autounattend.xml)
-            if let unattendPath = inputs.unattendISOPath {
+            if !windowsFullyInstalled, let unattendPath = inputs.unattendISOPath {
                 args += ["-drive", "if=none,id=cdrom_unat,media=cdrom,file=\(unattendPath),readonly=on"]
                 args += ["-device", "usb-storage,drive=cdrom_unat,id=cdrom_unat_dev,removable=true,bus=xhci.0"]
             }
@@ -254,7 +254,7 @@ public enum QemuArgsBuilder {
             // UTM Guest Tools ISO: usb-storage 第四 cdrom (含 ARM64 native vdagent + utmapp
             // 自家 viogpudo + qemu-ga). OOBE FirstLogonCommands 扫所有盘符跑里面的
             // utm-guest-tools-*.exe NSIS installer /S 静默装. ~120MB 不打进 unattend ISO.
-            if let utmToolsPath = inputs.utmGuestToolsISOPath {
+            if !windowsFullyInstalled, let utmToolsPath = inputs.utmGuestToolsISOPath {
                 args += ["-drive", "if=none,id=cdrom_utm,media=cdrom,file=\(utmToolsPath),readonly=on"]
                 args += ["-device", "usb-storage,drive=cdrom_utm,id=cdrom_utm_dev,removable=true,bus=xhci.0"]
             }
@@ -328,18 +328,23 @@ public enum QemuArgsBuilder {
         //
         // Linux: virtio-gpu-pci (内核自带 driver, 加速; OS 期 set_scanout 即可 dynamic resize)
         //
-        // Windows ARM64: 装机阶段 vs 运行阶段二选一, 由 bootFromDiskOnly 切换:
-        //  - bootFromDiskOnly=false (装机): -device ramfb 单挂. Win Setup / WinPE 走 BDD
-        //    软件画法 (cursor + 像素都直接画进 ramfb cpu_physical_memory_map 出来的 buffer),
-        //    跟单设备路径完全兼容, 不会有 virtio-gpu reset_bh 清 console surface 的 placeholder
-        //    问题. -no-reboot 在 -monitor 上面那条已加, Setup 第一次 reboot 时 QEMU 退出,
-        //    给用户切 bootFromDiskOnly=true 的决策点.
-        //  - bootFromDiskOnly=true (运行): -device hvm-gpu-ramfb-pci (自家 patch 0003 融合
-        //    设备), boot 期走 ramfb 兼容 EDK2/bootmgfw, OS 期 viogpudo.sys 绑 PCI 1AF4:1050
-        //    切到 virtio-gpu 路径做 dynamic resize. vendor/device id 复用 0x1AF4/0x1050,
-        //    viogpudo.inf 自动 match.
+        // Windows ARM64: 三态切换, 由 (bootFromDiskOnly, windowsDriversInstalled) 决定:
+        //  - 阶段 1 (bootFromDiskOnly=false, 装机): -device ramfb 单挂. Win Setup / WinPE
+        //    走 BDD 软件画法 (cursor + 像素都直接画进 ramfb cpu_physical_memory_map 出来的
+        //    buffer), 跟单设备路径完全兼容, 不会有 virtio-gpu reset_bh 清 console surface
+        //    的 placeholder 问题. -no-reboot 在上面那条已加, Setup 第一次 reboot 时 QEMU
+        //    退出, 给用户切阶段 2 的决策点.
+        //  - 阶段 2 (bootFromDiskOnly=true, windowsDriversInstalled=false, 装驱动): 仍 ramfb
+        //    单挂. OS 已起来但 viogpudo 没装, 这阶段用户跑 UTM Guest Tools 装 viogpudo /
+        //    qemu-guest-agent. 跟阶段 1 同样走 ramfb 是因为 hvm-gpu-ramfb-pci 在没驱动时
+        //    OS 端只 enumerate 出 "Microsoft Basic Display" → BDD 路径必须 ramfb 兜.
+        //  - 阶段 3 (bootFromDiskOnly=true, windowsDriversInstalled=true, 运行): hvm-gpu-ramfb-pci
+        //    (patches/qemu/0003 自家融合设备), boot 期走 ramfb 兼容 EDK2/bootmgfw, OS 期
+        //    viogpudo.sys 绑 PCI 1AF4:1050 切到 virtio-gpu 路径做 dynamic resize. vendor/
+        //    device id 复用 0x1AF4/0x1050, viogpudo.inf 自动 match.
+        // 详见 patches/qemu/0003 注释.
         if cfg.guestOS == .windows {
-            if cfg.bootFromDiskOnly {
+            if cfg.bootFromDiskOnly && cfg.windowsDriversInstalled {
                 args += ["-device", "hvm-gpu-ramfb-pci"]
             } else {
                 args += ["-device", "ramfb"]

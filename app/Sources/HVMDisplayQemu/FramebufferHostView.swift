@@ -65,6 +65,12 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
     /// view 内/外标记. mouseEntered/Exited 维护; 决定要不要立即生效 cursor 替换.
     private var isMouseInside: Bool = false
 
+    /// guest framebuffer 实际像素尺寸. bindSurface 时缓存, viewCoords 用来算 letterbox
+    /// 区域 — host 鼠标坐标按 letterbox 区域归一化, 不算上下/左右黑边, 否则 view 整尺寸
+    /// 归一化会让 guest 鼠标位置跟视觉错位.
+    private var guestFbSize: CGSize = .zero
+
+
     /// 输入捕获总开关. 默认 true; 设 false 时:
     ///   - acceptsFirstResponder = false (键盘事件 fall through 给 NSWindow / 别的 control)
     ///   - mouse/key/scroll 处理函数全部直接 return, 不发 forwarder
@@ -121,6 +127,8 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
     @MainActor
     public func bindSurface(_ arrival: DisplayChannel.SurfaceArrival) {
         renderer.bindShm(fd: arrival.shmFD, info: arrival.info)
+        guestFbSize = CGSize(width: Int(arrival.info.width),
+                              height: Int(arrival.info.height))
         // 新 surface 立即触发首帧 draw, 不等 surfaceDamage.
         needsDisplay = true
     }
@@ -219,15 +227,35 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
 
     /// 把 NSEvent 的 windowLocation 转成本 view 内的像素坐标 (左上原点).
     /// QEMU `usb-tablet` / `virtio-tablet` 期望左上原点.
-    /// 同时把当前 view 的 size 推给 forwarder, 多 view 共享 forwarder 时各 view
-    /// 的 size 不同 — NSEvent 一时刻只送一个 view, 这里 sync 后立即 forward 串行无竞争.
+    ///
+    /// **letterbox 修正**: FramebufferRenderer 按 guest framebuffer 比例等比缩放
+    /// 居中渲染到 drawable, 黑边在 view 上下或左右. 鼠标归一化必须按 letterbox 区域,
+    /// 不能按整 view — 否则 host 鼠标在 view 中央时, guest 收到的归一化坐标偏 (因为
+    /// 黑边占了部分 view 空间但 guest 视野里没有).
+    /// guestFbSize 还没 bind 时退化到整 view 比例 (画面也没出来, 视觉对齐没影响).
     private func viewCoords(_ event: NSEvent) -> (Double, Double) {
-        forwarder?.setViewSize(width: Double(bounds.width),
-                                height: Double(bounds.height))
         let p = convert(event.locationInWindow, from: nil)
-        // NSView 默认 isFlipped = false, 原点左下; 我们要左上, 翻 Y.
-        let y = bounds.height - p.y
-        return (Double(p.x), Double(y))
+        let viewW = bounds.width
+        let viewH = bounds.height
+        // 翻 Y 到左上原点
+        let yTop = viewH - p.y
+
+        let gw = guestFbSize.width
+        let gh = guestFbSize.height
+        if gw > 0, gh > 0, viewW > 0, viewH > 0 {
+            let scale = min(viewW / gw, viewH / gh)
+            let lbW = gw * scale
+            let lbH = gh * scale
+            let lbX = (viewW - lbW) / 2
+            let lbY = (viewH - lbH) / 2
+            // 把 host 鼠标转 letterbox 内坐标; 在黑边里 clamp 到 letterbox 边缘.
+            let cx = max(0, min(lbW, p.x - lbX))
+            let cy = max(0, min(lbH, yTop - lbY))
+            forwarder?.setViewSize(width: Double(lbW), height: Double(lbH))
+            return (Double(cx), Double(cy))
+        }
+        forwarder?.setViewSize(width: Double(viewW), height: Double(viewH))
+        return (Double(p.x), Double(yTop))
     }
 
     public override func mouseEntered(with event: NSEvent) {
@@ -420,9 +448,9 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
     // MARK: - MTKViewDelegate
 
     public func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
-        // 鼠标坐标归一化用的是本 view 的尺寸, 保持同步.
-        forwarder?.setViewSize(width: Double(bounds.width),
-                                     height: Double(bounds.height))
+        // 注: 不在这里 setViewSize. letterbox 后整 view 尺寸跟鼠标归一化用的 letterbox
+        // 区域不一致, viewCoords 在每次鼠标事件里按 letterbox 实时算 + setViewSize, 这条
+        // drawable resize 路径同步是多余而且可能错误 (会把整 view 尺寸覆盖到 forwarder).
         // drawable 尺寸 (backing pixel, 已乘 retina scale) 推给上层, 上层
         // 通过 RESIZE_REQUEST → QEMU dpy_set_ui_info → EDID 让 guest vdagent
         // 自动改分辨率 (guest 须装 spice-vdagent).

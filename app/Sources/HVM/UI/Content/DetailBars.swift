@@ -637,9 +637,28 @@ struct StoppedContentView: View {
                 }
             }
 
-            if !needsInstall, item.config.installerISO != nil, !item.config.bootFromDiskOnly {
+            if item.guestOS == .windows {
+                // Windows 三态切换: 装机 → 安装完成 (仅硬盘 ramfb) → 驱动安装完成 (hvm-gpu-ramfb-pci)
+                if !item.config.bootFromDiskOnly, item.config.installerISO != nil {
+                    Button(action: installCompletedAction) {
+                        Text("安装完成")
+                    }
+                    .buttonStyle(GhostButtonStyle())
+                    .help("Win Setup 已装完 OS, 切到仅硬盘启动 (仍走 ramfb, 等装驱动)")
+                }
+                if item.config.bootFromDiskOnly, !item.config.windowsDriversInstalled {
+                    Button(action: driversInstalledAction) {
+                        Text("驱动安装完成")
+                    }
+                    .buttonStyle(GhostButtonStyle())
+                    .help("guest 内已装完 viogpudo 等驱动, 切到 hvm-gpu-ramfb-pci 走 virtio-gpu 通路")
+                }
+            } else if !needsInstall, item.config.installerISO != nil, !item.config.bootFromDiskOnly {
+                // Linux (VZ / QEMU 后端通用): 装完 OS 切仅硬盘启动.
+                // QEMU 后端: argv 同步去掉 -no-reboot, guest reboot 走 system_reset 不退出.
+                // VZ 后端:   仅切配置, 下次 boot 不挂 ISO.
                 Button(action: bootFromDiskAction) {
-                    Text("Boot From Disk")
+                    Text("安装完成")
                 }
                 .buttonStyle(GhostButtonStyle())
                 .help("装完 OS 后切到只从硬盘启动")
@@ -684,6 +703,38 @@ struct StoppedContentView: View {
             }
             var config = try BundleIO.load(from: item.bundleURL)
             config.bootFromDiskOnly = true
+            try BundleIO.save(config: config, to: item.bundleURL)
+            model.refreshList()
+        } catch {
+            errors.present(error)
+        }
+    }
+
+    /// Windows 阶段 1 → 阶段 2: bootFromDiskOnly=true, 仍 ramfb, 不再加 -no-reboot
+    private func installCompletedAction() {
+        do {
+            if BundleLock.isBusy(bundleURL: item.bundleURL) {
+                throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
+            }
+            var config = try BundleIO.load(from: item.bundleURL)
+            config.bootFromDiskOnly = true
+            config.windowsDriversInstalled = false
+            try BundleIO.save(config: config, to: item.bundleURL)
+            model.refreshList()
+        } catch {
+            errors.present(error)
+        }
+    }
+
+    /// Windows 阶段 2 → 阶段 3: 切 hvm-gpu-ramfb-pci 让 viogpudo 接管 virtio-gpu 通路
+    private func driversInstalledAction() {
+        do {
+            if BundleLock.isBusy(bundleURL: item.bundleURL) {
+                throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
+            }
+            var config = try BundleIO.load(from: item.bundleURL)
+            config.bootFromDiskOnly = true
+            config.windowsDriversInstalled = true
             try BundleIO.save(config: config, to: item.bundleURL)
             model.refreshList()
         } catch {

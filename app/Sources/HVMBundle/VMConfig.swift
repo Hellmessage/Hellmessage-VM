@@ -245,6 +245,11 @@ public struct VMConfig: Codable, Sendable, Equatable {
     /// ISO 绝对路径 (不复制进 bundle). bootFromDiskOnly=true 时忽略
     public var installerISO: String?
     public var bootFromDiskOnly: Bool
+    /// Windows 三态切换: 仅 Windows + bootFromDiskOnly=true 才生效, 装完 OS 还没装 viogpudo 时
+    /// false → QemuArgsBuilder 仍挂 ramfb 单设备; 用户在 guest 内装完驱动手动切 true →
+    /// 改挂 hvm-gpu-ramfb-pci 让 viogpudo 接管 virtio-gpu 通路 (dynamic resize / vdagent).
+    /// Linux/macOS 字段忽略.
+    public var windowsDriversInstalled: Bool
     public var macOS: MacOSSpec?
     public var linux: LinuxSpec?
     public var windows: WindowsSpec?
@@ -261,6 +266,7 @@ public struct VMConfig: Codable, Sendable, Equatable {
         networks: [NetworkSpec] = [],
         installerISO: String? = nil,
         bootFromDiskOnly: Bool = false,
+        windowsDriversInstalled: Bool = false,
         macOS: MacOSSpec? = nil,
         linux: LinuxSpec? = nil,
         windows: WindowsSpec? = nil
@@ -277,6 +283,7 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.networks = networks
         self.installerISO = installerISO
         self.bootFromDiskOnly = bootFromDiskOnly
+        self.windowsDriversInstalled = windowsDriversInstalled
         self.macOS = macOS
         self.linux = linux
         self.windows = windows
@@ -285,7 +292,7 @@ public struct VMConfig: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, id, createdAt, displayName, guestOS, engine,
              cpuCount, memoryMiB, disks, networks, installerISO,
-             bootFromDiskOnly, macOS, linux, windows
+             bootFromDiskOnly, windowsDriversInstalled, macOS, linux, windows
     }
 
     /// 自定义 decode: 仅为 engine 字段提供"缺省 .vz"兜底, 其他字段沿用合成默认行为
@@ -304,6 +311,10 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.networks = try c.decodeIfPresent([NetworkSpec].self, forKey: .networks) ?? []
         self.installerISO = try c.decodeIfPresent(String.self, forKey: .installerISO)
         self.bootFromDiskOnly = try c.decodeIfPresent(Bool.self, forKey: .bootFromDiskOnly) ?? false
+        // 老存量 yaml 没该字段时按 bootFromDiskOnly 兜底:
+        //   - 老 Windows VM 已经在 hvm-gpu-ramfb-pci 跑 (bootFromDiskOnly=true) → 默认 true 不回退到 ramfb
+        //   - 装机阶段 (false) → 默认 false 跟新建 VM 一致
+        self.windowsDriversInstalled = try c.decodeIfPresent(Bool.self, forKey: .windowsDriversInstalled) ?? self.bootFromDiskOnly
         self.macOS = try c.decodeIfPresent(MacOSSpec.self, forKey: .macOS)
         self.linux = try c.decodeIfPresent(LinuxSpec.self, forKey: .linux)
         self.windows = try c.decodeIfPresent(WindowsSpec.self, forKey: .windows)

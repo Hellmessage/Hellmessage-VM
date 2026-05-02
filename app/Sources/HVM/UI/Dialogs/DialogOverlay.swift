@@ -45,19 +45,6 @@ struct DialogOverlay: View {
             ErrorDialogOverlay(presenter: errors)
             ConfirmDialogOverlay(presenter: confirms)
         }
-        .allowsHitTesting(
-            model.showCreateWizard ||
-            model.installState != nil ||
-            model.ipswFetchState != nil ||
-            model.virtioWinFetchState != nil ||
-            model.utmGuestToolsFetchState != nil ||
-            model.ipswCatalogPicker != nil ||
-            model.editConfigItem != nil ||
-            model.snapshotCreateItem != nil ||
-            model.diskAddItem != nil ||
-            model.diskResizeRequest != nil ||
-            errors.current != nil ||
-            confirms.current != nil
-        )
+        .allowsHitTesting(model.anyDialogActive(errors: errors, confirms: confirms))
     }
 }

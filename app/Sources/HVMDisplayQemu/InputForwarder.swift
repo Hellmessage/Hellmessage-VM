@@ -24,9 +24,12 @@
 
 import Foundation
 import Darwin
+import os
 
 /// QMP 输入事件转发器. 一个 VM 实例一个.
 public final class InputForwarder: @unchecked Sendable {
+
+    private static let log = Logger(subsystem: "com.hellmessage.vm", category: "InputForwarder")
 
     /// QEMU 支持的鼠标键名 (上游 InputButton enum).
     public enum MouseButton: String, Sendable {
@@ -71,9 +74,11 @@ public final class InputForwarder: @unchecked Sendable {
 
     // MARK: - Public
 
-    /// 异步连接 + 完成 QMP 握手. 失败时 connected 保持 false, 后续 send 静默丢弃.
+    /// 异步连接 + 完成 QMP 握手. QEMU 子进程 listen socket 通常晚于本类 connect()
+    /// 调用 (跟 DisplayChannel 对齐: 50 次 × 100ms 重试, 最多 5 秒). 全部失败后
+    /// connected 保持 false, 后续 send 静默丢弃.
     public func connect() {
-        queue.async { [weak self] in self?.doConnect() }
+        queue.async { [weak self] in self?.doConnectWithRetry() }
     }
 
     public func disconnect() {
@@ -187,17 +192,32 @@ public final class InputForwarder: @unchecked Sendable {
         }
     }
 
-    private func doConnect() {
-        guard sockFD < 0 else { return }
+    private func doConnectWithRetry() {
+        for attempt in 0..<50 {
+            if doConnect() {
+                if attempt > 0 {
+                    Self.log.info("input QMP connected on attempt \(attempt) socket=\(self.socketPath, privacy: .public)")
+                }
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        Self.log.error("input QMP connect attempts exhausted (5s) socket=\(self.socketPath, privacy: .public) — keyboard/mouse events will be dropped")
+    }
+
+    /// 单次 connect + greeting + qmp_capabilities. true=完成握手 connected=true.
+    /// false=任一步失败 (socket 没 listen / EOF / sendAll fail), 调用方负责重试.
+    private func doConnect() -> Bool {
+        guard sockFD < 0 else { return connected }
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { return }
+        guard fd >= 0 else { return false }
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         let pathBytes = Array(socketPath.utf8)
         let pathLimit = MemoryLayout.size(ofValue: addr.sun_path)
         guard pathBytes.count < pathLimit else {
-            Darwin.close(fd); return
+            Darwin.close(fd); return false
         }
         withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
             ptr.withMemoryRebound(to: UInt8.self, capacity: pathLimit) { bp in
@@ -211,21 +231,21 @@ public final class InputForwarder: @unchecked Sendable {
                                 socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
-        if rc != 0 { Darwin.close(fd); return }
+        if rc != 0 { Darwin.close(fd); return false }
         sockFD = fd
 
         // QMP greeting (单行 JSON), 直接 drain 忽略内容
-        if !readJsonLine() { forceDisconnect(); return }
+        if !readJsonLine() { forceDisconnect(); return false }
 
         // 发 qmp_capabilities, drain return
         guard let negData = try? JSONSerialization.data(
                 withJSONObject: ["execute": "qmp_capabilities"]) else {
-            forceDisconnect(); return
+            forceDisconnect(); return false
         }
         var msg = negData
         msg.append(0x0A)
-        if !sendAll(msg) { forceDisconnect(); return }
-        if !readJsonLine() { forceDisconnect(); return }
+        if !sendAll(msg) { forceDisconnect(); return false }
+        if !readJsonLine() { forceDisconnect(); return false }
 
         connected = true
 
@@ -233,6 +253,7 @@ public final class InputForwarder: @unchecked Sendable {
         DispatchQueue.global(qos: .background).async { [weak self] in
             self?.drainServer()
         }
+        return true
     }
 
     /// 读 fd 上的字节, 收到 \n 返回 true. EOF / error 返回 false.

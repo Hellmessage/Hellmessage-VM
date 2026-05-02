@@ -50,12 +50,41 @@ final class DetachedVMWindowController: NSWindowController, NSWindowDelegate {
         // 黑底, 跟嵌入路径视觉一致 (CLAUDE.md: 主窗口不跟随系统主题, 走深色)
         window.backgroundColor = NSColor.black
         window.appearance = NSAppearance(named: .darkAqua)
-        window.center()
 
         super.init(window: window)
         window.delegate = self
         installContentView(item: item)
+        // 按 guest 当前分辨率定窗口 contentArea: guest pixel 直接当 points, 加 topBar /
+        // bottomBar 实测高度 + 2 dividers. clamp 到 visibleFrame*0.9 防超屏. 没拿到 guest
+        // size (fanout 还没收首帧) → 用 defaultSize.
+        applyInitialContentSize()
         observeItemUpdates()
+    }
+
+    /// 估算 chrome 高度 (topBar + bottomBar + 2 dividers). 实测值:
+    ///   - DetailTopBar:    GuestBadge(32) + .padding(.vertical, HVMSpace.md=12) ≈ 56
+    ///   - DetailBottomBar: 按钮(~30) + .padding(.vertical, HVMSpace.sm=8) ≈ 46
+    ///   - 2 dividers: 2
+    /// 不依赖 root.fittingSize / NSHostingView.fittingSize — 这两个 API 在 layout
+    /// 没真正跑过时会给 0 或被 leading/trailing required 等约束污染成 root size, 反而错乱.
+    private static let chromeHeight: CGFloat = 104
+
+    private func applyInitialContentSize() {
+        guard let window = self.window else { return }
+        let guestSize = fanout.currentGuestPixelSize ?? CGSize(
+            width: Self.defaultSize.width,
+            height: Self.defaultSize.height
+        )
+        var contentSize = NSSize(width: guestSize.width,
+                                  height: guestSize.height + Self.chromeHeight)
+        if let visible = (window.screen ?? NSScreen.main)?.visibleFrame {
+            contentSize.width  = min(contentSize.width,  visible.width  * 0.9)
+            contentSize.height = min(contentSize.height, visible.height * 0.9)
+        }
+        contentSize.width  = max(Self.minSize.width,  contentSize.width)
+        contentSize.height = max(Self.minSize.height, contentSize.height)
+        window.setContentSize(contentSize)
+        window.center()
     }
 
     @available(*, unavailable)
@@ -153,8 +182,9 @@ final class DetachedVMWindowController: NSWindowController, NSWindowDelegate {
 
         window.contentView = root
 
-        // 注册成 fanout subscriber (非 resize master), fanout 会立即 replay 当前 surface
-        fanout.addSubscriber(fb, isResizeMaster: false)
+        // 注册成 fanout subscriber + resize master: 拖独立窗口尺寸变化时推 RESIZE_REQUEST
+        // 给 guest 改分辨率 (主窗口嵌入 view 故意不当 master, 它走 letterbox 显示原始尺寸).
+        fanout.addSubscriber(fb, isResizeMaster: true)
     }
 
     private func makeDivider() -> NSView {

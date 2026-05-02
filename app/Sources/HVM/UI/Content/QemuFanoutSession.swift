@@ -92,6 +92,12 @@ final class QemuFanoutSession {
     private var connectTask: Task<Void, Never>?
     private var thumbnailTimer: Timer?
 
+    /// resize debounce: master view 拖动过程中 drawableSizeWillChange 高频触发,
+    /// 不立即下发给 guest — 新尺寸来就 cancel 旧 workItem, 用户停 300ms 后真正
+    /// 推一次 RESIZE_REQUEST + MonitorsConfig. 防 Win guest 一边拖一边反复改分辨率.
+    private var pendingResizeWorkItem: DispatchWorkItem?
+    private static let resizeDebounceSeconds: Double = 0.3
+
     // MARK: - 初始化 / 启动 / 停止
 
     init(vmID: UUID, bundleURL: URL) {
@@ -156,6 +162,7 @@ final class QemuFanoutSession {
         thumbnailTimer?.invalidate(); thumbnailTimer = nil
         connectTask?.cancel(); connectTask = nil
         eventLoopTask?.cancel(); eventLoopTask = nil
+        pendingResizeWorkItem?.cancel(); pendingResizeWorkItem = nil
         channel.disconnect()
         forwarder.disconnect()
         vdagent.disconnect()
@@ -200,14 +207,21 @@ final class QemuFanoutSession {
         //      VDAgentMonitorsConfig (Win guest spice-vdagent 服务收 → SetDisplayConfig).
         //      Win 的 ramfb / virtio-gpu driver 不响应 EDID, 必须走这条 spice 协议.
         // 两路并发, guest 哪条 work 哪条生效 (Linux 用 #1, Win 用 #2).
+        // **debounce**: 拖动过程中高频 drawableSizeWillChange 不直接下发, 用户停
+        // resizeDebounceSeconds 后才真正推一次, 防 Win guest 反复改分辨率刷屏.
         if isResizeMaster {
-            let channel = self.channel
-            let vdagent = self.vdagent
-            let vmIDStr = self.vmID.uuidString
-            view.onDrawableSizeChange = { w, h in
-                log.info("FanoutSession[\(vmIDStr)] onDrawableSizeChange \(w)x\(h) → fan out to HDP+vdagent")
-                channel.requestResize(width: w, height: h)
-                vdagent.sendMonitorsConfig(width: w, height: h)
+            view.onDrawableSizeChange = { [weak self] w, h in
+                self?.scheduleResize(width: w, height: h)
+            }
+            // 防 race: window.contentView 可能在本 addSubscriber 之前就触发过一次
+            // mtkView.drawableSizeWillChange, 那时 onDrawableSizeChange 还没赋值,
+            // 首次 resize 信号会被错过. 这里如果 view 当前已经有合理 drawable size,
+            // 手动补一次 (走 debounce 通路, 真正推送由 timer 触发, 不会重复).
+            let dsize = view.drawableSize
+            if dsize.width >= 1, dsize.height >= 1 {
+                let w = UInt32(dsize.width.rounded())
+                let h = UInt32(dsize.height.rounded())
+                self.scheduleResize(width: w, height: h)
             }
         } else {
             view.onDrawableSizeChange = nil
@@ -241,11 +255,37 @@ final class QemuFanoutSession {
         subscribers.removeAll { $0.view == nil || $0.view === view }
     }
 
+    /// resize 防抖入口. 拖动过程中高频被调, 真正下发由 main queue timer 触发.
+    @MainActor
+    private func scheduleResize(width: UInt32, height: UInt32) {
+        pendingResizeWorkItem?.cancel()
+        let channel = self.channel
+        let vdagent = self.vdagent
+        let vmIDStr = self.vmID.uuidString
+        let item = DispatchWorkItem {
+            log.info("FanoutSession[\(vmIDStr)] resize debounced \(width)x\(height) → fan out to HDP+vdagent")
+            channel.requestResize(width: width, height: height)
+            vdagent.sendMonitorsConfig(width: width, height: height)
+        }
+        pendingResizeWorkItem = item
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.resizeDebounceSeconds, execute: item)
+    }
+
     /// 当前活跃 subscriber 数 (compaction 后). 上层 (AppModel) 用这个判断
     /// 是否还需要保留 fanout: 0 时 + VM 仍 running 时 → tearDown 节省资源.
     var activeSubscriberCount: Int {
         subscribers.removeAll { $0.view == nil }
         return subscribers.compactMap { $0.view }.count
+    }
+
+    /// 当前 guest framebuffer 像素尺寸 (cachedSurfaceInfo 的 width/height).
+    /// 独立窗口打开时用来按 guest 分辨率定 contentSize, fanout 还没收到首帧时返 nil.
+    var currentGuestPixelSize: CGSize? {
+        guard let info = cachedSurfaceInfo, info.width > 0, info.height > 0 else {
+            return nil
+        }
+        return CGSize(width: Int(info.width), height: Int(info.height))
     }
 
     // MARK: - thumbnail

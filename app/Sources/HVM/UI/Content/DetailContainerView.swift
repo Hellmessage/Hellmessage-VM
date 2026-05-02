@@ -423,9 +423,10 @@ final class DetailContainerView: NSView {
         currentQemuFanoutView = fbView
         currentQemuFanoutVMID = id
 
-        // 主窗口嵌入 view 是 resize master: drawable 尺寸变化 → HDP RESIZE_REQUEST
-        // 给 guest 改分辨率. detached 窗口的 view 不当 master, 避免拉锯.
-        fanout.addSubscriber(fbView, isResizeMaster: true)
+        // 主窗口嵌入 view **不是** resize master: 拖主窗口不改 guest 分辨率,
+        // 走 FramebufferRenderer letterbox 等比缩放显示 guest 原始尺寸.
+        // 想动态改 guest 分辨率请走独立窗口 (DetachedVMWindowController = master).
+        fanout.addSubscriber(fbView, isResizeMaster: false)
     }
 
     private func makeHorizontalDivider() -> NSView {

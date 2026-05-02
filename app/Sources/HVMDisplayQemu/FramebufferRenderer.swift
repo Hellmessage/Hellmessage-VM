@@ -274,7 +274,22 @@ public final class FramebufferRenderer: NSObject {
         else { return }
 
         // 没绑 surface 时仍要 present 一个空 drawable 让 MTKView 不卡帧.
-        if let tex = currentTexture {
+        if let tex = currentTexture, currentWidth > 0, currentHeight > 0 {
+            // 等比 letterbox: 按 guest framebuffer 实际比例居中渲染, 不拉伸.
+            // drawable 没覆盖到的区域 = MTKView clearColor (黑) = 自然黑边.
+            // scale = min(dw/tw, dh/th) 保证 quad 完整落入 drawable.
+            let dw = Double(drawable.texture.width)
+            let dh = Double(drawable.texture.height)
+            let tw = Double(currentWidth)
+            let th = Double(currentHeight)
+            let scale = min(dw / tw, dh / th)
+            let vw = tw * scale
+            let vh = th * scale
+            let vx = (dw - vw) * 0.5
+            let vy = (dh - vh) * 0.5
+            encoder.setViewport(MTLViewport(originX: vx, originY: vy,
+                                             width: vw, height: vh,
+                                             znear: 0, zfar: 1))
             encoder.setRenderPipelineState(pipeline)
             encoder.setFragmentTexture(tex, index: 0)
             encoder.setFragmentSamplerState(sampler, index: 0)
