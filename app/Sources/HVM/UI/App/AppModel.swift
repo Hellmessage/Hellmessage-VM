@@ -174,16 +174,12 @@ public final class AppModel {
         }
     }
 
-    /// vmnet daemon 状态 (statusBar chip + popover 用). 启动后自动 2s 轮询.
-    public let vmnet = VmnetStatusModel()
-
     /// 1Hz tick refreshList: 兜底捕获所有 VM 状态切换 (host 子进程退出 / hvm-cli 起停 /
     /// QEMU 装机后 reboot 自退). refreshList 内部 mtime 缓存保证只在 BundleLock 状态变化
     /// 时实际更新 list, 1Hz 探测开销可接受.
     private var stateTickTimer: Timer?
 
     public init() {
-        vmnet.startPolling()
         // AppModel 是 App 全生命周期单例, 不需要 deinit 清 timer (进程退出即销毁).
         stateTickTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshList() }

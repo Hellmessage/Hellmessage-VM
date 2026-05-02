@@ -32,9 +32,8 @@ struct CreateVMDialog: View {
     @State private var importDiskError: String? = nil
     @State private var networkChoice: NetworkChoice = .nat
     @State private var bridgedInterface: String = ""
-    @State private var availableInterfaces: [VmnetSetupHelper.InterfaceInfo] = []
+    @State private var availableInterfaces: [HostNetworkInterface] = []
     @State private var daemonReady: Bool = false
-    @State private var helperFallbackCommand: String? = nil
 
     private enum NetworkChoice: String, CaseIterable, Hashable {
         case nat, bridged, shared
@@ -112,9 +111,11 @@ struct CreateVMDialog: View {
         .onAppear {
             reloadCache()
             qemuBackendAvailable = (try? QemuPaths.resolveRoot()) != nil
-            availableInterfaces = VmnetSetupHelper.listInterfaces()
+            availableInterfaces = HostNetworkInterfaces.list()
             if bridgedInterface.isEmpty {
-                bridgedInterface = availableInterfaces.first?.name ?? ""
+                bridgedInterface = availableInterfaces.first(where: { $0.isActive })?.name
+                    ?? availableInterfaces.first?.name
+                    ?? ""
             }
             refreshDaemonReady()
         }
@@ -353,23 +354,28 @@ struct CreateVMDialog: View {
                 .foregroundStyle(HVMColor.textTertiary)
         } else {
             HVMFormSelect(
-                options: availableInterfaces.map { (value: $0.name, label: $0.displayName) },
+                options: availableInterfaces.map { (value: $0.name, label: $0.displayLabel) },
                 selection: $bridgedInterface,
                 accessibilityLabel: "网卡"
             )
         }
     }
 
+    /// 探测 socket_vmnet daemon 是否就绪. 不再走 VmnetSetupHelper, 直接 SocketPaths.isReady.
     private func refreshDaemonReady() {
         switch networkChoice {
-        case .nat:     daemonReady = true
-        case .bridged: daemonReady = bridgedInterface.isEmpty
-            ? false
-            : VmnetSetupHelper.daemonReady(.bridged(interface: bridgedInterface))
-        case .shared:  daemonReady = VmnetSetupHelper.daemonReady(.shared)
+        case .nat:
+            daemonReady = true
+        case .bridged:
+            daemonReady = !bridgedInterface.isEmpty
+                && SocketPaths.isReady(SocketPaths.vmnetBridged(interface: bridgedInterface))
+        case .shared:
+            daemonReady = SocketPaths.isReady(SocketPaths.vmnetShared)
         }
     }
 
+    /// daemon 缺失时的简短引导卡: 不在 wizard 里直接装 daemon (避免多步骤交互),
+    /// 提示用户去 EditConfigDialog → 网络面板 走 VMnetSupervisor.installAllDaemons (osascript admin Touch ID).
     @ViewBuilder
     private var daemonHelperCard: some View {
         let modeLabel = (networkChoice == .bridged) ? "bridged(\(bridgedInterface))" : "shared"
@@ -378,61 +384,25 @@ struct CreateVMDialog: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(HVMColor.statusPaused)
-                Text("socket_vmnet \(modeLabel) daemon 未跑")
+                Text("socket_vmnet \(modeLabel) daemon 未就绪")
                     .font(HVMFont.caption.weight(.semibold))
                     .foregroundStyle(HVMColor.textPrimary)
             }
-            Text("一次 sudo 装 launchd daemon, 之后所有 VM 启动 / 关闭不再 sudo. 详见 scripts/install-vmnet-helper.sh.")
+            Text("用户机器需先 brew install socket_vmnet, 然后在 编辑配置 → 网络 面板点 \"安装 daemon\" 走 osascript Touch ID 一次到位.")
                 .font(HVMFont.small)
                 .foregroundStyle(HVMColor.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: HVMSpace.sm) {
-                Button("装 daemon") { runDaemonHelper() }
-                    .buttonStyle(GhostButtonStyle())
-                if let cmd = helperFallbackCommand {
-                    Button("复制命令") {
-                        VmnetSetupHelper.copyToClipboard(cmd)
-                    }
-                    .buttonStyle(GhostButtonStyle())
-                }
                 Button("已就绪") { refreshDaemonReady() }
                     .buttonStyle(GhostButtonStyle())
-                    .help("跑完脚本后点这里重新探测")
+                    .help("装完 daemon 后点这里重新探测")
                 Spacer()
-            }
-            if let cmd = helperFallbackCommand {
-                Text(cmd)
-                    .font(HVMFont.monoSmall)
-                    .foregroundStyle(HVMColor.textSecondary)
-                    .textSelection(.enabled)
-                    .padding(HVMSpace.xs)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: HVMRadius.sm).fill(HVMColor.bgBase))
             }
         }
         .padding(HVMSpace.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: HVMRadius.md).fill(HVMColor.bgCard))
         .overlay(RoundedRectangle(cornerRadius: HVMRadius.md).stroke(HVMColor.border, lineWidth: 1))
-    }
-
-    private func runDaemonHelper() {
-        let extra: [String]
-        if networkChoice == .bridged, !bridgedInterface.isEmpty {
-            extra = [bridgedInterface]
-        } else {
-            extra = []
-        }
-        switch VmnetSetupHelper.runInstallScript(extraArgs: extra) {
-        case .launched:
-            helperFallbackCommand = nil
-        case .fallbackCommand(let cmd):
-            helperFallbackCommand = cmd
-        case .scriptMissing:
-            errors.present(HVMError.backend(.vzInternal(
-                description: "未找到 install-vmnet-helper.sh; 请重新 make build (脚本会被打包入 .app)"
-            )))
-        }
     }
 
     /// CPU / Memory / Disk 数字 stepper. 用 HVMTextField + Stepper, 避开 SwiftUI 原生 TextField.

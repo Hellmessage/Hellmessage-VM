@@ -44,7 +44,8 @@ struct HVMStatusBar: View {
 
             Spacer()
 
-            VmnetStatusChip(model: model.vmnet)
+            // vmnet daemon 状态已挪到 EditConfigDialog → 网络区块 (per-VM 视角更合理),
+            // statusBar 不再放全局 chip.
 
             Text(HVMVersion.displayString)
                 .font(HVMFont.small)
