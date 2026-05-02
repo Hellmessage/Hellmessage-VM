@@ -85,7 +85,8 @@ fi
 
 # 4.5 嵌入 QEMU 后端 (软模式: third_party/qemu-stage/ 不存在则跳过, 仍出 .app)
 #     完整发布走 make build-all (会先 make qemu); 此处 make build 不强制要求 QEMU 就绪
-#     stage 即 qemu-build.sh 的最终成品 (已裁剪 / 嵌 swtpm / 嵌 socket_vmnet / 清 xattr / 写 LICENSE+MANIFEST)
+#     stage 即 qemu-build.sh 的最终成品 (已裁剪 / 嵌 swtpm / 清 xattr / 写 LICENSE+MANIFEST)
+#     socket_vmnet 不再入包 — 用户机器自行 brew install, install-vmnet-helper.sh 从 brew 路径起 daemon
 QEMU_STAGE_DIR="$ROOT/third_party/qemu-stage"
 QEMU_BIN_SRC="$QEMU_STAGE_DIR/bin/qemu-system-aarch64"
 EMBED_QEMU=0

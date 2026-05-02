@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/qemu-build.sh
 # 一键: 装 Homebrew + 依赖 → 拉 QEMU v10.2.0 源码 → 应用补丁 → 构建 →
-#       裁剪 + 嵌 swtpm + socket_vmnet → 写 LICENSE/MANIFEST → 直接落 third_party/qemu-stage/
+#       裁剪 + 嵌 swtpm → 写 LICENSE/MANIFEST → 直接落 third_party/qemu-stage/
 # 该 stage 即 bundle.sh 输入 (无中间 vendor 层, "编译后直接裁减进 .app").
 # 仅打包者跑; 最终用户机器不需要 (HVM.app 包内已带产物)
 # 详见 docs/QEMU_INTEGRATION.md 与 CLAUDE.md「QEMU 后端约束」
@@ -29,13 +29,14 @@ QEMU_REPO="https://gitlab.com/qemu-project/qemu.git"
 # brew 包列表 (锁定):
 #   - meson/ninja/pkgconf/glib/pixman/libslirp/dtc/capstone — QEMU 编译依赖
 #   - swtpm/libtpms — Win11 TPM 2.0 sidecar (打包入 .app/Resources/QEMU/bin/swtpm)
-#   - socket_vmnet — vmnet bridged/shared 非 root 桥接 (打包入 .app/Resources/QEMU/bin/socket_vmnet)
+# 注: socket_vmnet 不再打包入 .app, 由用户机器自行 `brew install socket_vmnet`
+#     再由 scripts/install-vmnet-helper.sh 写 launchd plist 调用 brew 路径起 daemon
 # 注: Homebrew 已把 pkg-config 别名到 pkgconf, 直接用新名避免每次 install no-op
-BREW_PACKAGES=(meson ninja pkgconf glib pixman libslirp dtc capstone swtpm libtpms socket_vmnet)
+BREW_PACKAGES=(meson ninja pkgconf glib pixman libslirp dtc capstone swtpm libtpms)
 
 # ---- 路径 ----
 # qemu-src: git clone 源码 (~900M, gitignored)
-# qemu-stage: configure --prefix= 输出 + 裁剪 + 嵌 swtpm/socket_vmnet + LICENSE/MANIFEST 后的成品
+# qemu-stage: configure --prefix= 输出 + 裁剪 + 嵌 swtpm + LICENSE/MANIFEST 后的成品
 #             (~180M, gitignored, bundle.sh 直接从这里拷进 .app)
 # 不再有中间 third_party/qemu/ vendor 层 (取消 install_to_vendor 步骤)
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -403,87 +404,9 @@ bundle_swtpm() {
     ok "swtpm 嵌入完成 ($(otool -L "$bin_dst" 2>/dev/null | wc -l | tr -d ' ') 个 dylib 引用)"
 }
 
-# ---- 9.6 嵌入 socket_vmnet + 依赖 dylib (vmnet bridged/shared 非 root 桥接) ----
-# 与 bundle_swtpm 同形态; 复用 bundle_dylib_deps. 用户机器装 .app 后无需 brew install
-# socket_vmnet, 走包内即可. 实际启动需 sudo NOPASSWD, 由 scripts/install-vmnet-helper.sh
-# 引导写 /etc/sudoers.d/hvm-socket-vmnet (一次性).
-bundle_socket_vmnet() {
-    step "嵌入 socket_vmnet + socket_vmnet_client + 依赖 dylib (vmnet 桥接)"
-
-    local sv_src svc_src
-    if [[ -x /opt/homebrew/opt/socket_vmnet/bin/socket_vmnet ]]; then
-        sv_src=/opt/homebrew/opt/socket_vmnet/bin/socket_vmnet
-        svc_src=/opt/homebrew/opt/socket_vmnet/bin/socket_vmnet_client
-    elif [[ -x /opt/homebrew/bin/socket_vmnet ]]; then
-        sv_src=/opt/homebrew/bin/socket_vmnet
-        svc_src=/opt/homebrew/bin/socket_vmnet_client
-    elif command -v socket_vmnet >/dev/null 2>&1; then
-        sv_src="$(command -v socket_vmnet)"
-        svc_src="$(command -v socket_vmnet_client || true)"
-    elif [[ -x /usr/local/opt/socket_vmnet/bin/socket_vmnet ]]; then
-        sv_src=/usr/local/opt/socket_vmnet/bin/socket_vmnet
-        svc_src=/usr/local/opt/socket_vmnet/bin/socket_vmnet_client
-    else
-        warn "找不到 socket_vmnet 二进制 (brew install socket_vmnet 已在 ensure_brew_packages 装过, 不应到这)"
-        return
-    fi
-
-    local bin_dir="$STAGING_DIR/bin"
-    local lib_dir="$STAGING_DIR/lib"
-    mkdir -p "$bin_dir" "$lib_dir"
-
-    # 9.6.1 socket_vmnet (daemon 端二进制本身; 实际 .app 内不直接执行,
-    #   生产路径由 launchd 用 brew 安装的 socket_vmnet 拉起. 留在包内仅作为
-    #   兜底 / 完整性, 与 install-vmnet-helper.sh 默认查找列表对齐).
-    local bin_dst="$bin_dir/socket_vmnet"
-    cp "$sv_src" "$bin_dst"
-    chmod u+w "$bin_dst"
-    codesign --remove-signature "$bin_dst" 2>/dev/null || true
-
-    # 复用 bundle_dylib_deps (与 swtpm 共享 processed set 不必要; 各自独立)
-    local processed
-    processed="$(mktemp -t hvm-bundle-deps-vmnet)"
-    : > "$processed"
-    bundle_dylib_deps "$bin_dst" "$lib_dir" "$processed"
-    rm -f "$processed"
-
-    local leftover
-    leftover="$(otool -L "$bin_dst" 2>/dev/null | grep -E '(/opt/homebrew|/usr/local)' || true)"
-    if [[ -n "$leftover" ]]; then
-        warn "socket_vmnet 仍引用 brew 路径 (打包不完整):"
-        echo "$leftover"
-    fi
-
-    # 9.6.2 socket_vmnet_client (QEMU 端 wrapper, .app 运行时实际启 QEMU 走它):
-    #   socket_vmnet daemon 协议是 length-prefix framing, 与 QEMU -netdev stream
-    #   裸字节流不兼容; 必须通过 wrapper connect daemon 后把 fd 透传给 QEMU,
-    #   QEMU 命令行用 -netdev socket,id=netN,fd=3 接收 (与 lima/colima 一致).
-    if [[ -z "${svc_src:-}" || ! -x "${svc_src}" ]]; then
-        warn "找不到 socket_vmnet_client 二进制 (上游 socket_vmnet 应同时安装)"
-    else
-        local cli_dst="$bin_dir/socket_vmnet_client"
-        cp "$svc_src" "$cli_dst"
-        chmod u+w "$cli_dst"
-        codesign --remove-signature "$cli_dst" 2>/dev/null || true
-
-        # socket_vmnet_client 通常零非系统 dylib 依赖 (libSystem.B.dylib only),
-        # 仍跑一遍 bundle_dylib_deps 兜底 (空跑也无害).
-        local processed_cli
-        processed_cli="$(mktemp -t hvm-bundle-deps-vmnet-client)"
-        : > "$processed_cli"
-        bundle_dylib_deps "$cli_dst" "$lib_dir" "$processed_cli"
-        rm -f "$processed_cli"
-
-        local leftover_cli
-        leftover_cli="$(otool -L "$cli_dst" 2>/dev/null | grep -E '(/opt/homebrew|/usr/local)' || true)"
-        if [[ -n "$leftover_cli" ]]; then
-            warn "socket_vmnet_client 仍引用 brew 路径 (打包不完整):"
-            echo "$leftover_cli"
-        fi
-    fi
-
-    ok "socket_vmnet + socket_vmnet_client 嵌入完成"
-}
+# socket_vmnet 不再打包入 .app: 用户机器自行 `brew install socket_vmnet`,
+# scripts/install-vmnet-helper.sh 从 brew 路径拉 binary 写 launchd plist.
+# 老的 bundle_socket_vmnet() 已移除.
 
 # bundle_dylib_deps <target_macho> <lib_out_dir> <processed_set_file>
 # 递归: 把 target 所有非系统 dylib 引用复制到 lib_out_dir, 改 install name + 改引用,
@@ -586,9 +509,10 @@ EOF
 }
 
 # ---- main ----
-# 流程: 源码 → 编译 → install --prefix=stage → 裁剪 → 嵌 swtpm/socket_vmnet
+# 流程: 源码 → 编译 → install --prefix=stage → 裁剪 → 嵌 swtpm
 #       → 清 xattr → 写 MANIFEST/LICENSE
 # stage 即 bundle.sh 输入, 不再有中间 third_party/qemu/ vendor 层
+# socket_vmnet 不再嵌入 (用户机器自行 brew install)
 main() {
     preflight
     ensure_homebrew
@@ -599,7 +523,6 @@ main() {
     fetch_edk2_firmware
     prune_share
     bundle_swtpm
-    bundle_socket_vmnet
     strip_xattrs
     write_manifest
     echo
