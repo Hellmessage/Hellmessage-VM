@@ -117,7 +117,7 @@ struct CreateCommand: AsyncParsableCommand {
                 }
             }
 
-            let network = try parseNetwork(self.network)
+            let (networkMode, networkIface) = try parseNetwork(self.network)
             let macAddr = try resolveMAC(explicit: self.mac)
 
             let parentDir = URL(fileURLWithPath:
@@ -154,7 +154,11 @@ struct CreateCommand: AsyncParsableCommand {
                 cpuCount: cpu,
                 memoryMiB: memory * 1024,
                 disks: [mainDisk],
-                networks: [NetworkSpec(mode: network, macAddress: macAddr)],
+                networks: [NetworkSpec(
+                    mode: networkMode,
+                    macAddress: macAddr,
+                    bridgedInterface: networkIface
+                )],
                 installerISO: isoPath,
                 bootFromDiskOnly: importInfo != nil,
                 macOS: os == .macOS ? MacOSSpec(ipsw: ipswPath, autoInstalled: false) : nil,
@@ -249,19 +253,27 @@ struct CreateCommand: AsyncParsableCommand {
         }
     }
 
-    private func parseNetwork(_ raw: String) throws -> NetworkMode {
-        if raw == "nat" { return .nat }
-        if raw == "shared" { return .shared }
+    /// 解析 --network 参数 → (mode, bridgedInterface).
+    /// - "nat"             → (.user, nil)         (兼容老命名, 现行 NAT 走 user-mode)
+    /// - "shared"          → (.vmnetShared, nil)
+    /// - "host"            → (.vmnetHost, nil)
+    /// - "bridged:<iface>" → (.vmnetBridged, "<iface>")
+    /// - "none"            → (.none, nil)
+    private func parseNetwork(_ raw: String) throws -> (NetworkMode, String?) {
+        if raw == "nat" || raw == "user" { return (.user, nil) }
+        if raw == "shared" { return (.vmnetShared, nil) }
+        if raw == "host"   { return (.vmnetHost, nil) }
+        if raw == "none"   { return (.none, nil) }
         if raw.hasPrefix("bridged:") {
             let iface = String(raw.dropFirst("bridged:".count))
             guard !iface.isEmpty else {
                 throw HVMError.config(.invalidEnum(field: "network", raw: raw,
-                                                   allowed: ["nat", "shared", "bridged:<iface>"]))
+                                                   allowed: ["nat", "shared", "host", "bridged:<iface>", "none"]))
             }
-            return .bridged(interface: iface)
+            return (.vmnetBridged, iface)
         }
         throw HVMError.config(.invalidEnum(field: "network", raw: raw,
-                                           allowed: ["nat", "shared", "bridged:<iface>"]))
+                                           allowed: ["nat", "shared", "host", "bridged:<iface>", "none"]))
     }
 
     private func resolveMAC(explicit: String?) throws -> String {

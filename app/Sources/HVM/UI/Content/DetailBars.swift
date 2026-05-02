@@ -155,9 +155,11 @@ struct DetailBottomBar: View {
     private func networkMode(_ config: VMConfig) -> String {
         guard let net = config.networks.first else { return "—" }
         switch net.mode {
-        case .nat:     return "NAT"
-        case .bridged: return "Bridged"
-        case .shared:  return "Shared"
+        case .user:         return "NAT"
+        case .vmnetShared:  return "vmnet shared"
+        case .vmnetHost:    return "vmnet host"
+        case .vmnetBridged: return "vmnet bridged"
+        case .none:         return "无网络"
         }
     }
 }
@@ -803,9 +805,11 @@ struct StoppedContentView: View {
     private func networkMode(_ config: VMConfig) -> String {
         guard let net = config.networks.first else { return "—" }
         switch net.mode {
-        case .nat:     return "NAT"
-        case .bridged: return "Bridged"
-        case .shared:  return "Shared"
+        case .user:         return "NAT"
+        case .vmnetShared:  return "vmnet shared"
+        case .vmnetHost:    return "vmnet host"
+        case .vmnetBridged: return "vmnet bridged"
+        case .none:         return "无网络"
         }
     }
 }

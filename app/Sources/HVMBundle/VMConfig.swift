@@ -89,43 +89,38 @@ public struct DiskSpec: Codable, Sendable, Equatable {
     }
 }
 
-public enum NetworkMode: Codable, Sendable, Equatable {
-    case nat
-    case bridged(interface: String)
-    /// QEMU socket_vmnet --vmnet-mode shared: NAT 内网, host 与 guest 互通,
-    /// guest 之间也互通, 但出口流量走 host 共享地址段 (与 .nat 区别在于多 guest 互通)
-    case shared
+/// 网络模式 (与 hell-vm `NetworkConfig.Mode` 一致):
+/// - `.user`         — QEMU 内置 user-mode (SLIRP) NAT / VZ NAT, 零依赖
+/// - `.vmnetShared`  — socket_vmnet shared (NAT+DHCP, 多 guest 互通)
+/// - `.vmnetHost`    — socket_vmnet host-only (仅 host 与 guest)
+/// - `.vmnetBridged` — socket_vmnet bridged (真二层桥接, 走宿主接口)
+/// - `.none`         — 不挂载网卡 (`-nic none`)
+///
+/// Codable rawValue = String, 老 yaml 兼容: `nat→user / bridged→vmnetBridged /
+/// shared→vmnetShared` 由 NetworkSpec.init(from:) 拦下做迁移.
+public enum NetworkMode: String, Codable, Sendable, Equatable, CaseIterable {
+    case user
+    case vmnetShared
+    case vmnetHost
+    case vmnetBridged
+    case none
+}
 
-    private enum CodingKeys: String, CodingKey { case mode, bridgedInterface }
-    private enum Raw: String { case nat, bridged, shared }
+/// QEMU NIC 设备型号
+/// - virtio:  virtio-net-pci, 需 guest 驱动 (Linux 自带, Windows 需装 NetKVM)
+/// - e1000e:  Intel 千兆网卡模拟, Windows ARM / macOS 自带驱动
+/// - rtl8139: Realtek 老网卡, 兼容性最广但性能最差, 老 guest 兜底
+public enum NICModel: String, Codable, Sendable, CaseIterable {
+    case virtio
+    case e1000e
+    case rtl8139
 
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        let raw = try c.decode(String.self, forKey: .mode)
-        switch Raw(rawValue: raw) {
-        case .nat: self = .nat
-        case .bridged:
-            let iface = try c.decode(String.self, forKey: .bridgedInterface)
-            self = .bridged(interface: iface)
-        case .shared: self = .shared
-        case .none:
-            throw DecodingError.dataCorruptedError(
-                forKey: .mode, in: c,
-                debugDescription: "未知 network mode: \(raw); 允许值: nat, bridged, shared"
-            )
-        }
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
+    /// 翻译成 QEMU `-device` 参数名
+    public var qemuDeviceName: String {
         switch self {
-        case .nat:
-            try c.encode(Raw.nat.rawValue, forKey: .mode)
-        case .bridged(let iface):
-            try c.encode(Raw.bridged.rawValue, forKey: .mode)
-            try c.encode(iface, forKey: .bridgedInterface)
-        case .shared:
-            try c.encode(Raw.shared.rawValue, forKey: .mode)
+        case .virtio:  return "virtio-net-pci"
+        case .e1000e:  return "e1000e"
+        case .rtl8139: return "rtl8139"
         }
     }
 }
@@ -134,24 +129,103 @@ public struct NetworkSpec: Codable, Sendable, Equatable {
     public var mode: NetworkMode
     /// MAC 地址 (小写冒号分隔), 缺省时生成时填入, 持久化
     public var macAddress: String
+    /// socket_vmnet unix socket 路径 (仅 vmnet* 模式用, 留空则按 mode 取默认 SocketPaths.*)
+    public var socketVmnetPath: String?
+    /// vmnetBridged 模式要桥接的宿主网卡 (如 "en0"), 其它模式忽略
+    public var bridgedInterface: String?
+    /// QEMU NIC 设备型号. Linux 默认 virtio (自带驱动), Windows 默认 e1000e
+    /// (Windows ARM 开箱自带 e1000e 驱动; 装 NetKVM/viogpudo 后可切 virtio 更快).
+    public var deviceModel: NICModel
+    /// 是否启用此网卡 — false 时启动不挂, 运行中可通过 QMP 热插拔 attach/detach.
+    /// 与删除区别: 禁用保留配置 (MAC/模式), 后续再启用恢复同样 NIC 身份.
+    public var enabled: Bool
 
-    private enum CodingKeys: String, CodingKey { case mode, bridgedInterface, macAddress }
+    private enum CodingKeys: String, CodingKey {
+        case mode, macAddress, socketVmnetPath, bridgedInterface, deviceModel, enabled
+    }
 
-    public init(mode: NetworkMode, macAddress: String) {
+    public init(
+        mode: NetworkMode,
+        macAddress: String,
+        socketVmnetPath: String? = nil,
+        bridgedInterface: String? = nil,
+        deviceModel: NICModel = .virtio,
+        enabled: Bool = true
+    ) {
         self.mode = mode
         self.macAddress = macAddress
+        self.socketVmnetPath = socketVmnetPath
+        self.bridgedInterface = bridgedInterface
+        self.deviceModel = deviceModel
+        self.enabled = enabled
     }
 
     public init(from decoder: Decoder) throws {
-        self.mode = try NetworkMode(from: decoder)
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.macAddress = try c.decode(String.self, forKey: .macAddress)
+        // 老枚举名兼容: nat → user, bridged → vmnetBridged, shared → vmnetShared
+        let raw = try c.decode(String.self, forKey: .mode)
+        switch raw {
+        case "user", "nat":             self.mode = .user
+        case "vmnetShared", "shared":   self.mode = .vmnetShared
+        case "vmnetHost", "hostOnly":   self.mode = .vmnetHost
+        case "vmnetBridged", "bridged": self.mode = .vmnetBridged
+        case "none":                    self.mode = .none
+        default:                        self.mode = .user   // 未知值兜底为 user
+        }
+        self.macAddress       = try c.decode(String.self, forKey: .macAddress)
+        self.socketVmnetPath  = try c.decodeIfPresent(String.self, forKey: .socketVmnetPath)
+        self.bridgedInterface = try c.decodeIfPresent(String.self, forKey: .bridgedInterface)
+        self.deviceModel      = try c.decodeIfPresent(NICModel.self, forKey: .deviceModel) ?? .virtio
+        self.enabled          = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
     }
 
-    public func encode(to encoder: Encoder) throws {
-        try mode.encode(to: encoder)
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(macAddress, forKey: .macAddress)
+    /// 对 vmnetBridged 模式, 推导实际使用的桥接接口名.
+    /// `bridgedInterface` 为空时 fallback 到 "en0" (历史行为, 兼容 hell-vm).
+    /// 非 bridged 模式返回 nil.
+    public var effectiveBridgedInterface: String? {
+        guard mode == .vmnetBridged else { return nil }
+        if let i = bridgedInterface, !i.isEmpty { return i }
+        return "en0"
+    }
+
+    /// 推导实际使用的 socket 路径 (vmnet* 模式): 用户显式填 socketVmnetPath 优先,
+    /// 否则走 SocketPaths 集中的标准约定. 非 vmnet* 模式返回 nil.
+    public var effectiveSocketPath: String? {
+        if let p = socketVmnetPath, !p.isEmpty { return p }
+        switch mode {
+        case .vmnetShared:  return SocketPaths.vmnetShared
+        case .vmnetHost:    return SocketPaths.vmnetHost
+        case .vmnetBridged:
+            let iface = effectiveBridgedInterface ?? "en0"
+            return SocketPaths.vmnetBridged(interface: iface)
+        case .user, .none:  return nil
+        }
+    }
+
+    /// QEMU 侧稳定 ID — 热插拔要求添加/删除时 ID 一致. 用 MAC 去冒号做后缀,
+    /// guest 看到的仍然是 NIC 顺序, 这里只是 host 端 QEMU 的内部句柄名.
+    public var qemuStableSuffix: String? {
+        guard !macAddress.isEmpty else { return nil }
+        return macAddress.replacingOccurrences(of: ":", with: "").lowercased()
+    }
+}
+
+/// hell-vm 风格别名: `NetworkConfig` ≡ `NetworkSpec`. 抄过来的 UI / hotplug 代码
+/// 直接用 NetworkConfig 名字也能编译.
+public typealias NetworkConfig = NetworkSpec
+
+extension NetworkSpec {
+    /// 生成一个 locally-administered + unicast 的随机 MAC 地址.
+    /// OUI 固定用 QEMU 约定前缀 `52:54:00`, 后 3 字节随机.
+    public static func generateRandomMAC() -> String {
+        let tail = (0..<3).map { _ in UInt8.random(in: 0...255) }
+        return String(format: "52:54:00:%02x:%02x:%02x", tail[0], tail[1], tail[2])
+    }
+
+    /// 简单校验 MAC 字符串合法性 (6 组十六进制, 冒号分隔, 大小写不限)
+    public static func isValidMAC(_ s: String) -> Bool {
+        let pattern = #"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$"#
+        return s.range(of: pattern, options: .regularExpression) != nil
     }
 }
 

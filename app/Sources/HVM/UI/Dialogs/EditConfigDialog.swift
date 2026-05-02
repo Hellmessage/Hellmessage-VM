@@ -39,11 +39,18 @@ struct EditConfigDialog: View {
         self.item = item
         self._cpuText = State(initialValue: String(item.config.cpuCount))
         self._memGiBText = State(initialValue: String(item.config.memoryMiB / 1024))
-        let initialMode = item.config.networks.first?.mode ?? .nat
+        let initialNet = item.config.networks.first
+        let initialMode = initialNet?.mode ?? .user
         switch initialMode {
-        case .nat:                self._networkChoice = State(initialValue: .nat); self._bridgedInterface = State(initialValue: "")
-        case .bridged(let iface): self._networkChoice = State(initialValue: .bridged); self._bridgedInterface = State(initialValue: iface)
-        case .shared:             self._networkChoice = State(initialValue: .shared); self._bridgedInterface = State(initialValue: "")
+        case .user, .none:
+            self._networkChoice = State(initialValue: .nat)
+            self._bridgedInterface = State(initialValue: "")
+        case .vmnetBridged:
+            self._networkChoice = State(initialValue: .bridged)
+            self._bridgedInterface = State(initialValue: initialNet?.bridgedInterface ?? "")
+        case .vmnetShared, .vmnetHost:
+            self._networkChoice = State(initialValue: .shared)
+            self._bridgedInterface = State(initialValue: "")
         }
     }
 
@@ -141,21 +148,27 @@ struct EditConfigDialog: View {
             guard let memGiB = UInt64(memGiBText), memGiB >= 1 else {
                 throw HVMError.config(.missingField(name: "memory 必须 >=1 GiB"))
             }
+            // UI 内部 NetworkChoice → 数据模型 NetworkMode 5-mode + bridgedInterface 字段.
             let newMode: NetworkMode
+            var newBridgedIface: String? = nil
             switch networkChoice {
-            case .nat: newMode = .nat
+            case .nat:
+                newMode = .user
             case .bridged:
                 guard !bridgedInterface.isEmpty else {
                     throw HVMError.config(.missingField(name: "network bridged 接口未选"))
                 }
-                newMode = .bridged(interface: bridgedInterface)
-            case .shared: newMode = .shared
+                newMode = .vmnetBridged
+                newBridgedIface = bridgedInterface
+            case .shared:
+                newMode = .vmnetShared
             }
             var config = try BundleIO.load(from: item.bundleURL)
             config.cpuCount = cpuInt
             config.memoryMiB = memGiB * 1024
             if !config.networks.isEmpty {
                 config.networks[0].mode = newMode
+                config.networks[0].bridgedInterface = newBridgedIface
             }
             try BundleIO.save(config: config, to: item.bundleURL)
             model.refreshList()

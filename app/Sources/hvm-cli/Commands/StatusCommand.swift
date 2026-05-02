@@ -85,9 +85,11 @@ struct StatusCommand: AsyncParsableCommand {
                 if let net = config.networks.first {
                     let modeStr: String
                     switch net.mode {
-                    case .nat: modeStr = "nat"
-                    case .bridged(let i): modeStr = "bridged(\(i))"
-                    case .shared: modeStr = "shared"
+                    case .user:         modeStr = "user (NAT)"
+                    case .vmnetShared:  modeStr = "vmnet shared"
+                    case .vmnetHost:    modeStr = "vmnet host"
+                    case .vmnetBridged: modeStr = "vmnet bridged(\(net.bridgedInterface ?? "?"))"
+                    case .none:         modeStr = "none"
                     }
                     print("  network:    \(modeStr) · \(net.macAddress)")
                 }

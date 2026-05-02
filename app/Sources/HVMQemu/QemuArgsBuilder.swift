@@ -274,27 +274,46 @@ public enum QemuArgsBuilder {
         }
 
         // ---- 网络 ----
-        // .nat: QEMU user-mode SLIRP (与 VZ NAT 语义对齐, 无 daemon 依赖).
-        // .bridged/.shared: 桥接路径临时禁用 — 老的 socket_vmnet 自家方案已下线,
-        //   hell-vm 风格新方案 (osascript admin privileges 一次装 launchd daemon +
-        //   `-netdev stream,addr.type=unix,addr.path=<sock>` 直连 daemon) 后续接上.
-        //   此时直接抛 configInvalid 让用户切回 NAT 或等新方案.
+        // - .user:                              QEMU 内置 user-mode (SLIRP) NAT, 零依赖
+        // - .vmnetShared / .vmnetHost / .vmnetBridged:
+        //     走系统级 socket_vmnet daemon (scripts/install-vmnet-daemons.sh + launchd),
+        //     QEMU 直连 unix socket: `-netdev stream,addr.type=unix,addr.path=<sock>`.
+        //     socket_vmnet daemon 用 4-byte length-prefix framing, 跟 QEMU stream
+        //     协议一致 (lima / hell-vm 同款), 不需要 socket_vmnet_client wrapper, 也不
+        //     需要父进程 fd 透传.
+        // - .none:                              不挂网卡 (跳过此 NIC)
+        // - net.enabled=false:                  保留配置但不启动时挂载
+        //
+        // 缺 daemon 时 (用户没装) 抛 configInvalid 提示去 GUI 安装 daemon.
+        //
         // bus= 关键: NIC 必须挂到 pcie-root-port (rp_N) 走 PCIe native, 不能落 pcie.0
         //   legacy bridge — 见上节 "PCIe root ports" 注释.
         for (idx, net) in cfg.networks.enumerated() {
+            guard net.enabled, net.mode != .none else { continue }
             let netId = "net\(idx)"
             let busOpt = idx < 4 ? ",bus=rp\(idx)" : ""
-            let deviceOpts = "virtio-net-pci,netdev=\(netId),mac=\(net.macAddress)\(busOpt)"
+            let deviceOpts = "\(net.deviceModel.qemuDeviceName),netdev=\(netId),mac=\(net.macAddress)\(busOpt)"
             switch net.mode {
-            case .nat:
+            case .user:
                 args += ["-netdev", "user,id=\(netId)"]
-                args += ["-device", deviceOpts]
-            case .bridged, .shared:
-                throw HVMError.backend(.configInvalid(
-                    field: "networks[\(idx)].mode",
-                    reason: "vmnet 桥接 / shared 网络当前临时禁用 (重写中, 切换 hell-vm 风格新方案); 请改用 NAT"
-                ))
+            case .vmnetShared, .vmnetHost, .vmnetBridged:
+                guard let sock = net.effectiveSocketPath else {
+                    throw HVMError.backend(.configInvalid(
+                        field: "networks[\(idx)].mode",
+                        reason: "无法推导 vmnet socket 路径 (mode=\(net.mode.rawValue))"
+                    ))
+                }
+                guard SocketPaths.isReady(sock) else {
+                    throw HVMError.backend(.configInvalid(
+                        field: "networks[\(idx)].mode",
+                        reason: "socket_vmnet daemon 未就绪 (\(sock)); 请到 编辑配置 → 网络 → 安装 daemon, 或先 brew install socket_vmnet"
+                    ))
+                }
+                args += ["-netdev", "stream,id=\(netId),addr.type=unix,addr.path=\(sock)"]
+            case .none:
+                continue
             }
+            args += ["-device", deviceOpts]
         }
         // ---- 显示 + 输入 ----
         // QEMU virt 机器默认无显卡, 只有 serial/parallel console; 必须显式加 GPU 才能出 graphical UEFI/OS UI.

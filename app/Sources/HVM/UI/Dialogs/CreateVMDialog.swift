@@ -711,15 +711,21 @@ struct CreateVMDialog: View {
                 macOSSpec = nil; linuxSpec = nil; windowsSpec = WindowsSpec()
             }
 
+            // UI 内部 NetworkChoice (.nat/.bridged/.shared) → 数据模型 NetworkMode 5-mode.
+            // bridged 接口与 socket 路径派生由 NetworkSpec 字段承载, 不再嵌入 enum associated value.
             let netMode: NetworkMode
+            var bridgedIface: String? = nil
             switch networkChoice {
-            case .nat: netMode = .nat
+            case .nat:
+                netMode = .user
             case .bridged:
                 guard !bridgedInterface.isEmpty else {
                     throw HVMError.config(.missingField(name: "network bridged 接口未选"))
                 }
-                netMode = .bridged(interface: bridgedInterface)
-            case .shared: netMode = .shared
+                netMode = .vmnetBridged
+                bridgedIface = bridgedInterface
+            case .shared:
+                netMode = .vmnetShared
             }
 
             // engine-aware 主盘: VZ → os.img (raw), QEMU → os.qcow2
@@ -738,7 +744,11 @@ struct CreateVMDialog: View {
                 cpuCount: cpu,
                 memoryMiB: UInt64(memoryGiB) * 1024,
                 disks: [mainDisk],
-                networks: [NetworkSpec(mode: netMode, macAddress: MACAddressGenerator.random())],
+                networks: [NetworkSpec(
+                    mode: netMode,
+                    macAddress: MACAddressGenerator.random(),
+                    bridgedInterface: bridgedIface
+                )],
                 installerISO: (isImport || guestOS == .macOS) ? nil : isoPath,
                 bootFromDiskOnly: isImport,
                 macOS: macOSSpec,
