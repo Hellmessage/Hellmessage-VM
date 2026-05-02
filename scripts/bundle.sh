@@ -74,14 +74,9 @@ if [ -f "$ROOT/app/Resources/embedded.provisionprofile" ]; then
     cp "$ROOT/app/Resources/embedded.provisionprofile" "$CONTENTS/embedded.provisionprofile"
 fi
 
-# 4.4 拷贝 install-vmnet-helper.sh 入 Resources/scripts/, 让 GUI 引导按钮可定位.
-#     按 CLAUDE.md 第三方二进制约束, GUI 严格只走 Bundle.main/Resources/scripts/, 不再 fallback 到仓库;
-#     改完此脚本必须 make install 才能让 /Applications/HVM.app 内的副本同步.
+# 4.4 vmnet helper 脚本: 老的 install-vmnet-helper.sh 已下线 (桥接逻辑临时禁用,
+#     等待 hell-vm 风格新方案接上). Resources/scripts/ 暂时不需要任何脚本.
 mkdir -p "$RESOURCES/scripts"
-if [ -f "$ROOT/scripts/install-vmnet-helper.sh" ]; then
-    cp "$ROOT/scripts/install-vmnet-helper.sh" "$RESOURCES/scripts/install-vmnet-helper.sh"
-    chmod +x "$RESOURCES/scripts/install-vmnet-helper.sh"
-fi
 
 # 4.5 嵌入 QEMU 后端 (软模式: third_party/qemu-stage/ 不存在则跳过, 仍出 .app)
 #     完整发布走 make build-all (会先 make qemu); 此处 make build 不强制要求 QEMU 就绪

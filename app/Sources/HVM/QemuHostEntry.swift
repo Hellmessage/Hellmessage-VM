@@ -98,9 +98,8 @@ public enum QemuHostEntry {
             QemuHostState.shared.swtpmSocketPath = path
         }
 
-        // 3.5 socket_vmnet daemon (新方案): bridged / shared 网络由系统级 launchd daemon 提供
-        // (scripts/install-vmnet-helper.sh 安装), QEMU -netdev stream 直接连 /var/run/socket_vmnet.* .
-        // 不再 per-VM spawn sidecar; daemon 缺失由 QemuArgsBuilder 抛 configInvalid 提示安装路径.
+        // 3.5 socket_vmnet 桥接路径已临时下线 (重写中, 切换 hell-vm 风格新方案).
+        //     当前 QemuArgsBuilder 收到 .bridged/.shared 直接抛 configInvalid; 仅 .nat 可用.
 
         // 3.6 console socket 路径 (与 QMP / vmnet socket 同 runDir).
         // QemuConsoleBridge 在 QEMU 启动后 connect (见 6c).
@@ -178,11 +177,6 @@ public enum QemuHostEntry {
         }
         QemuHostState.shared.consoleSocketURL = consoleSocketURL
 
-        // 4.5 vmnet fd 透传: bridged/shared NIC 由父进程 (本进程) socket()+connect()
-        // 每个 socket_vmnet daemon, posix_spawn 时把 N 个 fd 落到子进程 fd 3..3+N-1,
-        // QEMU argv 用 -netdev socket,fd=K 接收. 见 QemuProcessRunner / SidecarProcessRunner.
-        // socket_vmnet_client wrapper 由于只支持单 fd, 放弃使用; 多 NIC 需要这条路.
-
         // 3. stderr 落全局 ~/Library/.../HVM/logs/<displayName>-<uuid8>/qemu-stderr.log
         // (truncate, 不累积老错误)
         let qemuLogsDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id)
@@ -190,11 +184,9 @@ public enum QemuHostEntry {
         let stderrLog = qemuLogsDir.appendingPathComponent("qemu-stderr.log")
         try? FileManager.default.removeItem(at: stderrLog)
 
-        // 4. 启动 QEMU 子进程. 有 vmnet NIC 时父进程 connect 每个 daemon, 把 fd 透传给
-        //    子进程 fd 3..3+N-1; 全 NAT 时 vmnetSocketPaths 为空, runner 走默认 Process 路径.
+        // 4. 启动 QEMU 子进程. 桥接 (vmnet) 路径已下线; 当前仅支持 NAT, 不需要 fd 透传.
         let runner = QemuProcessRunner(
-            binary: qemuBin, args: buildResult.args, stderrLog: stderrLog,
-            extraFdConnections: buildResult.vmnetSocketPaths
+            binary: qemuBin, args: buildResult.args, stderrLog: stderrLog
         )
         do {
             try runner.start()

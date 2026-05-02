@@ -16,18 +16,14 @@ import HVMCore
 
 public enum QemuArgsBuilder {
 
-    /// build() 输出.
-    /// vmnetSocketPaths: 按 networks 顺序里 bridged/shared NIC 出现的顺序排列 daemon
-    /// socket 路径. 调用方必须把这 N 个 socket 的连接 fd 在子进程里依次落到 fd 3, 4, ...,
-    /// QEMU 命令行也按这个 fd 顺序写 -netdev socket,id=netN,fd=K (与 lima/colima 实现一致).
-    /// 不再走 socket_vmnet_client wrapper (单 fd 限制, 不支持多 NIC).
-    /// 空数组 = 全 NAT 或无 networks, 调用方直接 spawn qemu-system-aarch64.
+    /// build() 输出. 现仅含 argv: 桥接 (vmnet bridged/shared) 功能已临时禁用,
+    /// 父进程不再 fd 透传到 QEMU; .bridged/.shared 启动会抛 configInvalid.
+    /// 后续接 hell-vm 风格新方案时再恢复 — 那时 argv 直接走
+    /// `-netdev stream,addr.type=unix,addr.path=...` 不需要 fd 透传, 此 struct 不必扩.
     public struct BuildResult: Sendable {
         public let args: [String]
-        public let vmnetSocketPaths: [String]
-        public init(args: [String], vmnetSocketPaths: [String]) {
+        public init(args: [String]) {
             self.args = args
-            self.vmnetSocketPaths = vmnetSocketPaths
         }
     }
 
@@ -105,8 +101,8 @@ public enum QemuArgsBuilder {
         }
     }
 
-    /// 构造 argv + 网络元信息. 调用方按 BuildResult.vmnetSocketPath 决定是否套
-    /// socket_vmnet_client wrapper.
+    /// 构造 argv. 当前仅支持 .nat NIC; .bridged/.shared 抛 configInvalid (桥接路径
+    /// 临时禁用, 等待 hell-vm 风格新方案接上).
     public static func build(_ inputs: Inputs) throws -> BuildResult {
         let cfg = inputs.config
 
@@ -278,49 +274,26 @@ public enum QemuArgsBuilder {
         }
 
         // ---- 网络 ----
-        // bridged / shared 走系统级 socket_vmnet daemon (launchd 拉起, 见 scripts/install-vmnet-helper.sh).
-        // **协议关键**: socket_vmnet daemon 用 4-byte length-prefix framing, 这恰好跟 QEMU
-        //   `-netdev stream,addr.type=unix,addr.path=<sock>` 的 framing 一致 (lima / hell-vm 同款).
-        // **不要**用 `-netdev socket,fd=K`: 那是 QEMU 早期 VM-to-VM multicast netdev,
-        //   用 2-byte length-prefix, 跟 socket_vmnet 不兼容 — connect 上但 frame 序列化失败.
-        // **bus= 关键**: 必须挂到 pcie-root-port (rp_N) 走 PCIe native, 不能落 pcie.0 legacy
-        //   bridge — 见上节 "PCIe root ports" 注释.
-        // vmnetSocketPaths 当前固定空: socket_vmnet 走系统级 launchd daemon, QEMU 用
-        // -netdev stream 直接 connect daemon socket 不再需要父进程透传 fd. 字段保留
-        // 在 BuildResult 里作向前兼容 API.
-        let vmnetSocketPaths: [String] = []
+        // .nat: QEMU user-mode SLIRP (与 VZ NAT 语义对齐, 无 daemon 依赖).
+        // .bridged/.shared: 桥接路径临时禁用 — 老的 socket_vmnet 自家方案已下线,
+        //   hell-vm 风格新方案 (osascript admin privileges 一次装 launchd daemon +
+        //   `-netdev stream,addr.type=unix,addr.path=<sock>` 直连 daemon) 后续接上.
+        //   此时直接抛 configInvalid 让用户切回 NAT 或等新方案.
+        // bus= 关键: NIC 必须挂到 pcie-root-port (rp_N) 走 PCIe native, 不能落 pcie.0
+        //   legacy bridge — 见上节 "PCIe root ports" 注释.
         for (idx, net) in cfg.networks.enumerated() {
             let netId = "net\(idx)"
-            // NIC 挂哪个 root port: 按 networks 顺序占 rp0..rp3; 超 4 张回落 pcie.0
             let busOpt = idx < 4 ? ",bus=rp\(idx)" : ""
             let deviceOpts = "virtio-net-pci,netdev=\(netId),mac=\(net.macAddress)\(busOpt)"
             switch net.mode {
             case .nat:
-                // user-mode NAT: QEMU 自带 SLIRP, 与 VZ NAT 语义对齐 (无需任何 daemon)
                 args += ["-netdev", "user,id=\(netId)"]
                 args += ["-device", deviceOpts]
-            case .bridged(let iface):
-                let sockPath = VmnetDaemonPaths.bridgedSocket(interface: iface)
-                guard VmnetDaemonPaths.isReady(sockPath) else {
-                    throw HVMError.backend(.configInvalid(
-                        field: "networks[\(idx)].mode",
-                        reason: "bridged(\(iface)) 需要 socket_vmnet daemon 在 \(sockPath); " +
-                                "请跑: sudo scripts/install-vmnet-helper.sh \(iface)"
-                    ))
-                }
-                args += ["-netdev", "stream,id=\(netId),addr.type=unix,addr.path=\(sockPath)"]
-                args += ["-device", deviceOpts]
-            case .shared:
-                let sockPath = VmnetDaemonPaths.sharedSocket
-                guard VmnetDaemonPaths.isReady(sockPath) else {
-                    throw HVMError.backend(.configInvalid(
-                        field: "networks[\(idx)].mode",
-                        reason: "shared 需要 socket_vmnet daemon 在 \(sockPath); " +
-                                "请跑: sudo scripts/install-vmnet-helper.sh"
-                    ))
-                }
-                args += ["-netdev", "stream,id=\(netId),addr.type=unix,addr.path=\(sockPath)"]
-                args += ["-device", deviceOpts]
+            case .bridged, .shared:
+                throw HVMError.backend(.configInvalid(
+                    field: "networks[\(idx)].mode",
+                    reason: "vmnet 桥接 / shared 网络当前临时禁用 (重写中, 切换 hell-vm 风格新方案); 请改用 NAT"
+                ))
             }
         }
         // ---- 显示 + 输入 ----
@@ -406,6 +379,6 @@ public enum QemuArgsBuilder {
             args += ["-device", "tpm-tis-device,tpmdev=tpm0"]
         }
 
-        return BuildResult(args: args, vmnetSocketPaths: vmnetSocketPaths)
+        return BuildResult(args: args)
     }
 }

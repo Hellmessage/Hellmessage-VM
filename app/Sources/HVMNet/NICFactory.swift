@@ -1,6 +1,9 @@
 // HVMNet/NICFactory.swift
 // 从 NetworkSpec 构建 VZVirtioNetworkDeviceConfiguration.
-// M1 仅 NAT 路径; bridged 分支保留, entitlement 未就绪时抛错 (见 docs/NETWORK.md)
+//
+// 当前仅支持 .nat. 桥接 (.bridged / .shared) 路径已临时下线 — 等待 hell-vm 风格新方案
+// 接上, 那时 VZ 后端的 .bridged 仍走 VZBridgedNetworkDeviceAttachment (Apple framework).
+// 现在收到 .bridged/.shared 直接抛 configInvalid, 跟 QEMU 后端口径一致.
 
 import Foundation
 @preconcurrency import Virtualization
@@ -8,8 +11,7 @@ import HVMBundle
 import HVMCore
 
 public enum NICFactory {
-    /// 构建一个 virtio 网卡. NetworkMode = .bridged 时:
-    ///   - 若 entitlement 未就绪或目标接口不存在, 抛 HVMError.net.*
+    /// 构建一个 virtio 网卡. 当前仅支持 .nat; .bridged/.shared 抛 configInvalid.
     public static func make(spec: NetworkSpec) throws -> VZVirtioNetworkDeviceConfiguration {
         try MACAddressGenerator.validate(spec.macAddress)
         guard let mac = VZMACAddress(string: spec.macAddress) else {
@@ -23,21 +25,11 @@ public enum NICFactory {
         case .nat:
             nic.attachment = VZNATNetworkDeviceAttachment()
 
-        case .bridged(let wantedIface):
-            let interfaces = VZBridgedNetworkInterface.networkInterfaces
-            guard let iface = interfaces.first(where: { $0.identifier == wantedIface }) else {
-                throw HVMError.net(.bridgedInterfaceNotFound(
-                    requested: wantedIface,
-                    available: interfaces.map { $0.identifier }
-                ))
-            }
-            nic.attachment = VZBridgedNetworkDeviceAttachment(interface: iface)
-
-        case .shared:
-            // VZ 后端不支持 socket_vmnet 风格的 shared (多 guest 互通); 退化到 NAT,
-            // 用户若要真 shared 应走 QEMU 后端. 见 docs/NETWORK.md.
-            // GUI/CLI 入口已在 engine=vz 时不暴露 .shared, 这里是兜底防 config 手改.
-            nic.attachment = VZNATNetworkDeviceAttachment()
+        case .bridged, .shared:
+            throw HVMError.backend(.configInvalid(
+                field: "network.mode",
+                reason: "桥接 / shared 网络当前临时禁用 (重写中, 切换 hell-vm 风格新方案); 请改用 NAT"
+            ))
         }
 
         return nic
