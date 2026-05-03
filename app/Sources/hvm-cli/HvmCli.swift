@@ -23,6 +23,7 @@ struct HvmCli: AsyncParsableCommand {
             PauseCommand.self,
             ResumeCommand.self,
             DeleteCommand.self,
+            CloneCommand.self,
             BootFromDiskCommand.self,
             IsoCommand.self,
             DiskCommand.self,
