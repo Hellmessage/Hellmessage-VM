@@ -7,7 +7,7 @@
 | 文档 | 主题 | 状态 |
 |---|---|---|
 | [CLONE.md](CLONE.md) | VM 克隆(APFS clonefile + 身份字段重生) | **代码已合入**, 真机验证 (C1/C3) 待跑 |
-| [ENCRYPTION.md](ENCRYPTION.md) | VM 整盘加密(混合 + 强制密码 + 跨机器 portable) | **设计稿 v2.3 + PR-1~7 已落** |
+| [ENCRYPTION.md](ENCRYPTION.md) | VM 整盘加密(混合 + 强制密码 + 跨机器 portable) | **设计稿 v2.3 + PR-1~8 已落** |
 
 ## 与 v1 / v2 的关系
 
