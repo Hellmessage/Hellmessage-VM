@@ -14,12 +14,20 @@ ENTITLEMENTS  := $(PKG_DIR)/Resources/HVM.entitlements
 QEMU_STAGE    := third_party/qemu-stage
 QEMU_BIN      := $(QEMU_STAGE)/bin/qemu-system-aarch64
 
+# SwiftPM 产物路径 (CONFIGURATION 决定 release / debug 子目录).
+# 让 bundle stamp 依赖三个 binary mtime —— SwiftPM no-op 时 mtime 不变, 整个 bundle 跳过.
+SWIFT_BUILD_DIR := $(SWIFTPM_DIR)/$(CONFIGURATION)
+HVM_BIN         := $(SWIFT_BUILD_DIR)/HVM
+HVM_CLI_BIN     := $(SWIFT_BUILD_DIR)/hvm-cli
+HVM_DBG_BIN     := $(SWIFT_BUILD_DIR)/hvm-dbg
+BUNDLE_STAMP    := $(BUILD_DIR)/.bundle-stamp
+
 .PHONY: all build bundle compile dev test verify clean help icon register-types qemu qemu-clean edk2 edk2-clean build-all xed install uninstall run-app
 
 # 默认: release 模式 + 完整 .app 签名
 all: build
 
-build: bundle
+build: $(BUNDLE_STAMP)
 
 help:
 	@echo "HVM 构建命令:"
@@ -51,9 +59,25 @@ compile:
 icon:
 	@bash scripts/gen-icon.sh
 
-# 3. 组装 .app + 签名
-bundle: icon compile
+# 3. 组装 .app + 签名 (增量: 只在 SwiftPM 产物 / bundle.sh / entitlements 任一更新时重跑.
+# 日常改 docs → swift build no-op → binary mtime 不变 → 跳过 bundle.sh, 30s → ~5s)
+$(BUNDLE_STAMP): $(HVM_BIN) $(HVM_CLI_BIN) $(HVM_DBG_BIN) \
+                 scripts/bundle.sh \
+                 $(PKG_DIR)/Resources/HVM.entitlements \
+                 $(PKG_DIR)/Resources/QEMU.entitlements \
+                 $(PKG_DIR)/Resources/Info.plist.template \
+                 | icon
 	@CONFIGURATION=$(CONFIGURATION) SIGN_IDENTITY="$(SIGN_IDENTITY)" bash scripts/bundle.sh
+	@mkdir -p $(@D)
+	@touch $@
+
+# 三个 binary 是 SwiftPM 产物 — compile 是 PHONY 总跑 swift build, 但 no-op 时不更新 binary mtime,
+# 因此不会触发 BUNDLE_STAMP 规则. 改源码后 SwiftPM 会重链接, mtime 更新, 才重 bundle.
+$(HVM_BIN) $(HVM_CLI_BIN) $(HVM_DBG_BIN): compile
+	@:
+
+# 老调用方 (run-app / register-types / install) 调 bundle 兼容
+bundle: $(BUNDLE_STAMP)
 
 # debug 变体
 dev:
