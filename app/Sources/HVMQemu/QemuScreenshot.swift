@@ -4,7 +4,7 @@
 
 import Foundation
 import CoreGraphics
-import CryptoKit
+import HVMUtils
 
 public enum QemuScreenshot {
 
@@ -84,7 +84,7 @@ public enum QemuScreenshot {
         }
 
         // 6. sha256
-        let hex = SHA256.hash(data: pngData).map { String(format: "%02x", $0) }.joined()
+        let hex = Hashing.sha256Hex(pngData)
 
         // VZ 行为: 返回 PNG 实际像素 (downscale 后), 不是原始 guest 分辨率
         return Result(pngData: pngData, widthPx: finalImage.width, heightPx: finalImage.height, sha256: hex)

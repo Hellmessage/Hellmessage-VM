@@ -13,6 +13,7 @@ import ArgumentParser
 import Foundation
 import HVMCore
 import HVMInstall
+import HVMUtils
 
 struct IpswCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -187,7 +188,7 @@ struct IpswFetchCommand: AsyncParsableCommand {
                 print("found: macOS \(entry.osVersion) (\(entry.buildVersion))")
                 print("url:   \(entry.url.absoluteString)")
                 if resumeFrom > 0 {
-                    print("resume: \(formatBytesS(resumeFrom)) already on disk → 续传")
+                    print("resume: \(Format.bytes(resumeFrom)) already on disk → 续传")
                 }
             case .json:
                 var payload = [
@@ -242,7 +243,7 @@ struct IpswFetchCommand: AsyncParsableCommand {
         case .alreadyCached:
             switch format {
             case .human:
-                print("[cached] 缓存已命中, 跳过下载 (\(formatBytes(p.receivedBytes)))")
+                print("[cached] 缓存已命中, 跳过下载 (\(Format.bytes(p.receivedBytes)))")
             case .json:
                 printJSON([
                     "phase": "alreadyCached",
@@ -255,10 +256,10 @@ struct IpswFetchCommand: AsyncParsableCommand {
             switch format {
             case .human:
                 let pct = total > 0 ? String(format: "%.1f%%", f * 100) : "?"
-                let recv = formatBytes(p.receivedBytes)
-                let totalS = total > 0 ? formatBytes(total) : "?"
-                let rateS = p.bytesPerSecond.map { formatRate($0) } ?? "    --   "
-                let etaS  = p.etaSeconds.map { formatETA($0) } ?? "  --  "
+                let recv = Format.bytes(p.receivedBytes)
+                let totalS = total > 0 ? Format.bytes(total) : "?"
+                let rateS = p.bytesPerSecond.map { Format.rate($0, padded: true) } ?? "    --   "
+                let etaS  = p.etaSeconds.map { Format.eta($0, padded: true) } ?? "  --  "
                 // \r 单行刷新; 末尾留空格盖掉上一帧可能留下的字符
                 print("\rdownloading: \(pct)  \(recv) / \(totalS)  \(rateS)  ETA \(etaS)   ", terminator: "")
                 fflush(stdout)
@@ -282,7 +283,7 @@ struct IpswFetchCommand: AsyncParsableCommand {
         case .completed:
             switch format {
             case .human:
-                let recv = formatBytes(p.receivedBytes)
+                let recv = Format.bytes(p.receivedBytes)
                 print("\rdownloading: 100%  \(recv) / \(recv)        ")
                 fflush(stdout)
             case .json:
@@ -293,51 +294,10 @@ struct IpswFetchCommand: AsyncParsableCommand {
             }
         }
     }
-
-    private static func formatBytes(_ n: Int64) -> String { formatBytesS(n) }
 }
 
-/// 模块内共用的字节格式化 (避免在 static 方法间转着传).
-fileprivate func formatBytesS(_ n: Int64) -> String {
-    let kb: Double = 1024
-    let mb = kb * 1024
-    let gb = mb * 1024
-    let v = Double(n)
-    if v >= gb { return String(format: "%.2f GiB", v / gb) }
-    if v >= mb { return String(format: "%.1f MiB", v / mb) }
-    if v >= kb { return String(format: "%.1f KiB", v / kb) }
-    return "\(n) B"
-}
-
-/// 速率 (bytes/s) → "12.4 MiB/s" 等. 固定宽度便于 \r 刷新对齐.
-fileprivate func formatRate(_ bps: Double) -> String {
-    let kb: Double = 1024
-    let mb = kb * 1024
-    let gb = mb * 1024
-    if bps >= gb { return String(format: "%6.2f GiB/s", bps / gb) }
-    if bps >= mb { return String(format: "%6.2f MiB/s", bps / mb) }
-    if bps >= kb { return String(format: "%6.1f KiB/s", bps / kb) }
-    return String(format: "%6.0f B/s  ", bps)
-}
-
-/// 秒数 → "6 min" / "1h12m" / "12s". 固定宽度便于 \r 刷新对齐.
-fileprivate func formatETA(_ seconds: Double) -> String {
-    if !seconds.isFinite || seconds < 0 { return "  --  " }
-    let s = Int(seconds)
-    if s >= 3600 {
-        let h = s / 3600
-        let m = (s % 3600) / 60
-        return String(format: "%2dh%02dm", h, m)
-    }
-    if s >= 60 {
-        let m = s / 60
-        return String(format: "%4d min", m)
-    }
-    return String(format: "%5d s", s)
-}
-
-/// JSON 模式步进过滤器 (CLI 自用). onProgress 闭包跨线程, 用 NSLock 保护 lastFraction.
-private final class ProgressTracker: @unchecked Sendable {
+/// JSON 模式步进过滤器 (CLI 自用, 跨命令共享). onProgress 闭包跨线程, 用 NSLock 保护 lastFraction.
+final class ProgressTracker: @unchecked Sendable {
     private let lock = NSLock()
     private var lastFraction: Double = -1
 
@@ -374,7 +334,7 @@ struct IpswListCommand: AsyncParsableCommand {
             if !items.isEmpty {
                 print("BUILD       SIZE         PATH")
                 for it in items {
-                    let size = formatBytesS(it.sizeBytes).padding(toLength: 12, withPad: " ", startingAt: 0)
+                    let size = Format.bytes(it.sizeBytes).padding(toLength: 12, withPad: " ", startingAt: 0)
                     let build = it.buildVersion.padding(toLength: 11, withPad: " ", startingAt: 0)
                     print("\(build) \(size) \(it.path)")
                 }
@@ -384,7 +344,7 @@ struct IpswListCommand: AsyncParsableCommand {
                 print("半成品 (.partial, 续传中或被中断):")
                 print("BUILD       SIZE         PATH")
                 for (build, size, path) in partials {
-                    let s = formatBytesS(size).padding(toLength: 12, withPad: " ", startingAt: 0)
+                    let s = Format.bytes(size).padding(toLength: 12, withPad: " ", startingAt: 0)
                     let b = build.padding(toLength: 11, withPad: " ", startingAt: 0)
                     print("\(b) \(s) \(path)")
                 }

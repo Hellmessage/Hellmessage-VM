@@ -3,6 +3,7 @@
 // 复用 IpswFetchDialog 里的 DeterminateBar / IndeterminateBar.
 
 import SwiftUI
+import HVMUtils
 
 struct UtmGuestToolsFetchDialog: View {
     let state: AppModel.UtmGuestToolsFetchState
@@ -62,11 +63,6 @@ struct UtmGuestToolsFetchDialog: View {
     }
 
     private func formatBytes(_ n: Int64) -> String {
-        let gb = 1024.0 * 1024 * 1024
-        let mb = 1024.0 * 1024
-        let v = Double(n)
-        if v >= gb { return String(format: "%.2f GiB", v / gb) }
-        if v >= mb { return String(format: "%.0f MiB", v / mb) }
-        return "\(n) B"
+        Format.bytes(n)
     }
 }

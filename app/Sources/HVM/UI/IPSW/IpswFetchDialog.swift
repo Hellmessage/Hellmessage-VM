@@ -5,6 +5,7 @@
 //   - 未知 total (resolving / 起步) → IndeterminateBar 渐变光柱
 
 import SwiftUI
+import HVMUtils
 
 struct IpswFetchDialog: View {
     let state: AppModel.IpswFetchState
@@ -60,25 +61,25 @@ struct IpswFetchDialog: View {
         case .resolving:
             return "querying VZMacOSRestoreImage.fetchLatestSupported…"
         case .downloading:
-            let recv = Self.formatBytes(state.receivedBytes)
+            let recv = Format.bytes(state.receivedBytes)
             var parts: [String] = []
             if let total = state.totalBytes, total > 0 {
                 let pct = Double(state.receivedBytes) / Double(total) * 100
-                parts.append("\(String(format: "%.1f%%", pct))   \(recv) / \(Self.formatBytes(total))")
+                parts.append("\(String(format: "%.1f%%", pct))   \(recv) / \(Format.bytes(total))")
             } else {
                 parts.append("\(recv) / ?")
             }
             if let bps = state.bytesPerSecond {
-                parts.append(Self.formatRate(bps))
+                parts.append(Format.rate(bps))
             }
             if let eta = state.etaSeconds {
-                parts.append("ETA \(Self.formatETA(eta))")
+                parts.append("ETA \(Format.eta(eta))")
             }
             return parts.joined(separator: "  ·  ")
         case .alreadyCached:
-            return "cache hit, skip download (\(Self.formatBytes(state.receivedBytes)))"
+            return "cache hit, skip download (\(Format.bytes(state.receivedBytes)))"
         case .completed:
-            return "done (\(Self.formatBytes(state.receivedBytes)))"
+            return "done (\(Format.bytes(state.receivedBytes)))"
         }
     }
 
@@ -96,41 +97,6 @@ struct IpswFetchDialog: View {
         case .resolving:
             IndeterminateBar()
         }
-    }
-
-    // MARK: - 格式化
-
-    private static func formatBytes(_ n: Int64) -> String {
-        let kb: Double = 1024
-        let mb = kb * 1024
-        let gb = mb * 1024
-        let v = Double(n)
-        if v >= gb { return String(format: "%.2f GiB", v / gb) }
-        if v >= mb { return String(format: "%.1f MiB", v / mb) }
-        if v >= kb { return String(format: "%.1f KiB", v / kb) }
-        return "\(n) B"
-    }
-
-    private static func formatRate(_ bps: Double) -> String {
-        let kb: Double = 1024
-        let mb = kb * 1024
-        let gb = mb * 1024
-        if bps >= gb { return String(format: "%.2f GiB/s", bps / gb) }
-        if bps >= mb { return String(format: "%.1f MiB/s", bps / mb) }
-        if bps >= kb { return String(format: "%.1f KiB/s", bps / kb) }
-        return String(format: "%.0f B/s", bps)
-    }
-
-    private static func formatETA(_ seconds: Double) -> String {
-        if !seconds.isFinite || seconds < 0 { return "--" }
-        let s = Int(seconds)
-        if s >= 3600 {
-            return "\(s / 3600)h\(String(format: "%02d", (s % 3600) / 60))m"
-        }
-        if s >= 60 {
-            return "\(s / 60) min"
-        }
-        return "\(s) s"
     }
 }
 

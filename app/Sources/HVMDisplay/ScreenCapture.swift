@@ -12,9 +12,9 @@
 // 警告 — 这条路径是有意保留的, 不是疏忽.
 
 import AppKit
-import CryptoKit
 import CoreGraphics
 import Foundation
+import HVMUtils
 
 @_silgen_name("CGWindowListCreateImage")
 private func _hvmCGWindowListCreateImage(
@@ -78,8 +78,7 @@ public enum ScreenCapture {
         guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
             return nil
         }
-        let hash = SHA256.hash(data: pngData)
-        let hex = hash.map { String(format: "%02x", $0) }.joined()
+        let hex = Hashing.sha256Hex(pngData)
         return (pngData, cgImage.width, cgImage.height, hex)
     }
 

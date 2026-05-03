@@ -29,6 +29,10 @@ let package = Package(
         // 基础库, 无下游依赖
         .target(name: "HVMCore"),
 
+        // 公共工具 (formatBytes / sha256Hex / 后续 ResumableDownloader 等跨模块共用 helper).
+        // 仅依赖 HVMCore (拿 HVMLog), 不引业务语义.
+        .target(name: "HVMUtils", dependencies: ["HVMCore"]),
+
         // 功能模块
         .target(
             name: "HVMBundle",
@@ -39,16 +43,16 @@ let package = Package(
         ),
         .target(name: "HVMStorage", dependencies: ["HVMCore", "HVMBundle"]),
         .target(name: "HVMNet",     dependencies: ["HVMCore", "HVMBundle"]),
-        .target(name: "HVMDisplay", dependencies: ["HVMCore", "HVMBundle"]),
+        .target(name: "HVMDisplay", dependencies: ["HVMCore", "HVMBundle", "HVMUtils"]),
         .target(
             name: "HVMBackend",
             dependencies: ["HVMCore", "HVMBundle", "HVMStorage", "HVMNet", "HVMDisplay"]
         ),
-        .target(name: "HVMInstall", dependencies: ["HVMCore", "HVMBundle", "HVMStorage", "HVMBackend"]),
+        .target(name: "HVMInstall", dependencies: ["HVMCore", "HVMBundle", "HVMStorage", "HVMBackend", "HVMUtils"]),
         .target(name: "HVMIPC",     dependencies: ["HVMCore"]),
 
         // QEMU 后端: 进程编排 + argv 构造 + QMP 客户端 (与 HVMBackend 平行, 不依赖 VZ)
-        .target(name: "HVMQemu",    dependencies: ["HVMCore", "HVMBundle"]),
+        .target(name: "HVMQemu",    dependencies: ["HVMCore", "HVMBundle", "HVMUtils"]),
 
         // SCM_RIGHTS fd 接收 helper (POSIX recvmsg + cmsg). 单独 C target 因
         // Swift 不能直接调 CMSG_FIRSTHDR / CMSG_DATA / CMSG_LEN 等宏.
@@ -65,13 +69,13 @@ let package = Package(
         // 可执行 target
         .executableTarget(
             name: "HVM",
-            dependencies: ["HVMBackend", "HVMInstall", "HVMIPC", "HVMDisplay", "HVMStorage", "HVMQemu", "HVMDisplayQemu"]
+            dependencies: ["HVMBackend", "HVMInstall", "HVMIPC", "HVMDisplay", "HVMStorage", "HVMQemu", "HVMDisplayQemu", "HVMUtils"]
         ),
         .executableTarget(
             name: "hvm-cli",
             dependencies: [
                 "HVMCore", "HVMBundle", "HVMStorage", "HVMNet",
-                "HVMBackend", "HVMInstall", "HVMIPC", "HVMQemu",
+                "HVMBackend", "HVMInstall", "HVMIPC", "HVMQemu", "HVMUtils",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
