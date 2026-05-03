@@ -513,7 +513,9 @@ P1:
 | **PR-7** | `HVMPaths.mountpointFor(uuid:)` + `mountsRoot` + `MountReaper.reapStaleMounts` (VZ stale sparsebundle force detach, BundleLock.isBusy 跨进程探活). QEMU 路径不需 reap (Pipe + NSTemporaryDirectory cleanup). 4 测真跑 hdiutil. T4 真机 panic 模拟留 PR-9. | 1 天 | **✅ 已落** |
 | **PR-8** | `EncryptedBundleIO` 路由层 + `RoutingMetadata` (snake_case JSON, schema v2). create/unlock/detectScheme + Create/UnlockedHandle lifecycle (VZ detach 兜底). 跨机器 portable 闭环 (源 cp → 目标 unlock 同密码同 VM ID). 10 测真跑. | 2 天 | **✅ 已落** |
 | **PR-9** | **(QEMU only, v2.4)** QemuArgsBuilder LUKS argv 分支 + secret 文件准备 / 启动后 unlink + QemuHostEntry 接 EncryptedBundleIO.unlock + SwtpmKeyHelper Pipe 透传; T1 真机仅跑 QEMU. **VZ 路径接入推后** | 2 天 | 待开 |
-| **PR-10** | **(QEMU only)** `hvm-cli create --encrypt` + `hvm-cli encrypt / decrypt / rekey / encrypt-status` 子命令 + 启动期密码输入 (getpass + IPC). VZ 路径推后 | 2 天 | 待开 |
+| **PR-10** | **(QEMU only)** `hvm-cli create --encrypt` + 启动期密码输入 + list 适配 | 1 天 | **✅ 已落 (与 PR-9 合并 commit)** |
+| **PR-10a** | **(QEMU only)** `hvm-cli encrypt <vm>` 子命令 — 老明文 VM 转加密冷迁移. 走 qemu-img convert 把 raw/qcow2 disks 转 LUKS qcow2 + OVMFVarsLuksFactory.create 转 nvram + EncryptedConfigIO.save 重写 config + 写 routing JSON. **Win VM 重置 TPM** (现有 swtpm state 是明文, 用新 swtpm-key 不能解; 用户警告 BitLocker / SecureBoot 状态丢). 仅 QEMU engine; VZ engine VM 拒绝 (VZ 加密接入推后 + raw → LUKS qcow2 切引擎需独立 PR) | 1 天 | 待开 |
+| **PR-10b** | **(QEMU only)** `hvm-cli decrypt / rekey / encrypt-status` 子命令 + `hvm-cli status` 适配加密 VM | 1 天 | 待开 |
 | **PR-11** | **(QEMU only)** GUI 创建向导加密复选框 + 双密码框 + 启动期密码 modal + 详情页加密区. VZ 路径推后 | 3 天 | 待开 |
 | **PR-12** | 文档同步: 现状回写 v1 (新建 SECURITY.md / 改 STORAGE.md / VM_BUNDLE.md / CLI.md / GUI.md) + 约束回写 CLAUDE.md "加密约束" 节 + 本稿状态改 "代码已合入" | 1 天 | 待开 |
 
