@@ -77,6 +77,13 @@ SOCKET_VMNET="$(find_socket_vmnet)" || {
 EOF
     exit 1
 }
+# 路径白名单: 后续要直拼进 plist heredoc, 含 <>& 等 XML 特殊字符会破 plist 格式.
+# brew 路径正常情况下 ASCII + /._- , 这里 fail-fast 而不是生成损坏 plist 让 launchd 拒载.
+if ! [[ "$SOCKET_VMNET" =~ ^[a-zA-Z0-9/._-]+$ ]]; then
+    echo "✗ socket_vmnet 路径含非法字符: '$SOCKET_VMNET'" >&2
+    echo "    仅允许 [a-zA-Z0-9/._-] (防 plist XML 注入)" >&2
+    exit 1
+fi
 echo "==> socket_vmnet 路径: $SOCKET_VMNET"
 
 # 生成单个 daemon plist + load
