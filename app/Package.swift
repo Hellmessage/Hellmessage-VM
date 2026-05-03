@@ -124,5 +124,9 @@ let package = Package(
             name: "HVMQemuTests",
             dependencies: ["HVMQemu", "HVMBundle", "HVMCore"]
         ),
+        .testTarget(
+            name: "HVMScmRecvTests",
+            dependencies: ["HVMScmRecv"]
+        ),
     ]
 )
