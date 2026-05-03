@@ -107,12 +107,27 @@ final class HVMAppDelegate: NSObject, NSApplicationDelegate {
         return .terminateCancel
     }
 
-    /// ACPI 优雅停所有 VM, 10s 超时后 force kill 残留. 在 main actor 跑因为 VMSession 都 @MainActor.
+    /// ACPI 优雅停所有 VM, 10s 超时后 force kill 残留, force kill 后再等 5s 真退.
+    /// 在 main actor 跑因为 VMSession 都 @MainActor.
+    ///
+    /// 修于 v2 P0 #4: 老逻辑 try? 吞错 + forceStop 不等 .stopped, 退出后留孤儿 QEMU/swtpm.
+    /// 现在三阶段:
+    ///   1. requestStop (ACPI), 失败 log warning
+    ///   2. 等 HVMTimeout.gracefulShutdown 内全部进入 .stopped
+    ///   3. 残留 forceStop, 每个再 poll 5s 等真转 .stopped, 超时 log error 报告残留
     private func gracefulShutdownAll() async {
-        let sessions = Array(model.sessions.values)
-        for s in sessions { try? s.requestStop() }
+        let sessions = model.sessions
+        for (id, s) in sessions {
+            do {
+                try s.requestStop()
+            } catch {
+                HVMLog.logger("app.shutdown").warning(
+                    "退出 ACPI requestStop 失败 vm=\(id.uuidString, privacy: .public) err=\(String(describing: error), privacy: .public)"
+                )
+            }
+        }
 
-        // 轮询等所有 VM 进入 stopped 或超 HVMTimeout.gracefulShutdown
+        // 第一阶段: 等所有 VM 进入 stopped 或超 HVMTimeout.gracefulShutdown
         let deadline = Date().addingTimeInterval(HVMTimeout.gracefulShutdown)
         while Date() < deadline {
             let allStopped = model.sessions.values.allSatisfy { $0.state == .stopped }
@@ -120,9 +135,25 @@ final class HVMAppDelegate: NSObject, NSApplicationDelegate {
             try? await Task.sleep(nanoseconds: 200_000_000)  // 200ms
         }
 
-        // 残留 force kill (串行; 残留通常 0-1 个, 不值得为并行绕过 isolation checker)
-        for s in model.sessions.values where s.state != .stopped {
-            try? await s.forceStop()
+        // 第二阶段: 残留 forceStop + 等真退 5s
+        for (id, s) in model.sessions where s.state != .stopped {
+            do {
+                try await s.forceStop()
+            } catch {
+                HVMLog.logger("app.shutdown").error(
+                    "退出 forceStop 失败 vm=\(id.uuidString, privacy: .public) err=\(String(describing: error), privacy: .public)"
+                )
+                continue
+            }
+            let killDeadline = Date().addingTimeInterval(HVMTimeout.forceStopWait)
+            while s.state != .stopped && Date() < killDeadline {
+                try? await Task.sleep(nanoseconds: 100_000_000)  // 100ms
+            }
+            if s.state != .stopped {
+                HVMLog.logger("app.shutdown").error(
+                    "退出 forceStop 后 \(HVMTimeout.forceStopWait, privacy: .public)s VM \(id.uuidString, privacy: .public) (hostPid=\(s.hostPid, privacy: .public)) 仍未停; 可能孤儿子进程, 手动 ps aux | grep -E 'qemu|swtpm'"
+                )
+            }
         }
     }
 

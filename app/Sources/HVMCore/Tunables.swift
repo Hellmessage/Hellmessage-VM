@@ -30,6 +30,10 @@ public enum HVMTimeout {
 
     /// 应用退出时优雅停所有 VM 的总超时. 超时后 force kill 残留.
     public static let gracefulShutdown: TimeInterval = 10
+
+    /// 应用退出时 forceStop 后等 VM 真转 .stopped 的超时.
+    /// 超时后只 log warning + 让用户手动 kill (避免 NSApp.terminate 卡死阻塞 quit).
+    public static let forceStopWait: TimeInterval = 5
 }
 
 /// 截图与缩略图相关参数.

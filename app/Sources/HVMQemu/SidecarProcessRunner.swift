@@ -181,23 +181,39 @@ public final class SidecarProcessRunner: @unchecked Sendable {
         if pid > 0 { _ = kill(pid, SIGTERM) }
     }
 
-    /// SIGKILL. runAsRoot=true 时 SIGKILL 不能被 sudo forward, 子进程会孤儿;
-    /// 兜底先 sudo + pkill -P 杀 sudo 的子进程, 再杀 sudo 自己.
+    /// 强制结束子进程. runAsRoot=true 时 SIGKILL 不能被 sudo forward, 走 pkill -P
+    /// 杀 sudo 的真正 binary 子进程.
+    ///
+    /// 双段杀策略 (修 swtpm NVRAM 腰斩 race, 见 docs/v2/01-P0-immediate.md #3):
+    ///   1. pkill -15 (SIGTERM) 给 swtpm 100ms 关 NVRAM + flush
+    ///   2. pkill -9 (SIGKILL) 兜底
+    ///   3. 最后 process.waitUntilExit 等 sudo wrapper 真退 — 此时 kernel 已 reap
+    ///      子进程, NVRAM fd 已关, 调用方可放心 release lock.
+    /// pkill 命令本身只发信号不等子进程死, 所以 pkill.waitUntilExit 不能保证 swtpm
+    /// 已 reap; 只有 process.waitUntilExit (等 sudo 自己死) 才能.
     public func forceKill() {
         let pid = process.processIdentifier
         guard pid > 0 else { return }
         if config.runAsRoot {
-            // pkill -P <sudo-pid>: 杀 sudo 的所有子进程 (即真正的 sidecar binary)
-            // 走 sudo 让 root 子进程也能被杀
-            let pkill = Process()
-            pkill.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-            pkill.arguments = ["-n", "/usr/bin/pkill", "-9", "-P", "\(pid)"]
-            pkill.standardOutput = FileHandle(forWritingAtPath: "/dev/null")
-            pkill.standardError = FileHandle(forWritingAtPath: "/dev/null")
-            try? pkill.run()
-            pkill.waitUntilExit()
+            runSudoPkill(parentPid: pid, signal: 15)
+            usleep(100_000)  // 100ms 让 swtpm 处理 SIGTERM (关 NVRAM 文件)
+            runSudoPkill(parentPid: pid, signal: 9)
         }
         _ = kill(pid, SIGKILL)
+        // 等 sudo wrapper 真退. 此时 swtpm 已被 kernel reap, NVRAM 写完成或丢弃,
+        // 调用方 lock.release() 后不会再有 swtpm 写一帧腰斩 NVRAM 数据的风险.
+        process.waitUntilExit()
+    }
+
+    /// sudo + pkill -<sig> -P <ppid>: 杀指定父 pid 下的所有子进程.
+    private func runSudoPkill(parentPid: Int32, signal: Int32) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+        p.arguments = ["-n", "/usr/bin/pkill", "-\(signal)", "-P", "\(parentPid)"]
+        p.standardOutput = FileHandle(forWritingAtPath: "/dev/null")
+        p.standardError = FileHandle(forWritingAtPath: "/dev/null")
+        try? p.run()
+        p.waitUntilExit()
     }
 
     /// 阻塞等到子进程结束 (主要用于测试).
