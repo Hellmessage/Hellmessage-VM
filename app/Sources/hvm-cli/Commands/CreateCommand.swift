@@ -22,7 +22,7 @@ struct CreateCommand: AsyncParsableCommand {
     var os: String = "linux"
 
     @Option(name: .long, help: "后端引擎: vz | qemu (默认按 guestOS: linux/macOS=vz, windows=qemu)")
-    var engine: String?
+    var engine: Engine?
 
     @Option(name: .long, help: "CPU 核心数")
     var cpu: Int = 4
@@ -78,17 +78,19 @@ struct CreateCommand: AsyncParsableCommand {
                 )
             }
 
-            // engine: 导入时由镜像格式锁定; 否则按 --engine / guestOS 默认
+            // engine: 导入时由镜像格式锁定; 否则按 --engine / guestOS 默认.
+            // ArgumentParser 已在解析阶段把非 vz/qemu 的拼写错挡掉, self.engine 只可能是
+            // .vz / .qemu / nil, 这里不再校验字符串.
             let engineValue: Engine
             if let info = importInfo {
                 let inferred: Engine = info.format == .qcow2 ? .qemu : .vz
-                if let raw = self.engine, let user = Engine(rawValue: raw), user != inferred {
-                    throw HVMError.config(.invalidEnum(field: "engine", raw: raw,
+                if let user = self.engine, user != inferred {
+                    throw HVMError.config(.invalidEnum(field: "engine", raw: user.rawValue,
                                                        allowed: ["导入 \(info.format.rawValue) 镜像时 engine 锁定为 \(inferred.rawValue)"]))
                 }
                 engineValue = inferred
             } else {
-                engineValue = try resolveEngine(explicit: self.engine, guestOS: os)
+                engineValue = resolveEngine(explicit: self.engine, guestOS: os)
             }
 
             // OS 分支专属字段校验 (导入分支已在上面处理, 此处只走 ISO/IPSW)
@@ -236,17 +238,10 @@ struct CreateCommand: AsyncParsableCommand {
     }
 
     /// 显式 --engine > 按 guestOS 默认 (linux/macOS=vz, windows=qemu).
+    /// ArgumentParser 已在解析阶段校验 vz/qemu 拼写, explicit 已是 Engine? 不再需要 throw.
     /// 最终结果由 VMConfig.validate() 在 BundleIO.create 入口处再校验一次.
-    private func resolveEngine(explicit: String?, guestOS: GuestOSType) throws -> Engine {
-        if let raw = explicit {
-            guard let v = Engine(rawValue: raw) else {
-                throw HVMError.config(.invalidEnum(
-                    field: "engine", raw: raw,
-                    allowed: Engine.allCases.map { $0.rawValue }
-                ))
-            }
-            return v
-        }
+    private func resolveEngine(explicit: Engine?, guestOS: GuestOSType) -> Engine {
+        if let v = explicit { return v }
         switch guestOS {
         case .linux, .macOS: return .vz
         case .windows:       return .qemu
