@@ -116,6 +116,12 @@ public enum EncryptionError: Error, Sendable {
     case mountpointInUse(path: String)
     /// hdiutil 输出 plist 解析失败 (理论上 hdiutil 有变动才会触发)
     case parseFailed(reason: String)
+    /// master KEK 长度不对 (固定 32 字节 = 256 bit)
+    case invalidKeyLength(got: Int, expected: Int)
+    /// SecRandomCopyBytes 等系统 crypto 调用失败 (用户级几乎不会触发)
+    case randomGenerationFailed(status: Int32)
+    /// PBKDF2 派生失败 (CommonCrypto / CryptoKit 报错)
+    case kdfFailed(reason: String)
 }
 
 // MARK: - Config (手动编辑 config.json 产生的语义错)
@@ -448,6 +454,18 @@ public extension EncryptionError {
         case .parseFailed(let reason):
             return .init(code: HVMErrorCode.encryptionParseFailed.rawValue,
                          message: "hdiutil 输出解析失败",
+                         details: ["reason": reason])
+        case .invalidKeyLength(let got, let expected):
+            return .init(code: HVMErrorCode.encryptionInvalidKeyLength.rawValue,
+                         message: "密钥长度不正确",
+                         details: ["got": "\(got)", "expected": "\(expected)"])
+        case .randomGenerationFailed(let status):
+            return .init(code: HVMErrorCode.encryptionRandomGenerationFailed.rawValue,
+                         message: "系统随机数生成失败",
+                         details: ["status": "\(status)"])
+        case .kdfFailed(let reason):
+            return .init(code: HVMErrorCode.encryptionKdfFailed.rawValue,
+                         message: "密钥派生 (PBKDF2) 失败",
                          details: ["reason": reason])
         }
     }
