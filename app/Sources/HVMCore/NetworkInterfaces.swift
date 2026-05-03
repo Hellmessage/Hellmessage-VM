@@ -68,7 +68,10 @@ public enum HostNetworkInterfaces {
                         let rc = getnameinfo(sap, socklen_t(sap.pointee.sa_len),
                                              &host, socklen_t(host.count),
                                              nil, 0, NI_NUMERICHOST)
-                        return rc == 0 ? String(cString: host) : nil
+                        guard rc == 0 else { return nil }
+                        // CChar → UInt8 + 截首 null. 用 String(decoding:as:) 替 String(cString:) (deprecated)
+                        let utf8 = host.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }
+                        return String(decoding: utf8, as: UTF8.self)
                     }
                 }
                 if entry.ipv4 == nil { entry.ipv4 = ip }
