@@ -117,6 +117,10 @@ let package = Package(
             dependencies: ["HVMDisplay", "HVMBundle", "HVMCore"]
         ),
         .testTarget(
+            name: "HVMDisplayQemuTests",
+            dependencies: ["HVMDisplayQemu", "HVMCore"]
+        ),
+        .testTarget(
             name: "HVMQemuTests",
             dependencies: ["HVMQemu", "HVMBundle", "HVMCore"]
         ),
