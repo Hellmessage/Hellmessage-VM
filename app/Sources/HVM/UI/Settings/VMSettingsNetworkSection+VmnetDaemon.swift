@@ -21,7 +21,7 @@ extension VMSettingsNetworkSection {
                 LabelText("vmnet daemon")
                 HStack(alignment: .top, spacing: HVMSpace.sm) {
                     Image(systemName: missing.isEmpty ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                        .font(.system(size: 11))
+                        .font(HVMFont.small)
                         .foregroundStyle(missing.isEmpty ? HVMColor.statusRunning : HVMColor.statusPaused)
                     VStack(alignment: .leading, spacing: 3) {
                         if missing.isEmpty {
@@ -43,7 +43,7 @@ extension VMSettingsNetworkSection {
                     Button(action: { Task { await installVmnet() } }) {
                         HStack(spacing: 4) {
                             Image(systemName: "lock.shield")
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(HVMFont.label)
                             Text(vmnetBusy ? "正在安装…" : "安装 / 更新 daemon")
                                 .font(HVMFont.caption)
                         }
@@ -54,7 +54,7 @@ extension VMSettingsNetworkSection {
                     Button(action: { Task { await uninstallVmnet() } }) {
                         HStack(spacing: 4) {
                             Image(systemName: "trash")
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(HVMFont.label)
                             Text("卸载全部").font(HVMFont.caption)
                         }
                     }

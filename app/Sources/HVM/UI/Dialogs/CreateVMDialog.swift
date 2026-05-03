@@ -397,7 +397,7 @@ struct CreateVMDialog: View {
         VStack(alignment: .leading, spacing: HVMSpace.xs) {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11))
+                    .font(HVMFont.small)
                     .foregroundStyle(HVMColor.statusPaused)
                 Text("socket_vmnet \(modeLabel) daemon 未就绪")
                     .font(HVMFont.caption.weight(.semibold))
@@ -451,9 +451,9 @@ struct CreateVMDialog: View {
     @ViewBuilder
     private func osChip(_ label: String, selected: Bool, disabled: Bool = false) -> some View {
         Text(label)
-            .font(.system(size: 12, weight: .medium))
+            .font(HVMFont.captionMedium)
             .padding(.horizontal, HVMSpace.md)
-            .padding(.vertical, 7)
+            .padding(.vertical, HVMSpace.buttonPadV7)
             .frame(maxWidth: .infinity)
             .foregroundStyle(disabled
                              ? HVMColor.textTertiary
@@ -491,7 +491,7 @@ struct CreateVMDialog: View {
             if let info = importDiskInfo {
                 HStack(spacing: HVMSpace.sm) {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 11))
+                        .font(HVMFont.small)
                         .foregroundStyle(HVMColor.accent)
                     Text("\(info.format.rawValue.uppercased()) · 虚拟容量 \(info.virtualSizeGiB) GiB · 后端将固定为 \(info.format == .qcow2 ? "QEMU" : "VZ")")
                         .font(HVMFont.small)
@@ -504,7 +504,7 @@ struct CreateVMDialog: View {
             } else if let err = importDiskError {
                 HStack(alignment: .top, spacing: HVMSpace.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11))
+                        .font(HVMFont.small)
                         .foregroundStyle(HVMColor.statusPaused)
                     Text(err)
                         .font(HVMFont.small)
@@ -598,7 +598,7 @@ struct CreateVMDialog: View {
                     } label: {
                         HStack(spacing: HVMSpace.sm) {
                             Image(systemName: ipswPath == item.path ? "checkmark.circle.fill" : "circle")
-                                .font(.system(size: 12))
+                                .font(HVMFont.caption)
                                 .foregroundStyle(ipswPath == item.path ? HVMColor.accent : HVMColor.textTertiary)
                             Text(item.buildVersion)
                                 .font(HVMFont.bodyBold)
@@ -615,7 +615,7 @@ struct CreateVMDialog: View {
                                 .truncationMode(.middle)
                         }
                         .padding(.horizontal, HVMSpace.sm)
-                        .padding(.vertical, 7)
+                        .padding(.vertical, HVMSpace.buttonPadV7)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                     }

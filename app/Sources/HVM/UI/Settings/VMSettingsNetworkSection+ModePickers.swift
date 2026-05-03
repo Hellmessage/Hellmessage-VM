@@ -17,7 +17,7 @@ extension VMSettingsNetworkSection {
                 HStack {
                     Image(systemName: modeIcon(current))
                         .foregroundStyle(modeColor(current))
-                        .font(.system(size: 12))
+                        .font(HVMFont.caption)
                     Text(displayName(of: current))
                         .foregroundStyle(HVMColor.textPrimary)
                         .font(HVMFont.caption.weight(.medium))
@@ -27,7 +27,7 @@ extension VMSettingsNetworkSection {
                     Spacer()
                     Image(systemName: isOpen ? "chevron.up" : "chevron.down")
                         .foregroundStyle(HVMColor.textTertiary)
-                        .font(.system(size: 10))
+                        .font(HVMFont.tiny)
                 }
                 .padding(.horizontal, HVMSpace.md).padding(.vertical, HVMSpace.sm)
                 .background(RoundedRectangle(cornerRadius: HVMRadius.md).fill(HVMColor.bgCardHi))
@@ -42,10 +42,10 @@ extension VMSettingsNetworkSection {
                     modeOption(.vmnetShared,  title: "vmnet · shared",    subtitle: "NAT + DHCP (socket_vmnet 默认模式)",            current: current, idx: idx)
                     modeOption(.vmnetHost,    title: "vmnet · host-only", subtitle: "仅宿主机互通, 无外网",                          current: current, idx: idx)
                     modeOption(.vmnetBridged, title: "vmnet · bridged",   subtitle: "真二层桥接, 获取同局域网 IP",                    current: current, idx: idx)
-                    Rectangle().fill(HVMColor.border).frame(height: 1).padding(.vertical, 2)
+                    Rectangle().fill(HVMColor.border).frame(height: 1).padding(.vertical, HVMSpace.v2)
                     modeOption(.none,         title: "暂时禁用",           subtitle: "保留配置, 启动时不挂这块 NIC",                   current: current, idx: idx)
                 }
-                .padding(6)
+                .padding(HVMSpace.buttonPadV6)
                 .background(RoundedRectangle(cornerRadius: HVMRadius.md).fill(HVMColor.bgCard))
                 .overlay(RoundedRectangle(cornerRadius: HVMRadius.md).stroke(HVMColor.border, lineWidth: 1))
             }
@@ -62,10 +62,10 @@ extension VMSettingsNetworkSection {
         }) {
             HStack(spacing: 10) {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 13))
+                    .font(HVMFont.body)
                     .foregroundStyle(selected ? HVMColor.accent : HVMColor.textTertiary)
                 Image(systemName: modeIcon(mode))
-                    .font(.system(size: 11))
+                    .font(HVMFont.small)
                     .foregroundStyle(selected ? modeColor(mode) : HVMColor.textTertiary)
                     .frame(width: 14)
                 VStack(alignment: .leading, spacing: 1) {
@@ -78,7 +78,7 @@ extension VMSettingsNetworkSection {
                 }
                 Spacer()
             }
-            .padding(.horizontal, HVMSpace.sm + 2).padding(.vertical, 7)
+            .padding(.horizontal, HVMSpace.sm + 2).padding(.vertical, HVMSpace.buttonPadV7)
             .background(RoundedRectangle(cornerRadius: HVMRadius.sm)
                 .fill(selected ? HVMColor.accentMuted : Color.clear))
             .contentShape(Rectangle())
@@ -112,14 +112,14 @@ extension VMSettingsNetworkSection {
                 HStack {
                     Image(systemName: "antenna.radiowaves.left.and.right")
                         .foregroundStyle(HVMColor.accent)
-                        .font(.system(size: 12))
+                        .font(HVMFont.caption)
                     Text(labelFor(iface: current, among: ifaces))
                         .foregroundStyle(HVMColor.textPrimary)
                         .font(HVMFont.caption.weight(.medium))
                     Spacer()
                     Image(systemName: isOpen ? "chevron.up" : "chevron.down")
                         .foregroundStyle(HVMColor.textTertiary)
-                        .font(.system(size: 10))
+                        .font(HVMFont.tiny)
                 }
                 .padding(.horizontal, HVMSpace.md).padding(.vertical, HVMSpace.sm)
                 .background(RoundedRectangle(cornerRadius: HVMRadius.md).fill(HVMColor.bgCardHi))
@@ -135,14 +135,14 @@ extension VMSettingsNetworkSection {
                             .font(HVMFont.small)
                             .foregroundStyle(HVMColor.textTertiary)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, HVMSpace.sm + 2).padding(.vertical, 6)
+                            .padding(.horizontal, HVMSpace.sm + 2).padding(.vertical, HVMSpace.buttonPadV6)
                     } else {
                         ForEach(ifaces, id: \.id) { iface in
                             ifaceOption(iface, current: current, idx: idx)
                         }
                     }
                 }
-                .padding(6)
+                .padding(HVMSpace.buttonPadV6)
                 .background(RoundedRectangle(cornerRadius: HVMRadius.md).fill(HVMColor.bgCard))
                 .overlay(RoundedRectangle(cornerRadius: HVMRadius.md).stroke(HVMColor.border, lineWidth: 1))
             }
@@ -158,13 +158,13 @@ extension VMSettingsNetworkSection {
         }) {
             HStack(spacing: HVMSpace.sm) {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 12))
+                    .font(HVMFont.caption)
                     .foregroundStyle(selected ? HVMColor.accent : HVMColor.textTertiary)
                 Circle()
                     .fill(iface.isActive ? HVMColor.statusRunning : HVMColor.textTertiary)
                     .frame(width: 6, height: 6)
                 Text(iface.name)
-                    .font(.system(size: 12, weight: selected ? .semibold : .regular, design: .monospaced))
+                    .font(HVMFont.mono.weight(selected ? .semibold : .regular))
                     .foregroundStyle(selected ? HVMColor.textPrimary : HVMColor.textSecondary)
                 if let ip = iface.ipv4 {
                     Text(ip)
@@ -177,7 +177,7 @@ extension VMSettingsNetworkSection {
                 }
                 Spacer()
             }
-            .padding(.horizontal, HVMSpace.sm + 2).padding(.vertical, 6)
+            .padding(.horizontal, HVMSpace.sm + 2).padding(.vertical, HVMSpace.buttonPadV6)
             .background(RoundedRectangle(cornerRadius: HVMRadius.sm)
                 .fill(selected ? HVMColor.accentMuted : Color.clear))
             .contentShape(Rectangle())

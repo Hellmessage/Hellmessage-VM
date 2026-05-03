@@ -252,7 +252,7 @@ struct StoppedContentView: View {
                 Button(action: installAction) {
                     HStack(spacing: 6) {
                         Image(systemName: "arrow.down.circle.fill")
-                            .font(.system(size: 12))
+                            .font(HVMFont.caption)
                         Text("Install")
                     }
                 }
@@ -264,7 +264,7 @@ struct StoppedContentView: View {
                 Button(action: startAction) {
                     HStack(spacing: 6) {
                         Image(systemName: "play.fill")
-                            .font(.system(size: 11))
+                            .font(HVMFont.small)
                         Text("Start")
                     }
                 }
@@ -393,7 +393,7 @@ struct StoppedContentView: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "plus")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(HVMFont.label)
                     Text("Add Disk")
                 }
             }
@@ -450,7 +450,7 @@ struct StoppedContentView: View {
             }
         }
         .padding(.horizontal, HVMSpace.md)
-        .padding(.vertical, 9)
+        .padding(.vertical, HVMSpace.rowV9)
     }
 
     private func diskID(for disk: DiskSpec) -> String {
@@ -524,7 +524,7 @@ struct StoppedContentView: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "plus")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(HVMFont.label)
                     Text("New Snapshot")
                 }
             }
@@ -545,7 +545,7 @@ struct StoppedContentView: View {
                 Spacer()
             }
             .padding(.horizontal, HVMSpace.md)
-            .padding(.vertical, 12)
+            .padding(.vertical, HVMSpace.rowV12)
         }
     }
 
@@ -573,7 +573,7 @@ struct StoppedContentView: View {
                         .help("删除此快照")
                 }
                 .padding(.horizontal, HVMSpace.md)
-                .padding(.vertical, 9)
+                .padding(.vertical, HVMSpace.rowV9)
             }
         }
     }
@@ -668,7 +668,7 @@ struct StoppedContentView: View {
                 }
             }
             .padding(.horizontal, HVMSpace.md)
-            .padding(.vertical, 9)
+            .padding(.vertical, HVMSpace.rowV9)
         }
     }
 
@@ -882,7 +882,7 @@ struct DetailEmptyState: View {
                     .fill(HVMColor.bgCard)
                     .frame(width: 88, height: 88)
                 Image(systemName: "rectangle.stack.fill")
-                    .font(.system(size: 38, weight: .light))
+                    .font(HVMFont.display)
                     .foregroundStyle(HVMColor.accent)
             }
 
@@ -901,7 +901,7 @@ struct DetailEmptyState: View {
                 Button(action: { model.showCreateWizard = true }) {
                     HStack(spacing: 6) {
                         Image(systemName: "plus")
-                            .font(.system(size: 12, weight: .bold))
+                            .font(HVMFont.captionBold)
                         Text("Create VM")
                     }
                 }
@@ -949,7 +949,7 @@ struct RemoteRunningContentView: View {
                     .fill(HVMColor.bgCard)
                     .frame(width: 88, height: 88)
                 Image(systemName: "play.rectangle.fill")
-                    .font(.system(size: 38, weight: .light))
+                    .font(HVMFont.display)
                     .foregroundStyle(HVMColor.statusRunning)
             }
 

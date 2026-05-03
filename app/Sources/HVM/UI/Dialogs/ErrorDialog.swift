@@ -113,7 +113,7 @@ public struct ErrorDialogOverlay: View {
                         HStack(alignment: .top, spacing: HVMSpace.sm) {
                             Image(systemName: "lightbulb.fill")
                                 .foregroundStyle(HVMColor.accent)
-                                .font(.system(size: 11))
+                                .font(HVMFont.small)
                             Text(hint)
                                 .font(HVMFont.caption)
                                 .foregroundStyle(HVMColor.textSecondary)

@@ -67,7 +67,7 @@ struct SidebarView: View {
             Button(action: { model.showCreateWizard = true }) {
                 HStack(spacing: 4) {
                     Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(HVMFont.smallEm)
                     Text("Create VM")
                 }
             }

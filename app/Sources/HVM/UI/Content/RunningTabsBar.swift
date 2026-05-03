@@ -58,7 +58,7 @@ private struct Tab: View {
                 .frame(maxWidth: 140, alignment: .leading)
             Button(action: onClose) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(HVMFont.microEm)
                     .foregroundStyle(closeHover ? HVMColor.danger : HVMColor.textTertiary)
                     .frame(width: 16, height: 16)
                     .background(
@@ -72,7 +72,7 @@ private struct Tab: View {
             .help("Stop this VM")
         }
         .padding(.horizontal, HVMSpace.sm)
-        .padding(.vertical, 5)
+        .padding(.vertical, HVMSpace.buttonPadV5)
         .background(
             RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
                 .fill(isSelected ? HVMColor.bgSelected

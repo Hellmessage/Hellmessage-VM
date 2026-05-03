@@ -41,7 +41,7 @@ struct VMSettingsNetworkSection: View {
                     Button(action: { addNIC() }) {
                         HStack(spacing: 4) {
                             Image(systemName: "plus")
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(HVMFont.label)
                             Text("添加网卡").font(HVMFont.caption)
                         }
                     }

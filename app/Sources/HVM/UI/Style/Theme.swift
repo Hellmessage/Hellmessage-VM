@@ -56,6 +56,16 @@ public enum HVMColor {
     public static let statMemory  = Color(red: 0.690, green: 0.510, blue: 1.000)    // 紫
     public static let statDisk    = Color(red: 1.000, green: 0.745, blue: 0.176)    // 琥珀
     public static let statNetwork = Color(red: 0.204, green: 0.780, blue: 0.349)    // 绿
+
+    // Guest OS 配色 (CreateVMDialog / GuestIcon 用)
+    public static let guestLinuxAccent   = Color(red: 0.95, green: 0.65, blue: 0.20)  // 暖橙
+    public static let guestMacOSAccent   = Color(red: 0.85, green: 0.88, blue: 0.94)  // 银白
+    public static let guestWindowsAccent = Color(red: 0.302, green: 0.616, blue: 1.00) // 蓝 (= accent)
+
+    // Detached 窗口 macOS 风红黄绿圆按钮配色
+    public static let windowClose = Color(red: 1.00, green: 0.37, blue: 0.36)
+    public static let windowMin   = Color(red: 1.00, green: 0.74, blue: 0.18)
+    public static let windowZoom  = Color(red: 0.16, green: 0.79, blue: 0.27)
 }
 
 public enum HVMSpace {
@@ -65,6 +75,23 @@ public enum HVMSpace {
     public static let lg: CGFloat = 16
     public static let xl: CGFloat = 24
     public static let xxl: CGFloat = 32
+
+    // Button vertical padding (Buttons.swift 五种 ButtonStyle 用; 命名跟 size 走避免漂移)
+    public static let buttonPadV5: CGFloat  = 5
+    public static let buttonPadV6: CGFloat  = 6
+    public static let buttonPadV7: CGFloat  = 7
+    public static let buttonPadV10: CGFloat = 10
+
+    // Row vertical padding (DetailBars 详情行 / Settings list row)
+    public static let rowV9: CGFloat  = 9
+    public static let rowV12: CGFloat = 12
+
+    // 微间距 (badge inner, dropdown chip 等)
+    public static let v2: CGFloat = 2
+
+    // Popover / Toolbar 专用 (MenuPopoverView / Toolbar)
+    public static let popoverH14: CGFloat = 14
+    public static let popoverV28: CGFloat = 28
 }
 
 public enum HVMRadius {
@@ -89,19 +116,34 @@ public enum HVMWindow {
 /// 字体. 主语言 SF Pro, mono 限定值 (路径 / ID / MAC / 命令)
 public enum HVMFont {
     // proportional (主导)
+    public static let display = Font.system(size: 38, weight: .light)        // 大数字 (DetailBars 空状态)
+    public static let bigRegular = Font.system(size: 22)                     // MenuPopoverView 顶部 emoji
     public static let hero    = Font.system(size: 22, weight: .semibold)
     public static let title   = Font.system(size: 16, weight: .semibold)
-    public static let heading = Font.system(size: 14, weight: .semibold)
-    public static let body       = Font.system(size: 13)
-    public static let bodyBold   = Font.system(size: 13, weight: .semibold)
-    public static let caption    = Font.system(size: 12)
-    public static let small      = Font.system(size: 11)
-    public static let label      = Font.system(size: 10, weight: .semibold)
-    public static let statValue  = Font.system(size: 22, weight: .semibold)
+    public static let headingBold    = Font.system(size: 14, weight: .bold)
+    public static let heading        = Font.system(size: 14, weight: .semibold)
+    public static let headingRegular = Font.system(size: 14)
+    public static let body          = Font.system(size: 13)
+    public static let bodyMedium    = Font.system(size: 13, weight: .medium)
+    public static let bodyBold      = Font.system(size: 13, weight: .semibold)
+    public static let caption       = Font.system(size: 12)
+    public static let captionMedium = Font.system(size: 12, weight: .medium)
+    public static let captionEm     = Font.system(size: 12, weight: .semibold)
+    public static let captionBold   = Font.system(size: 12, weight: .bold)
+    public static let small         = Font.system(size: 11)
+    public static let smallEm       = Font.system(size: 11, weight: .semibold)
+    public static let smallBold     = Font.system(size: 11, weight: .bold)
+    public static let tiny          = Font.system(size: 10)
+    public static let label         = Font.system(size: 10, weight: .semibold)
+    public static let micro         = Font.system(size: 9)
+    public static let microEm       = Font.system(size: 9, weight: .semibold)
+    public static let microBold     = Font.system(size: 8, weight: .bold)
+    public static let statValue     = Font.system(size: 22, weight: .semibold)
 
     // mono (仅用于 ID / 路径 / MAC / 命令值)
     public static let mono       = Font.system(size: 12, design: .monospaced)
     public static let monoSmall  = Font.system(size: 11, design: .monospaced)
+    public static let monoBody   = Font.system(size: 13, weight: .bold, design: .monospaced)  // MenuPopover banner
 }
 
 /// 小型 section 标签 (例: "Resources" / "General").

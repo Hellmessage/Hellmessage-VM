@@ -20,23 +20,14 @@ public enum GuestVisual {
     public static func style(for os: GuestOSType) -> GuestStyle {
         switch os {
         case .linux:
-            return GuestStyle(
-                label: "Linux",
-                symbol: "terminal.fill",
-                accent: Color(red: 0.95, green: 0.65, blue: 0.20)   // 暖橙
-            )
+            return GuestStyle(label: "Linux", symbol: "terminal.fill",
+                              accent: HVMColor.guestLinuxAccent)
         case .macOS:
-            return GuestStyle(
-                label: "macOS",
-                symbol: "apple.logo",
-                accent: Color(red: 0.85, green: 0.88, blue: 0.94)   // 银白
-            )
+            return GuestStyle(label: "macOS", symbol: "apple.logo",
+                              accent: HVMColor.guestMacOSAccent)
         case .windows:
-            return GuestStyle(
-                label: "Windows",
-                symbol: "macwindow",
-                accent: Color(red: 0.302, green: 0.616, blue: 1.00) // 蓝
-            )
+            return GuestStyle(label: "Windows", symbol: "macwindow",
+                              accent: HVMColor.guestWindowsAccent)
         }
     }
 }
@@ -56,6 +47,8 @@ public struct GuestBadge: View {
         ZStack {
             RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
                 .fill(style.accent.opacity(0.15))
+            // size * 0.50 是动态尺寸 — 父 View 传入 size 决定字号, 不能 token 化.
+            // 这是 token 体系约束的合规例外: 跟随父尺寸的图形渲染.
             Image(systemName: style.symbol)
                 .font(.system(size: size * 0.50, weight: .semibold))
                 .foregroundStyle(style.accent)

@@ -17,11 +17,11 @@ extension VMSettingsNetworkSection {
                     Button(action: { toggleNICExpanded(idx) }) {
                         HStack(spacing: HVMSpace.sm) {
                             Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(HVMFont.label)
                                 .foregroundStyle(HVMColor.textTertiary)
                                 .frame(width: 10)
                             Image(systemName: "network")
-                                .font(.system(size: 12))
+                                .font(HVMFont.caption)
                                 .foregroundStyle(enabled ? HVMColor.accent : HVMColor.textTertiary)
                             Text("NIC \(idx)")
                                 .font(HVMFont.caption.weight(.semibold))
@@ -47,15 +47,15 @@ extension VMSettingsNetworkSection {
 
                     Button(action: { removeNIC(at: idx) }) {
                         Image(systemName: "trash")
-                            .font(.system(size: 11))
+                            .font(HVMFont.small)
                             .foregroundStyle(HVMColor.danger)
-                            .padding(.horizontal, HVMSpace.sm).padding(.vertical, 4)
+                            .padding(.horizontal, HVMSpace.sm).padding(.vertical, HVMSpace.xs)
                             .background(RoundedRectangle(cornerRadius: HVMRadius.sm).fill(HVMColor.danger.opacity(0.10)))
                     }
                     .buttonStyle(.plain)
                     .help("删除此网卡")
                 }
-                .padding(.horizontal, HVMSpace.md).padding(.vertical, 10)
+                .padding(.horizontal, HVMSpace.md).padding(.vertical, HVMSpace.buttonPadV10)
 
                 if expanded {
                     Rectangle().fill(HVMColor.border).frame(height: 1)
@@ -122,11 +122,11 @@ extension VMSettingsNetworkSection {
                     .font(HVMFont.caption.weight(.semibold))
                     .foregroundStyle(selected ? HVMColor.textPrimary : HVMColor.textSecondary)
                 Text(subtitle)
-                    .font(.system(size: 9))
+                    .font(HVMFont.micro)
                     .foregroundStyle(HVMColor.textTertiary)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 7)
+            .padding(.vertical, HVMSpace.buttonPadV7)
             .background(RoundedRectangle(cornerRadius: HVMRadius.sm)
                 .fill(selected ? HVMColor.accentMuted : HVMColor.bgCardHi))
             .overlay(RoundedRectangle(cornerRadius: HVMRadius.sm)
@@ -153,7 +153,7 @@ extension VMSettingsNetworkSection {
                 }) {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(HVMFont.label)
                         Text("重新生成").font(HVMFont.caption)
                     }
                 }

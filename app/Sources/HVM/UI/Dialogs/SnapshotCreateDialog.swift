@@ -77,7 +77,7 @@ struct SnapshotCreateDialog: View {
                                     .foregroundStyle(HVMColor.textTertiary)
                             }
                             .padding(.horizontal, HVMSpace.md)
-                            .padding(.vertical, 7)
+                            .padding(.vertical, HVMSpace.buttonPadV7)
                         }
                     }
                 }

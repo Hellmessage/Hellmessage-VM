@@ -114,7 +114,7 @@ struct OSImagePickerDialog: View {
         } label: {
             HStack(spacing: HVMSpace.md) {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 13))
+                    .font(HVMFont.body)
                     .foregroundStyle(isSelected ? HVMColor.accent : HVMColor.textTertiary)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: HVMSpace.sm) {
@@ -128,8 +128,8 @@ struct OSImagePickerDialog: View {
                             Text("CACHED")
                                 .font(HVMFont.label)
                                 .foregroundStyle(HVMColor.statusRunning)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
+                                .padding(.horizontal, HVMSpace.buttonPadV6)
+                                .padding(.vertical, HVMSpace.v2)
                                 .background(Capsule().fill(HVMColor.statusRunning.opacity(0.15)))
                         }
                         Spacer(minLength: 0)
@@ -149,7 +149,7 @@ struct OSImagePickerDialog: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, HVMSpace.md)
-            .padding(.vertical, 10)
+            .padding(.vertical, HVMSpace.buttonPadV10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .background(isSelected ? HVMColor.bgSelected : Color.clear)

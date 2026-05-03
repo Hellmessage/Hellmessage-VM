@@ -42,7 +42,7 @@ struct DiskResizeDialog: View {
                             .font(HVMFont.body)
                             .foregroundStyle(HVMColor.textPrimary)
                             .padding(.horizontal, HVMSpace.md)
-                            .padding(.vertical, 7)
+                            .padding(.vertical, HVMSpace.buttonPadV7)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(
                                 RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)

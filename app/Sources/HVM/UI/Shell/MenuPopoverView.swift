@@ -37,40 +37,42 @@ struct MenuPopoverView: View {
     private var header: some View {
         HStack {
             Text("HVM")
-                .font(.system(size: 13, weight: .bold, design: .monospaced))
-                .foregroundStyle(Color.green)
+                .font(HVMFont.monoBody)
+                .foregroundStyle(HVMColor.statusRunning)
             Text("//\(rows.count) running")
-                .font(.system(size: 11, design: .monospaced))
+                .font(HVMFont.monoSmall)
                 .foregroundStyle(.secondary)
             Spacer()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, HVMSpace.popoverH14)
+        .padding(.vertical, HVMSpace.buttonPadV10)
     }
 
     @ViewBuilder
     private var content: some View {
         if rows.isEmpty {
-            VStack(spacing: 8) {
+            VStack(spacing: HVMSpace.sm) {
                 Image(systemName: "shippingbox")
-                    .font(.system(size: 22))
+                    .font(HVMFont.bigRegular)
                     .foregroundStyle(.secondary)
                 Text("No running VMs")
-                    .font(.system(size: 12))
+                    .font(HVMFont.caption)
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 28)
+            .padding(.vertical, HVMSpace.popoverV28)
         } else {
             VStack(spacing: 0) {
                 ForEach(rows) { row in
                     VMPopoverRow(row: row)
                     if row.id != rows.last?.id {
+                        // 70 = thumbnail (48) + spacing (12) + 一些缩进, 跟 thumbnail 右沿对齐;
+                        // 是几何对齐而非 token 化间距, 不走 HVMSpace.
                         Divider().padding(.leading, 70)
                     }
                 }
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, HVMSpace.xs)
         }
     }
 
@@ -91,23 +93,23 @@ private struct VMPopoverRow: View {
     var body: some View {
         HStack(spacing: 12) {
             thumbnail
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: HVMSpace.v2) {
                 Text(row.name)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(HVMFont.bodyMedium)
                     .lineLimit(1)
                 Text(row.ip ?? "—")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(HVMFont.monoSmall)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            Spacer(minLength: 4)
+            Spacer(minLength: HVMSpace.xs)
             Circle()
-                .fill(Color.green)
+                .fill(HVMColor.statusRunning)
                 .frame(width: 7, height: 7)
-                .shadow(color: .green.opacity(0.6), radius: 3)
+                .shadow(color: HVMColor.statusRunning.opacity(0.6), radius: 3)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, HVMSpace.popoverH14)
+        .padding(.vertical, HVMSpace.sm)
         .contentShape(Rectangle())
         .background(hovering ? Color.white.opacity(0.06) : Color.clear)
         .onHover { hovering = $0 }
@@ -128,7 +130,7 @@ private struct VMPopoverRow: View {
                 .frame(width: 48, height: 32)
                 .overlay(
                     Image(systemName: "shippingbox")
-                        .font(.system(size: 14))
+                        .font(HVMFont.headingRegular)
                         .foregroundStyle(.secondary)
                 )
         }
@@ -143,7 +145,7 @@ private struct FooterButton: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 12))
+                .font(HVMFont.caption)
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())

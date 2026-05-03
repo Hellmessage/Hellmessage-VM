@@ -13,14 +13,14 @@ struct HVMToolbar: View {
             // 左: 品牌 + breadcrumb
             HStack(spacing: HVMSpace.sm) {
                 Image(systemName: "cube.fill")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(HVMFont.heading)
                     .foregroundStyle(HVMColor.accent)
                 Text("HVM")
-                    .font(.system(size: 14, weight: .bold))
+                    .font(HVMFont.headingBold)
                     .foregroundStyle(HVMColor.textPrimary)
                 if let item = model.selectedItem {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(HVMFont.microEm)
                         .foregroundStyle(HVMColor.textTertiary)
                     Text(item.displayName)
                         .font(HVMFont.body)
@@ -41,7 +41,7 @@ struct HVMToolbar: View {
             Button(action: { model.showCreateWizard = true }) {
                 HStack(spacing: 4) {
                     Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(HVMFont.smallBold)
                     Text("New VM")
                 }
             }

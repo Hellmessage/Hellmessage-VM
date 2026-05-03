@@ -9,10 +9,10 @@ public struct PrimaryButtonStyle: ButtonStyle {
     public init() {}
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .semibold))
+            .font(HVMFont.bodyBold)
             .foregroundStyle(HVMColor.textOnAccent)
             .padding(.horizontal, HVMSpace.lg)
-            .padding(.vertical, 7)
+            .padding(.vertical, HVMSpace.buttonPadV7)
             .background(
                 RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
                     .fill(configuration.isPressed
@@ -30,10 +30,10 @@ public struct GhostButtonStyle: ButtonStyle {
     public init(destructive: Bool = false) { self.destructive = destructive }
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .medium))
+            .font(HVMFont.bodyMedium)
             .foregroundStyle(destructive ? HVMColor.danger : HVMColor.textPrimary)
             .padding(.horizontal, HVMSpace.md)
-            .padding(.vertical, 6)
+            .padding(.vertical, HVMSpace.buttonPadV6)
             .background(
                 RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
                     .fill(configuration.isPressed
@@ -55,7 +55,7 @@ public struct IconButtonStyle: ButtonStyle {
     public init() {}
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12))
+            .font(HVMFont.caption)
             .foregroundStyle(HVMColor.textSecondary)
             .frame(width: 28, height: 28)
             .background(
@@ -71,10 +71,10 @@ public struct HeroCTAStyle: ButtonStyle {
     public init() {}
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 14, weight: .semibold))
+            .font(HVMFont.heading)
             .foregroundStyle(HVMColor.textOnAccent)
             .padding(.horizontal, HVMSpace.xl)
-            .padding(.vertical, 10)
+            .padding(.vertical, HVMSpace.buttonPadV10)
             .background(
                 RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
                     .fill(configuration.isPressed
@@ -90,10 +90,10 @@ public struct PillAccentButtonStyle: ButtonStyle {
     public init() {}
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12, weight: .semibold))
+            .font(HVMFont.captionEm)
             .foregroundStyle(HVMColor.textOnAccent)
             .padding(.horizontal, HVMSpace.md)
-            .padding(.vertical, 5)
+            .padding(.vertical, HVMSpace.buttonPadV5)
             .background(
                 Capsule().fill(configuration.isPressed
                                ? HVMColor.accent.opacity(0.80)

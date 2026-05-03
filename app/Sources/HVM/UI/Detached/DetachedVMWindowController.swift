@@ -431,9 +431,9 @@ private struct TrafficLights: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            light(color: Color(red: 1.0, green: 0.37, blue: 0.36),  symbol: "xmark", action: onClose)
-            light(color: Color(red: 1.0, green: 0.74, blue: 0.18),  symbol: "minus", action: onMinimize)
-            light(color: Color(red: 0.16, green: 0.79, blue: 0.27), symbol: "plus",  action: onZoom)
+            light(color: HVMColor.windowClose, symbol: "xmark", action: onClose)
+            light(color: HVMColor.windowMin,   symbol: "minus", action: onMinimize)
+            light(color: HVMColor.windowZoom,  symbol: "plus",  action: onZoom)
         }
         .onHover { hovering in
             isHovering = hovering
@@ -451,7 +451,7 @@ private struct TrafficLights: View {
                     )
                 if isHovering {
                     Image(systemName: symbol)
-                        .font(.system(size: 8, weight: .bold))
+                        .font(HVMFont.microBold)
                         .foregroundStyle(Color.black.opacity(0.55))
                 }
             }
