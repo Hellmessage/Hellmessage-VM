@@ -384,14 +384,16 @@ bundle_swtpm() {
     # 去掉 brew 的 ad-hoc 签名, 让 install_name_tool 不被 codesign integrity 拦
     codesign --remove-signature "$bin_dst" 2>/dev/null || true
 
-    # BFS dylib 依赖, 用 tmpfile 当 "已处理" set (避免 cycle / 重复)
-    local processed
-    processed="$(mktemp -t hvm-bundle-deps)"
-    : > "$processed"
-
-    bundle_dylib_deps "$bin_dst" "$lib_dir" "$processed"
-
-    rm -f "$processed"
+    # BFS dylib 依赖, 用 tmpfile 当 "已处理" set (避免 cycle / 重复).
+    # 套 sub-shell + EXIT trap, 异常退也清 tmp (避免反复 make qemu 堆积
+    # /var/folders/.../hvm-bundle-deps.*; 兼容 bash 3.2 — 不用 RETURN trap).
+    (
+        set -euo pipefail
+        processed="$(mktemp -t hvm-bundle-deps)"
+        trap 'rm -f "$processed"' EXIT
+        : > "$processed"
+        bundle_dylib_deps "$bin_dst" "$lib_dir" "$processed"
+    )
 
     # 校验: swtpm 不应再含 /opt/homebrew 路径 (那意味着遗漏)
     local leftover

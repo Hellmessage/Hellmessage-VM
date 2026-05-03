@@ -148,10 +148,11 @@ install_one "host" "${SOCKET_BASE}.host" \
 
 # 桥接: 每个传入的接口起一个 daemon
 for iface in "$@"; do
-    # 过滤参数, 不接受奇怪的字符 (防 shell 注入)
+    # 过滤参数, 不接受奇怪的字符 (防 shell 注入). 之前是 warn + continue,
+    # 但 GUI/CI 调用方拿到 0 退出码会以为安装成功 — 改 fail-fast.
     if ! [[ "$iface" =~ ^[a-zA-Z0-9]+$ ]]; then
-        echo "    ⚠ 跳过非法接口名 '$iface'"
-        continue
+        echo "✗ 非法接口名: '$iface' (仅允许 [a-zA-Z0-9]+, 防 shell 注入)" >&2
+        exit 1
     fi
     echo "==> 安装 bridged (iface=$iface)"
     install_one "bridged.$iface" "${SOCKET_BASE}.bridged.$iface" \

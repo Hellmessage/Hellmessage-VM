@@ -27,6 +27,9 @@ public final class BundleLock {
     private let fd: Int32
     private let bundleURL: URL
     private var released = false
+    /// release() 线程安全保护. deinit 与显式 release 可能并发(Task 持有 + ARC 释放),
+    /// 不加锁会让 close(fd) 跑两次 — macOS close() 行为非幂等,可能 close 别的 fd.
+    private let releaseLock = NSLock()
 
     private static let log = HVMLog.logger("bundle.lock")
 
@@ -79,6 +82,8 @@ public final class BundleLock {
     }
 
     public func release() {
+        releaseLock.lock()
+        defer { releaseLock.unlock() }
         guard !released else { return }
         released = true
         _ = flock(fd, LOCK_UN)
