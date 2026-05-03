@@ -25,20 +25,60 @@ import HVMBackend
 import HVMBundle
 import HVMCore
 import HVMDisplay
+import HVMEncryption
 import HVMIPC
 
 public enum HVMHostEntry {
     @MainActor
-    public static func run(bundlePath: String, embeddedInGUI: Bool = false) -> Never {
+    public static func run(bundlePath: String,
+                           password: String? = nil,
+                           embeddedInGUI: Bool = false) -> Never {
         let bundleURL = URL(fileURLWithPath: bundlePath)
 
-        // 1. 载入 config (共用前置)
+        // 0. 加密形态检测 (不解密, 仅看 routing JSON / sparsebundle 后缀)
+        let encryptionScheme = EncryptedBundleIO.detectScheme(at: bundleURL)
+
+        // 1. 载入 config + 解锁 (按加密形态分流)
         let config: VMConfig
-        do {
-            config = try BundleIO.load(from: bundleURL)
-        } catch {
-            fputs("HVMHost: 加载 bundle 失败: \(error)\n", stderr)
-            exit(3)
+        let unlocked: EncryptedBundleIO.UnlockedHandle?
+
+        switch encryptionScheme {
+        case .none:
+            // 明文 VM
+            unlocked = nil
+            do {
+                config = try BundleIO.load(from: bundleURL)
+            } catch {
+                fputs("HVMHost: 加载 bundle 失败: \(error)\n", stderr)
+                exit(3)
+            }
+
+        case .qemuPerfile:
+            // 加密 QEMU VM: 必须有 password
+            guard let pw = password, !pw.isEmpty else {
+                fputs("HVMHost: 加密 VM 需要密码 (stdin 读到空); hvm-cli / GUI 应已 prompt\n", stderr)
+                exit(40)
+            }
+            do {
+                let handle = try EncryptedBundleIO.unlock(bundlePath: bundleURL, password: pw)
+                unlocked = handle
+                config = handle.config
+            } catch let e as HVMError {
+                fputs("HVMHost: 加密 VM 解锁失败: \(e.userFacing.message) (\(e.userFacing.code))\n", stderr)
+                if case .encryption(.wrongPassword) = e {
+                    exit(41)   // 密码错
+                }
+                exit(42)
+            } catch {
+                fputs("HVMHost: 加密 VM 解锁失败: \(error)\n", stderr)
+                exit(42)
+            }
+
+        case .vzSparsebundle:
+            // VZ 加密接入推后 (v2.4 用户决策); 即使 sparsebundle 存在也不允许直接启动
+            fputs("HVMHost: VZ 加密 VM 启动接入暂未实现 (docs/v3/ENCRYPTION.md v2.4 决定 QEMU 优先);\n", stderr)
+            fputs("  请等 VZ 接入 PR; 或用明文 VM 跑 macOS guest\n", stderr)
+            exit(43)
         }
 
         // 2. 抢锁 (共用前置)
@@ -47,6 +87,7 @@ public enum HVMHostEntry {
             try HVMPaths.ensure(HVMPaths.runDir)
         } catch {
             fputs("HVMHost: 创建 run 目录失败: \(error)\n", stderr)
+            try? unlocked?.close()
             exit(1)
         }
 
@@ -55,9 +96,11 @@ public enum HVMHostEntry {
             lock = try BundleLock(bundleURL: bundleURL, mode: .runtime, socketPath: socketURL.path)
         } catch let e as HVMError {
             fputs("HVMHost: \(e.userFacing.message) (\(e.userFacing.code))\n", stderr)
+            try? unlocked?.close()
             exit(4)
         } catch {
             fputs("HVMHost: 抢锁失败: \(error)\n", stderr)
+            try? unlocked?.close()
             exit(4)
         }
 
@@ -69,9 +112,11 @@ public enum HVMHostEntry {
             QemuHostEntry.run(
                 config: config, bundleURL: bundleURL,
                 lock: lock, socketURL: socketURL, startedAt: startedAt,
-                embeddedInGUI: embeddedInGUI
+                embeddedInGUI: embeddedInGUI,
+                encryptedHandle: unlocked
             )
         case .vz:
+            // VZ 路径明文 VM (加密 VZ 已上面拦下)
             runVZ(
                 config: config, bundleURL: bundleURL,
                 lock: lock, socketURL: socketURL, startedAt: startedAt,

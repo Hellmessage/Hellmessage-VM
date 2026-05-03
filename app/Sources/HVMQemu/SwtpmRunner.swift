@@ -21,14 +21,17 @@ public final class SwtpmRunner: @unchecked Sendable {
 
     private let inner: SidecarProcessRunner
 
-    public init(binary: URL, args: [String], ctrlSocketPath: String, stderrLog: URL? = nil) {
+    public init(binary: URL, args: [String], ctrlSocketPath: String,
+                stderrLog: URL? = nil,
+                stdinHandle: FileHandle? = nil) {
         self.binary = binary
         self.args = args
         self.ctrlSocketPath = ctrlSocketPath
         self.stderrLog = stderrLog
         self.inner = SidecarProcessRunner(config: .init(
             binary: binary, args: args, stderrLog: stderrLog,
-            runAsRoot: false, socketPathForReadyWait: ctrlSocketPath
+            runAsRoot: false, socketPathForReadyWait: ctrlSocketPath,
+            stdinHandle: stdinHandle
         ))
     }
 

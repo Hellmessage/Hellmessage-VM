@@ -30,7 +30,7 @@ public final class SidecarProcessRunner: @unchecked Sendable {
         case spawnFailed(reason: String)
     }
 
-    public struct Config: Sendable {
+    public struct Config: @unchecked Sendable {
         /// 真正要跑的 binary 绝对路径. runAsRoot=true 时 sudo 之后 exec 它.
         public let binary: URL
         public let args: [String]
@@ -43,19 +43,25 @@ public final class SidecarProcessRunner: @unchecked Sendable {
         /// 非 nil → waitForSocketReady 会 poll 此路径出现 + 进程未早退;
         /// nil → waitForSocketReady 立即返 false (业务方未提供, 不应调)
         public let socketPathForReadyWait: String?
+        /// 非 nil → 设 process.standardInput = handle (子进程 stdin = fd=0).
+        /// 用于给 swtpm 透传 LUKS 加密 key (HVMEncryption.SwtpmKeyHelper).
+        /// nil → 默认行为 (子进程继承父进程 stdin / 由 Foundation 处理)
+        public let stdinHandle: FileHandle?
 
         public init(
             binary: URL,
             args: [String],
             stderrLog: URL? = nil,
             runAsRoot: Bool = false,
-            socketPathForReadyWait: String? = nil
+            socketPathForReadyWait: String? = nil,
+            stdinHandle: FileHandle? = nil
         ) {
             self.binary = binary
             self.args = args
             self.stderrLog = stderrLog
             self.runAsRoot = runAsRoot
             self.socketPathForReadyWait = socketPathForReadyWait
+            self.stdinHandle = stdinHandle
         }
     }
 
@@ -115,6 +121,10 @@ public final class SidecarProcessRunner: @unchecked Sendable {
         }
         process.standardOutput = FileHandle(forWritingAtPath: "/dev/null")
         process.standardError = stderrPipe
+        // stdin 透传 (swtpm --key fd=0 用): config.stdinHandle 非 nil 时设, 否则默认
+        if let stdin = config.stdinHandle {
+            process.standardInput = stdin
+        }
 
         // stderr 异步 read → 落盘
         stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in

@@ -7,6 +7,7 @@ import Dispatch
 import Foundation
 import HVMBundle
 import HVMCore
+import HVMEncryption
 import HVMStorage
 
 private func pad(_ s: String, _ w: Int) -> String {
@@ -101,6 +102,25 @@ struct ListCommand: AsyncParsableCommand {
         var rows: [Row] = []
         for b in bundles {
             let state = BundleLock.isBusy(bundleURL: b) ? "running" : "stopped"
+            // 加密 VM 没有明文 config.yaml, BundleIO.load 会抛 .notFound. 走 routing JSON
+            // 拿基础信息 (displayName / vmId / scheme); cpu/mem/disk 不解密读不到, 用 0 占位.
+            if EncryptedBundleIO.detectScheme(at: b) != nil {
+                let routingURL = RoutingJSON.locationForQemuBundle(b)
+                if let routing = try? RoutingJSON.read(from: routingURL) {
+                    rows.append(Row(
+                        name: b.deletingPathExtension().lastPathComponent,
+                        id: routing.vmId.uuidString,
+                        guestOS: "encrypted",
+                        state: state,
+                        cpuCount: 0,
+                        memoryMiB: 0,
+                        mainDiskActualGiB: 0,
+                        mainDiskLogicalGiB: 0,
+                        bundlePath: b.path
+                    ))
+                }
+                continue
+            }
             guard let config = try? BundleIO.load(from: b) else { continue }
 
             // 主盘路径走 config.disks (engine-aware), 不再用 BundleLayout 常量推断

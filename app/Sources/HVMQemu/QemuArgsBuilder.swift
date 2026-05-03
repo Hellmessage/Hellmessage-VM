@@ -70,6 +70,15 @@ public enum QemuArgsBuilder {
         /// guest-exec JSON 跑 PowerShell / cmd, 是 hvm-dbg exec-guest 的底层通路.
         public let qgaSocketPath: String?
 
+        // ---- 加密 (qemu-perfile, docs/v3/ENCRYPTION.md v2.4) ----
+        /// 加密 LUKS qcow2 主盘 / 数据盘的 secret 文件路径 (base64 ASCII passphrase).
+        /// 由 LuksSecretFile 创建 (0o600 + base64 binary key). 启动后调用方立即 unlink.
+        /// nil → 走明文 disks 路径 (现状行为, 不变).
+        public let qemuDiskSecretPath: String?
+        /// 加密 OVMF VARS 的 secret 文件路径. 仅 windows + qemuPerfile 加密时非 nil.
+        /// nil → 走明文 efi-vars.fd raw (现状行为).
+        public let qemuNvramSecretPath: String?
+
         public init(
             config: VMConfig,
             bundleURL: URL,
@@ -83,7 +92,9 @@ public enum QemuArgsBuilder {
             qmpInputSocketPath: String? = nil,
             vdagentSocketPath: String? = nil,
             utmGuestToolsISOPath: String? = nil,
-            qgaSocketPath: String? = nil
+            qgaSocketPath: String? = nil,
+            qemuDiskSecretPath: String? = nil,
+            qemuNvramSecretPath: String? = nil
         ) {
             self.config = config
             self.bundleURL = bundleURL
@@ -98,6 +109,8 @@ public enum QemuArgsBuilder {
             self.vdagentSocketPath = vdagentSocketPath
             self.utmGuestToolsISOPath = utmGuestToolsISOPath
             self.qgaSocketPath = qgaSocketPath
+            self.qemuDiskSecretPath = qemuDiskSecretPath
+            self.qemuNvramSecretPath = qemuNvramSecretPath
         }
     }
 
@@ -174,10 +187,20 @@ public enum QemuArgsBuilder {
         case .linux:
             args += ["-bios", stockEdk2]
         case .windows:
-            // RW vars (vars 文件由 BundleLayout.nvramURL 持久化)
-            let nvramPath = inputs.bundleURL.appendingPathComponent("nvram/efi-vars.fd").path
             args += ["-drive", "if=pflash,format=raw,readonly=on,file=\(win11Edk2)"]
-            args += ["-drive", "if=pflash,format=raw,file=\(nvramPath)"]
+            // RW vars: 加密 (qemu-perfile) 走 LUKS qcow2; 明文走 raw efi-vars.fd
+            if let nvramSecret = inputs.qemuNvramSecretPath {
+                let nvramPath = inputs.bundleURL
+                    .appendingPathComponent("\(BundleLayout.nvramDirName)/\(BundleLayout.nvramLuksFileName)").path
+                args += ["-object",
+                         "secret,id=sec_nvram,file=\(nvramSecret),format=raw"]
+                args += ["-drive",
+                         "if=pflash,format=qcow2,file=\(nvramPath),encrypt.format=luks,encrypt.key-secret=sec_nvram"]
+            } else {
+                let nvramPath = inputs.bundleURL
+                    .appendingPathComponent("\(BundleLayout.nvramDirName)/\(BundleLayout.nvramFileName)").path
+                args += ["-drive", "if=pflash,format=raw,file=\(nvramPath)"]
+            }
         case .macOS:
             // 上面已 throw, 此处仅穷尽 switch
             break
@@ -197,10 +220,21 @@ public enum QemuArgsBuilder {
         //   Windows: -drive if=none + -device nvme (Win11 ARM PE 内置 NVMe 驱动, 装机器直接看见盘.
         //            virtio-blk 在 PE 阶段需要手动加载 viostor.inf, 体验差; hell-vm 已验证 NVMe 路线.)
         //   Linux:   -drive if=virtio (内核 virtio-blk 驱动稳, 不切换避免回归)
+        // 加密 disks 时一次性注入 sec_disk secret object (所有 disks 共用同一 sub key,
+        // HKDF 派生时统一走 qcow2-disk info; QcowLuksFactory 创建时也统一用此 key).
+        // 仅当至少有一块 qcow2 disk 时才 emit (raw disk 不走 LUKS).
+        if let diskSecret = inputs.qemuDiskSecretPath,
+           cfg.disks.contains(where: { $0.format == .qcow2 }) {
+            args += ["-object", "secret,id=sec_disk,file=\(diskSecret),format=raw"]
+        }
         for (idx, disk) in cfg.disks.enumerated() {
             let pathStr = inputs.bundleURL.appendingPathComponent(disk.path).path
             let driveId = "disk\(idx)"
+            // 基础 spec: 加密 qcow2 加 encrypt.format=luks,encrypt.key-secret=sec_disk
             var spec = "file=\(pathStr),id=\(driveId),format=\(disk.format.rawValue),cache=none"
+            if let _ = inputs.qemuDiskSecretPath, disk.format == .qcow2 {
+                spec += ",encrypt.format=luks,encrypt.key-secret=sec_disk"
+            }
             if disk.readOnly {
                 spec += ",readonly=on"
             }

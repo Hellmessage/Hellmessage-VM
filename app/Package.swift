@@ -83,13 +83,14 @@ let package = Package(
         // 可执行 target
         .executableTarget(
             name: "HVM",
-            dependencies: ["HVMBackend", "HVMInstall", "HVMIPC", "HVMDisplay", "HVMStorage", "HVMQemu", "HVMDisplayQemu", "HVMUtils"]
+            dependencies: ["HVMBackend", "HVMInstall", "HVMIPC", "HVMDisplay", "HVMStorage", "HVMQemu", "HVMDisplayQemu", "HVMUtils", "HVMEncryption"]
         ),
         .executableTarget(
             name: "hvm-cli",
             dependencies: [
                 "HVMCore", "HVMBundle", "HVMStorage", "HVMNet",
                 "HVMBackend", "HVMInstall", "HVMIPC", "HVMQemu", "HVMUtils",
+                "HVMEncryption",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),

@@ -13,12 +13,14 @@
 //   - 退出码语义与 VZ 路径一致 (3=load, 4=lock; 20+ 是 QEMU 特有)
 
 import AppKit
+import CryptoKit
 import Foundation
 import HVMBackend
 import HVMBundle
 import HVMCore
 import HVMDisplay
 import HVMDisplayQemu
+import HVMEncryption
 import HVMInstall
 import HVMIPC
 import HVMQemu
@@ -32,7 +34,8 @@ public enum QemuHostEntry {
         lock: BundleLock,
         socketURL: URL,
         startedAt: Date,
-        embeddedInGUI: Bool = false
+        embeddedInGUI: Bool = false,
+        encryptedHandle: EncryptedBundleIO.UnlockedHandle? = nil
     ) -> Never {
         // 1. 路径解析
         let qemuRoot: URL
@@ -63,25 +66,39 @@ public enum QemuHostEntry {
             }
             // 2.1 NVRAM (Win 双 pflash 必需 RW vars 文件); 不存在则从 EDK2 vars 模板初始化一次.
             // 老 bundle (本特性前创建) 没初始化 nvram, 这里兜底; 新 bundle 创建时 CreateVMDialog 也会预置.
-            let nvramURL = BundleLayout.nvramURL(bundleURL)
-            if !FileManager.default.fileExists(atPath: nvramURL.path) {
-                let varsTemplate = qemuRoot.appendingPathComponent("share/qemu/edk2-aarch64-vars.fd")
-                guard FileManager.default.fileExists(atPath: varsTemplate.path) else {
-                    fputs("HVMHost(qemu): ✗ 缺 EDK2 vars 模板: \(varsTemplate.path); 请重新 make qemu\n", stderr)
+            // 加密 / 明文 走不同 NVRAM 路径:
+            //   加密: nvram/efi-vars.qcow2 (LUKS qcow2). 由 CreateVMDialog / CLI create
+            //         在 EncryptedBundleIO.create 后调 OVMFVarsLuksFactory.create 创建.
+            //   明文: nvram/efi-vars.fd (raw). 这里兜底从模板 copy.
+            if encryptedHandle != nil {
+                let luksNvramURL = BundleLayout.nvramDir(bundleURL)
+                    .appendingPathComponent(BundleLayout.nvramLuksFileName)
+                guard FileManager.default.fileExists(atPath: luksNvramURL.path) else {
+                    fputs("HVMHost(qemu): ✗ 加密 VM 缺 LUKS NVRAM (\(luksNvramURL.path)); 创建时应已生成\n", stderr)
                     lock.release()
-                    exit(24)
+                    exit(26)
                 }
-                do {
-                    try FileManager.default.createDirectory(
-                        at: nvramURL.deletingLastPathComponent(),
-                        withIntermediateDirectories: true
-                    )
-                    try FileManager.default.copyItem(at: varsTemplate, to: nvramURL)
-                    fputs("HVMHost(qemu): ✔ NVRAM 已初始化 (从 EDK2 vars 模板拷贝): \(nvramURL.path)\n", stderr)
-                } catch {
-                    fputs("HVMHost(qemu): ✗ NVRAM 初始化失败: \(error)\n", stderr)
-                    lock.release()
-                    exit(25)
+            } else {
+                let nvramURL = BundleLayout.nvramURL(bundleURL)
+                if !FileManager.default.fileExists(atPath: nvramURL.path) {
+                    let varsTemplate = qemuRoot.appendingPathComponent("share/qemu/edk2-aarch64-vars.fd")
+                    guard FileManager.default.fileExists(atPath: varsTemplate.path) else {
+                        fputs("HVMHost(qemu): ✗ 缺 EDK2 vars 模板: \(varsTemplate.path); 请重新 make qemu\n", stderr)
+                        lock.release()
+                        exit(24)
+                    }
+                    do {
+                        try FileManager.default.createDirectory(
+                            at: nvramURL.deletingLastPathComponent(),
+                            withIntermediateDirectories: true
+                        )
+                        try FileManager.default.copyItem(at: varsTemplate, to: nvramURL)
+                        fputs("HVMHost(qemu): ✔ NVRAM 已初始化 (从 EDK2 vars 模板拷贝): \(nvramURL.path)\n", stderr)
+                    } catch {
+                        fputs("HVMHost(qemu): ✗ NVRAM 初始化失败: \(error)\n", stderr)
+                        lock.release()
+                        exit(25)
+                    }
                 }
             }
         }
@@ -89,15 +106,23 @@ public enum QemuHostEntry {
         // 3. swtpm sidecar (windows + tpmEnabled). 必须在 QEMU 启动前 listen, 否则 QEMU 连不上.
         // helper 失败路径直接 exit() (内部已 release lock); 成功返非 nil tuple.
         // 立即注册到全局 state, 任何 early-exit 都通过 tearDown 回收 (避免孤儿 swtpm 占 NVRAM lock)
+        // 加密 VM (encryptedHandle != nil) 时, swtpm 走 SwtpmKeyHelper (Pipe 透传 fd=0,
+        // 不落盘) 给 swtpm 注入 32 字节 binary key, swtpm 用此 key AES-256-CBC 加密 NVRAM state.
         var swtpmSockPath: String? = nil
         if config.guestOS == .windows, config.windows?.tpmEnabled == true {
-            let (path, runner) = startSwtpmSidecar(config: config, bundleURL: bundleURL, lock: lock)
+            let swtpmKey = encryptedHandle?.qemuSubKeys?.swtpm
+            let (path, runner, injector) = startSwtpmSidecar(
+                config: config, bundleURL: bundleURL, lock: lock, encryptionKey: swtpmKey
+            )
             swtpmSockPath = path
             QemuHostState.shared.lock = lock
             QemuHostState.shared.bundleURL = bundleURL
             QemuHostState.shared.swtpmRunner = runner
             QemuHostState.shared.swtpmSocketPath = path
+            QemuHostState.shared.swtpmKeyInjector = injector
         }
+        // 加密句柄 (closed by tearDown). VZ-sparsebundle 推后, 这里只 QEMU 路径.
+        QemuHostState.shared.encryptedHandle = encryptedHandle
 
         // 3.5 socket_vmnet 桥接路径已临时下线 (重写中, 切换 hell-vm 风格新方案).
         //     当前 QemuArgsBuilder 收到 .bridged/.shared 直接抛 configInvalid; 仅 .nat 可用.
@@ -156,6 +181,34 @@ public enum QemuHostEntry {
         FSCleanup.removeQuietly(at: vdagentSocketURL,   context: "stale vdagent socket")
         FSCleanup.removeQuietly(at: qgaSocketURL,       context: "stale qga socket")
 
+        // 4.5 加密 disks / nvram secret 文件准备 (启动期 0o600 临时文件, 启动后立即 unlink).
+        // 走公共 LuksSecretFile (binary → base64 ASCII passphrase).
+        var diskSecretFile: LuksSecretFile? = nil
+        var nvramSecretFile: LuksSecretFile? = nil
+        if let subKeys = encryptedHandle?.qemuSubKeys {
+            // 主盘 / 数据盘 (加密 qcow2 LUKS) — 全部共用 qcow2-disk-key
+            if config.disks.contains(where: { $0.format == .qcow2 }) {
+                do {
+                    diskSecretFile = try LuksSecretFile(key: subKeys.qcow2Disk)
+                } catch {
+                    fputs("HVMHost(qemu): ✗ disk secret 准备失败: \(error)\n", stderr)
+                    QemuHostState.shared.tearDown(exitCode: 27)
+                }
+            }
+            // OVMF VARS (Win + 加密)
+            if config.guestOS == .windows {
+                do {
+                    nvramSecretFile = try LuksSecretFile(key: subKeys.qcow2Nvram)
+                } catch {
+                    fputs("HVMHost(qemu): ✗ nvram secret 准备失败: \(error)\n", stderr)
+                    QemuHostState.shared.tearDown(exitCode: 28)
+                }
+            }
+            QemuHostState.shared.diskSecretFile = diskSecretFile
+            QemuHostState.shared.nvramSecretFile = nvramSecretFile
+            fputs("HVMHost(qemu): ✔ 加密 secret 文件就绪 (disk=\(diskSecretFile != nil), nvram=\(nvramSecretFile != nil))\n", stderr)
+        }
+
         let buildResult: QemuArgsBuilder.BuildResult
         do {
             let inputs = QemuArgsBuilder.Inputs(
@@ -169,7 +222,9 @@ public enum QemuHostEntry {
                 qmpInputSocketPath: qmpInputSocketURL.path,
                 vdagentSocketPath: vdagentSocketURL.path,
                 utmGuestToolsISOPath: utmGuestToolsPath,
-                qgaSocketPath: qgaSocketURL.path
+                qgaSocketPath: qgaSocketURL.path,
+                qemuDiskSecretPath: diskSecretFile?.path,
+                qemuNvramSecretPath: nvramSecretFile?.path
             )
             buildResult = try QemuArgsBuilder.build(inputs)
         } catch {
@@ -196,6 +251,17 @@ public enum QemuHostEntry {
             QemuHostState.shared.tearDown(exitCode: 22)
         }
         fputs("HVMHost(qemu): QEMU 已启动 (state=\(runner.state)) bundle=\(bundleURL.lastPathComponent)\n", stderr)
+
+        // 加密 secret 文件: 不能立即 unlink — QEMU 是 lazy 解析 -object secret, file= 形式
+        // 在磁盘 attach 时才读 file. 立即 unlink 会让 QEMU 报 ENOENT.
+        // 退而求其次: NSTemporaryDirectory 是 0o600 + 用户私有 (/var/folders/<user>/T/),
+        // session 结束 OS 清; tearDown 时 deinit 会主动 unlink. 残留窗口 = VM 运行期, 接受.
+        if let dsf = diskSecretFile {
+            fputs("HVMHost(qemu): ✔ disk secret 文件 \(dsf.path) (VM 退出时 unlink)\n", stderr)
+        }
+        if let nsf = nvramSecretFile {
+            fputs("HVMHost(qemu): ✔ nvram secret 文件 \(nsf.path) (VM 退出时 unlink)\n", stderr)
+        }
 
         // 5. NSApp accessory 策略 + 状态栏图标
         let app = NSApplication.shared
@@ -339,13 +405,15 @@ public enum QemuHostEntry {
     }
 
     /// 启动 swtpm sidecar (Win11 TPM 2.0 必需). 失败路径自身 cleanup + exit (Never).
-    /// 成功返 (socket path, runner) 供 QemuArgsBuilder + tearDown 使用.
+    /// 成功返 (socket path, runner, key injector) 供 QemuArgsBuilder + tearDown 使用.
+    /// encryptionKey 非 nil 时走 SwtpmKeyHelper Pipe 透传 fd=0, swtpm AES-256-CBC 加密 NVRAM state.
     @MainActor
     private static func startSwtpmSidecar(
         config: VMConfig,
         bundleURL: URL,
-        lock: BundleLock
-    ) -> (String, SwtpmRunner) {
+        lock: BundleLock,
+        encryptionKey: SymmetricKey? = nil
+    ) -> (String, SwtpmRunner, SwtpmKeyHelper.Injector?) {
         // 1. 定位 swtpm 二进制
         let swtpmBin: URL
         do {
@@ -372,23 +440,46 @@ public enum QemuHostEntry {
         FSCleanup.removeQuietly(atPath: sockPath, context: "stale swtpm socket")
         FSCleanup.removeQuietly(at: pidPath,      context: "stale swtpm pid file")
 
-        // 3. 构造 argv + 启动
-        let swtpmArgs = SwtpmArgsBuilder.build(SwtpmArgsBuilder.Inputs(
+        // 3. 构造 argv + 启动. 加密 VM (encryptionKey != nil) 时 argv 加 `--key fd=0,...`,
+        // SwtpmRunner 通过 stdinHandle 透传 Pipe read 端给 swtpm fd=0; 父进程后续 flush()
+        // 写 32 字节 binary key, swtpm 用此 key AES-256-CBC 加密 NVRAM state.
+        var swtpmArgs = SwtpmArgsBuilder.build(SwtpmArgsBuilder.Inputs(
             stateDir: stateDir,
             ctrlSocketPath: sockPath,
             logFile: logFile,
             pidFile: pidPath
         ))
+        var injector: SwtpmKeyHelper.Injector? = nil
+        var stdinHandle: FileHandle? = nil
+        if let key = encryptionKey {
+            let inj = SwtpmKeyHelper.makeInjector(key: key)
+            swtpmArgs += ["--key", SwtpmKeyHelper.argumentValue]
+            stdinHandle = inj.pipeReadHandle
+            injector = inj
+        }
         let stderrLog = swtpmLogsDir.appendingPathComponent("swtpm-stderr.log")
         try? FileManager.default.removeItem(at: stderrLog)
         let runner = SwtpmRunner(binary: swtpmBin, args: swtpmArgs,
-                                 ctrlSocketPath: sockPath, stderrLog: stderrLog)
+                                 ctrlSocketPath: sockPath, stderrLog: stderrLog,
+                                 stdinHandle: stdinHandle)
         do {
             try runner.start()
         } catch {
             fputs("HVMHost(qemu): ✗ swtpm 启动失败: \(error)\n", stderr)
             lock.release()
             exit(31)
+        }
+        // 启动后立即 flush key 到 swtpm stdin (Pipe write 端写 + close, swtpm 读 EOF 后处理)
+        if let inj = injector {
+            do {
+                try inj.flush()
+                fputs("HVMHost(qemu): ✔ swtpm key 已通过 Pipe stdin 透传 (32B binary, 不落盘)\n", stderr)
+            } catch {
+                fputs("HVMHost(qemu): ✗ swtpm key flush 失败: \(error)\n", stderr)
+                runner.forceKill()
+                lock.release()
+                exit(34)
+            }
         }
 
         // 4. 阻塞等 socket 文件就绪 (swtpm 通常 <500ms; QEMU 比 swtpm 早连会 ECONNREFUSED).
@@ -418,7 +509,7 @@ public enum QemuHostEntry {
             exit(33)
         }
         fputs("HVMHost(qemu): swtpm 已就绪 sock=\(sockPath)\n", stderr)
-        return (sockPath, runner)
+        return (sockPath, runner, injector)
     }
 
     /// QMP 连接重试: bind 与 listen 之间有窗口, 200ms 间隔 backoff;
@@ -488,6 +579,13 @@ final class QemuHostState {
     /// swtpm sidecar (仅 windows + tpmEnabled). nil 表示无 TPM
     var swtpmRunner: SwtpmRunner?
     var swtpmSocketPath: String?
+    /// swtpm 加密 key 注入器 (仅加密 VM); 启动后 flush 一次, 仅持引用防 ARC 释放 Pipe.
+    var swtpmKeyInjector: SwtpmKeyHelper.Injector?
+    /// 加密 VM 解锁句柄. tearDown 时 close 释放 (QEMU 路径 close 是 noop, 兜底).
+    var encryptedHandle: EncryptedBundleIO.UnlockedHandle?
+    /// 加密 disks/nvram secret 文件持引用 (tearDown deinit 兜底 unlink, 启动时已主动 unlink).
+    var diskSecretFile: LuksSecretFile?
+    var nvramSecretFile: LuksSecretFile?
     /// dbg.status 用: 最近一次截图的 sha256 (用于客户端做"画面变没变"轮询)
     var lastFrameSha256: String?
     /// guest serial console 桥接 (-chardev socket); console.read/write 走它
@@ -1198,6 +1296,14 @@ final class QemuHostState {
         if let u = consoleSocketURL {
             try? FileManager.default.removeItem(at: u)
         }
+        // 加密 secret 文件兜底清 (启动后已 unlink, 这里 deinit 时再 unlink 是 noop)
+        diskSecretFile?.cleanup()
+        nvramSecretFile?.cleanup()
+        diskSecretFile = nil
+        nvramSecretFile = nil
+        // 加密句柄 close (QEMU 路径 noop; 仅持引用防 ARC 提前释放)
+        try? encryptedHandle?.close()
+        encryptedHandle = nil
         lock?.release()
         exit(exitCode)
     }

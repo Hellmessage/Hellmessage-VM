@@ -5,6 +5,7 @@ import ArgumentParser
 import Foundation
 import HVMBundle
 import HVMCore
+import HVMEncryption
 import HVMNet
 import HVMQemu
 import HVMStorage
@@ -54,6 +55,9 @@ struct CreateCommand: AsyncParsableCommand {
 
     @Option(name: .long, help: "输出格式: human | json")
     var format: OutputFormat = .human
+
+    @Flag(name: .long, help: "创建加密 VM (强制 engine=qemu, prompt 密码; 跨机器 portable)")
+    var encrypt: Bool = false
 
     func run() async throws {
         do {
@@ -168,29 +172,59 @@ struct CreateCommand: AsyncParsableCommand {
                 windows: os == .windows ? WindowsSpec() : nil
             )
 
-            try BundleIO.create(at: bundleURL, config: config)
-            let qemuImg = mainFormat == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
-            let mainDiskAbs = bundleURL.appendingPathComponent(mainDiskFile)
-            if let info = importInfo, let importPath = importDisk {
-                do {
-                    try DiskFactory.importImage(
-                        from: URL(fileURLWithPath: importPath),
-                        to: mainDiskAbs,
-                        info: info,
-                        targetSizeGiB: effectiveDiskGiB,
+            // ---- 加密分支 (--encrypt; v2.4 仅 QEMU) ----
+            if encrypt {
+                guard engineValue == .qemu else {
+                    throw HVMError.config(.invalidEnum(
+                        field: "encrypt",
+                        raw: "engine=\(engineValue.rawValue)",
+                        allowed: ["仅 QEMU 后端支持加密 (--engine qemu); macOS guest 必走 VZ 无法加密 (v2.4 决策)"]
+                    ))
+                }
+                guard importInfo == nil else {
+                    throw HVMError.config(.invalidEnum(
+                        field: "encrypt",
+                        raw: "import-disk",
+                        allowed: ["加密 VM 暂不支持 --import-disk (导入明文 qcow2 转 LUKS 留 PR-10)"]
+                    ))
+                }
+                let password = try PasswordPrompt.read(
+                    prompt: "为加密 VM \(name) 设置密码: ",
+                    confirm: true,
+                    minLength: 4
+                )
+                try createEncryptedVM(
+                    parentDir: parentDir,
+                    bundleURL: bundleURL,
+                    password: password,
+                    config: config,
+                    sizeGiB: effectiveDiskGiB
+                )
+            } else {
+                try BundleIO.create(at: bundleURL, config: config)
+                let qemuImg = mainFormat == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
+                let mainDiskAbs = bundleURL.appendingPathComponent(mainDiskFile)
+                if let info = importInfo, let importPath = importDisk {
+                    do {
+                        try DiskFactory.importImage(
+                            from: URL(fileURLWithPath: importPath),
+                            to: mainDiskAbs,
+                            info: info,
+                            targetSizeGiB: effectiveDiskGiB,
+                            qemuImg: qemuImg
+                        )
+                    } catch {
+                        try? FileManager.default.removeItem(at: bundleURL)
+                        throw error
+                    }
+                } else {
+                    try DiskFactory.create(
+                        at: mainDiskAbs,
+                        sizeGiB: effectiveDiskGiB,
+                        format: mainFormat,
                         qemuImg: qemuImg
                     )
-                } catch {
-                    try? FileManager.default.removeItem(at: bundleURL)
-                    throw error
                 }
-            } else {
-                try DiskFactory.create(
-                    at: mainDiskAbs,
-                    sizeGiB: effectiveDiskGiB,
-                    format: mainFormat,
-                    qemuImg: qemuImg
-                )
             }
 
             switch format {
@@ -246,6 +280,85 @@ struct CreateCommand: AsyncParsableCommand {
         case .linux, .macOS: return .vz
         case .windows:       return .qemu
         }
+    }
+
+    /// 创建加密 QEMU VM. 走 EncryptedBundleIO.create + QcowLuksFactory + OVMFVarsLuksFactory.
+    /// 失败一律清残留 (handle.deinit 兜底 close).
+    private func createEncryptedVM(parentDir: URL,
+                                    bundleURL: URL,
+                                    password: String,
+                                    config: VMConfig,
+                                    sizeGiB: UInt64) throws {
+        // 1. EncryptedBundleIO.create 创建加密外壳 (config.yaml.enc + meta/encryption.json)
+        let handle = try EncryptedBundleIO.create(
+            parentDir: parentDir,
+            displayName: config.displayName,
+            password: password,
+            baseConfig: config,
+            scheme: .qemuPerfile
+        )
+        guard let subKeys = handle.qemuSubKeys else {
+            try? handle.close()
+            try? FileManager.default.removeItem(at: bundleURL)
+            throw HVMError.encryption(.parseFailed(reason: "EncryptedBundleIO.create 未返子 keys"))
+        }
+
+        // 2. 主盘 LUKS qcow2
+        let qemuImg: URL
+        do {
+            qemuImg = try QemuPaths.qemuImgBinary()
+        } catch {
+            try? handle.close()
+            try? FileManager.default.removeItem(at: bundleURL)
+            throw error
+        }
+        let mainDiskAbs = bundleURL.appendingPathComponent(
+            "\(BundleLayout.disksDirName)/\(BundleLayout.mainDiskFileName(for: .qemu))"
+        )
+        do {
+            try QcowLuksFactory.create(
+                at: mainDiskAbs,
+                sizeBytes: sizeGiB * (1 << 30),
+                key: subKeys.qcow2Disk,
+                qemuImg: qemuImg
+            )
+        } catch {
+            try? handle.close()
+            try? FileManager.default.removeItem(at: bundleURL)
+            throw error
+        }
+
+        // 3. OVMF VARS LUKS (仅 Windows guest)
+        if config.guestOS == .windows {
+            let qemuRoot: URL
+            do {
+                qemuRoot = try QemuPaths.resolveRoot()
+            } catch {
+                try? handle.close()
+                try? FileManager.default.removeItem(at: bundleURL)
+                throw error
+            }
+            let template = qemuRoot.appendingPathComponent("share/qemu/edk2-aarch64-vars.fd")
+            let nvramAbs = BundleLayout.nvramDir(bundleURL)
+                .appendingPathComponent(BundleLayout.nvramLuksFileName)
+            try? FileManager.default.createDirectory(at: BundleLayout.nvramDir(bundleURL),
+                                                       withIntermediateDirectories: true)
+            do {
+                try OVMFVarsLuksFactory.create(
+                    at: nvramAbs,
+                    fromTemplate: template,
+                    key: subKeys.qcow2Nvram,
+                    qemuImg: qemuImg
+                )
+            } catch {
+                try? handle.close()
+                try? FileManager.default.removeItem(at: bundleURL)
+                throw error
+            }
+        }
+
+        // 4. close handle (QEMU 路径 noop, 仅清子 keys 引用)
+        try handle.close()
     }
 
     /// 解析 --network 参数 → (mode, bridgedInterface).

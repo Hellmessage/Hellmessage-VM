@@ -288,14 +288,16 @@ public final class AppModel {
 
     // MARK: - VM 控制
 
-    public func start(_ item: VMListItem) async throws {
+    public func start(_ item: VMListItem, password: String? = nil) async throws {
         if sessions[item.id] != nil { return }
         // QEMU 后端: 派生 HVM 自身二进制走 --host-mode-bundle 入 QemuHostEntry; QEMU 自带 cocoa 窗口,
         // GUI 主窗口不嵌入 (与 VZ 路径区分). stop / kill 走 IPC fallback (见 stop/kill 方法).
+        // 加密 VM (config.encryption.enabled = true) 时调用方应已 prompt password 走 password 参数;
+        // password nil + 加密 VM 启动会因子进程 stdin 读到空而 exit 40.
         if item.config.engine == .qemu {
             // 与子进程 argv 使用同一套路径, 避免 symlink / 简写 导致 .lock 与 isBusy 判在不同 inode 上
             let bundleURL = item.bundleURL.resolvingSymlinksInPath().standardizedFileURL
-            try spawnExternalHost(bundleURL: bundleURL, config: item.config)
+            try spawnExternalHost(bundleURL: bundleURL, config: item.config, password: password)
             // 轮询子进程是否成功拿到 BundleLock (子进程在 HVMHostEntry 入口即抢锁; 冷启动 dyld/首次签名偶发 >5s)
             // 与 QMP 超时同一量级, 留足 bridged + socket_vmnet 起 sidecar 前的余量 (HVMTimeout.hostStartupLockPoll)
             let waitSeconds = HVMTimeout.hostStartupLockPoll
@@ -334,7 +336,7 @@ public final class AppModel {
     /// 子进程进 main.swift if 分支 → HVMHostEntry.run → QemuHostEntry.run.
     /// stdout/stderr 落全局 ~/Library/Application Support/HVM/logs/<displayName>-<uuid8>/host-<date>.log
     /// (与 hvm-cli StartCommand 一致).
-    private func spawnExternalHost(bundleURL: URL, config: VMConfig) throws {
+    private func spawnExternalHost(bundleURL: URL, config: VMConfig, password: String? = nil) throws {
         guard let exec = Bundle.main.executableURL else {
             throw HVMError.backend(.vzInternal(description: "无法定位 HVM.app 二进制"))
         }
@@ -348,7 +350,14 @@ public final class AppModel {
         proc.arguments = ["--host-mode-bundle", bundleURL.path, "--gui-embedded"]
         proc.standardOutput = handle
         proc.standardError = handle
+        // 加密 VM (password 非空) 走 stdin Pipe 透传; 明文 VM (password nil) close stdin EOF.
+        let stdinPipe = Pipe()
+        proc.standardInput = stdinPipe
         try proc.run()
+        if let pw = password, !pw.isEmpty {
+            try? stdinPipe.fileHandleForWriting.write(contentsOf: Data(pw.utf8))
+        }
+        try? stdinPipe.fileHandleForWriting.close()
     }
 
     /// host-<date>.log 路径准备. 与 HostLauncher.makeHostLogURL 等价 (二者属不同模块,
