@@ -1,6 +1,6 @@
 # TODO
 
-整理截至 2026-04-26 之后剩下的事. 按"是否阻塞"+"工程量"排序.
+整理截至 2026-05-03 之后剩下的事. 按"是否阻塞"+"工程量"排序.
 
 > 注: 完整设计沉淀仍在 `docs/QEMU_INTEGRATION.md` / `docs/ROADMAP.md`.
 > 本文件只列**未完成项**, 完成后从这里删除即可.
@@ -22,115 +22,7 @@
 
 ---
 
-## 🟠 中期 (中等工程, 200-500 行)
-
-### M-3 · GUI Snapshot 操作
-- **现状**: CLI 有 `hvm-cli snapshot create/list/restore/delete`; GUI 半成品
-- **要做**: 详情面板 Snapshots 段, 列表 + 创建 dialog (已有 SnapshotCreateDialog 骨架) + 还原确认
-- **工作量**: ~200 行
-
----
-
 ## 🔵 长期 (大工程, > 500 行 或需要重大调研)
-
-### L-1 · QEMU 显示嵌入 HVM 主窗口 ⏳ 进行中 (2026-04-27 启动)
-
-**目标**: QEMU guest 屏幕嵌入主窗口右栏 (跟 VZ HVMView 对齐), 退役独立 `-display cocoa` NSWindow
-
-**方案**: **framebuffer shm + Metal 零拷贝** (非真 virgl GPU 加速)
-- guest: virtio-gpu-pci + ramfb 双 console (Linux 用 virtio_gpu / Win 用 viogpudo, 都只发 framebuffer pixel)
-- QEMU: 自写 `ui/iosurface.m` backend, framebuffer 写到 POSIX shm
-- IPC: AF_UNIX + sendmsg/SCM_RIGHTS 传 shm fd 给 host
-- host: mmap shm + `MTLBuffer(bytesNoCopy:)` + Metal fullscreen shader
-- 输入: QMP `input-send-event` 走独立 input QMP socket (与控制通道分离)
-- 编译: `--disable-cocoa --disable-vnc --disable-sdl --disable-opengl`, 不引 virglrenderer
-
-**为何不走真 virgl GPU 加速**: macOS GL 已 deprecated; Win viogpudo 是 Display-Only 没 GL command stream; framebuffer shm + Metal 对桌面办公已足够流畅, Linux + Win 走同一通路
-
-**参考**: 同作者 hell-vm 已 production 验证, **patch 必须自写**, Swift 侧待定 (见决策点 1)
-
-#### 协议规范 v1.0.0 (已敲定, 详细规范同步落 docs/QEMU_INTEGRATION.md)
-
-**字节序 / 头格式 / 版本号**
-- 字节序: little-endian (Apple Silicon + x86 host 都 LE, 无需转换)
-- 消息头 8 字节: `{ type:u16, flags:u16, payload_len:u32 }`
-- 协议版本号: 单 u32 = `(major<<16)|(minor<<8)|patch`, 起步 `0x00010000` (1.0.0)
-
-**向后兼容策略 (协议演进核心规则, 必须严格执行)**
-1. **HELLO 双向版本协商**: host 与 QEMU 各自报告 `proto_version`, 双方取 `min(major,minor)` 作 negotiated_version, 后续行为按协商版本
-2. **major 不兼容**: 双方 major 必须相等; 不等则发 `GOODBYE(reason=VERSION_MISMATCH)` + 断连
-3. **minor 向下兼容**: 高 minor 端自动降级, 不发对端不认识的可选消息
-4. **patch 完全兼容**: 只能修 bug, 不改语义
-5. **capability_flags (HELLO 携带 u32 bitmap)**: 声明可选 feature, **旧 bit 永不复用**, 删除 feature 只标 deprecated 不复用 ID. 1.0.0 起步分配:
-   - bit 0: `CAP_CURSOR_BGRA` (硬件光标 BGRA payload)
-   - bit 1: `CAP_LED_STATE` (LED 反向回传)
-   - bit 2: `CAP_VDAGENT_RESIZE` (动态分辨率, vdagent virtio-serial 通道就绪)
-   - bit 3-31: 保留, 顺序占用
-6. **未知消息 type 容错**: **严格按 `payload_len` skip, 不报错不断连** — 这是向后兼容核心防线
-7. **flags bit 容错**: 不识别的 bit ignore 不报错. 1.0.0 已分配:
-   - bit 0: `HAS_FD` (本消息含 SCM_RIGHTS fd, host 必须 recvmsg)
-   - bit 1: `URGENT` (优先级提示, 留给后续 cursor 加速)
-   - bit 2-15: 保留
-8. **payload tail extension**: 已有消息加字段**不 bump major**; payload 比版本基础长度长则尾部为扩展段, 旧端 skip 不读
-9. **协议变更登记**: 每次改协议必须在 docs/QEMU_INTEGRATION.md 追加版本条目 (date + version + change summary), 永久保留历史; 不允许 in-place 改老条目
-
-**像素 / shm / 流控**
-- 像素: 固定 BGRA8 (Metal `.bgra8Unorm` 原生, 零拷贝零转换), guest 其他格式由 QEMU pixman 转
-- shm 名: `/qemu-hvm-<uuid8>-<seq>` (≤31 字符 macOS 限制), 创建后立即 `shm_unlink`, fd 经 SCM_RIGHTS 传 host (进程 crash OS 自动清理, 不留垃圾)
-- 流控: 不做窗口控制, sendmsg EAGAIN 时 drop 老 DAMAGE; SURFACE/CURSOR/LED 必送; QEMU `dpy_refresh` ~30Hz 天然限流
-
-**1.0.0 基础消息类型 (16-bit ID 分段, 预留扩展空间)**
-- 控制 `0x00xx`: HELLO(0x01) / SURFACE_NEW(0x02) / SURFACE_DAMAGE(0x03) / GOODBYE(0xFF)
-- cursor `0x001x`: CURSOR_DEFINE(0x10) / CURSOR_POS(0x11)
-- 反向回传 `0x002x`: LED_STATE(0x20)
-- host→Q `0x008x`: RESIZE_REQUEST(0x80)
-- **保留段** (后续版本占用): `0x01xx` 帧高级 / `0x02xx` 输入扩展 / `0x03xx` 音频 / `0xFFxx` 厂商私有
-
-#### Patch 清单 (自写, 不复制 hell-vm)
-
-- **patches/qemu/0002-ui-iosurface-display-backend.patch** (待写, ~500-700 行)
-  - 新增 `ui/iosurface.m` + `include/ui/iosurface.h`
-  - `qapi/ui.json` 加 `DisplayIOSurface` struct + `DisplayType.iosurface`
-  - `ui/meson.build` + 顶层 `meson.build` 加 CONFIG_IOSURFACE (macOS only)
-  - `ui/console.c` / `system/vl.c` display init 派发
-  - DCL ops 钩: `dpy_gfx_switch` (分辨率变→新 shm) / `dpy_gfx_update` (DAMAGE) / `dpy_mouse_set` / `dpy_cursor_define`
-  - listener pthread accept 一个 client, SIGPIPE ignore, vm shutdown munmap+close+shm_unlink 清理
-- **patches/qemu/0003-virtio-gpu-ramfb-skip-when-bound.patch** (待写, ~30-50 行)
-  - virtio-gpu 收 first scanout 后置 `driver_active` flag
-  - ramfb display update 检查 flag 就 return early
-  - 防 Win 装完 viogpudo 后 ramfb / virtio-gpu 双路同时刷导致闪烁
-- **patches/qemu/0001-hvm-win11-lowram.patch** (**已有**, 不重写, 仅验证与 iosurface 通路正交)
-
-#### 分阶段计划 (~2-3 周)
-
-| Phase | 内容 | 估时 |
-|---|---|---|
-| 1 | 协议敲定 + 自写 patch A/B + 重编译 + `nc` 验证 socket 握手 | 5-7 天 |
-| 2 | Swift HVMDisplay(QEMU): DisplayChannel + FramebufferRenderer (Metal) + FramebufferHostView + InputForwarder + NSKeyCodeToQCode | 3-4 天 |
-| 3 | DetailContainerView 加 QEMU 嵌入分支 (退役 RemoteRunningContentView) + QemuArgsBuilder 改用 `-display iosurface` + BundleLayout 加 socket 路径常量 | 2 天 |
-| 4 | Win11 兼容: 验证 lowram patch 不冲突 + 写 ramfb 让路 patch + virtio-gpu 自动 enable/disable (osType==.windows 时 off) | 1-2 天 |
-| 5 | 端到端: Linux 装机 + Win11 装机 + 多 VM 切换 + 分辨率变更 + 光标 + CapsLock 同步 | 3-4 天 |
-
-#### 决策已敲定 (2026-04-27)
-
-1. ✅ **Swift 侧实现**: 参考 hell-vm 思路**自写**, 不直接复制 (DisplayChannel / FramebufferRenderer / FramebufferHostView / InputForwarder / NSKeyCodeToQCode 都自实现)
-2. ✅ **协议头格式**: 8 字节 `{ type:u16, flags:u16, payload_len:u32 }`
-3. ✅ **协议版本编码**: 单 u32 `(major<<16)|(minor<<8)|patch`, 从 1.0.0 起
-4. ✅ **消息 ID 分配**: 接受分段方案 (0x00xx 控制 / 0x001x cursor / 0x002x 反向 / 0x008x host→Q)
-5. ✅ **spice-vdagent 动态分辨率**: 第一版要做 — QEMU argv 加 `virtio-serial-pci` + vdagent chardev (`com.redhat.spice.0`); host 端通过 `RESIZE_REQUEST` → QEMU `dpy_set_ui_info` → guest EDID 变更; guest 装 vdagent 后自动响应 EDID 调分辨率
-6. ✅ **CLAUDE.md 第三方依赖白名单更新**: 新增 spice-vdagent 条目说明 — Linux 用户 `apt/dnf install spice-vdagent` 自装; Windows 用包内 spice-guest-tools ISO; **host 端不打包 spice-vdagent 二进制**, 仅 QEMU argv 暴露 virtio-serial chardev 给 guest agent
-
-#### 风险登记
-
-- 自写 ui/iosurface.m 与上游 ui/console.c 升级耦合, 当前锁 QEMU v10.2.0
-- macOS shm 名 31 字符限制 (vm-uuid8 + seq 受控)
-- Metal `MTLBuffer(bytesNoCopy:)` 要求 page-aligned (mmap 天然满足)
-- 多 VM 嵌入: 每 VM 独立 socket + shm, RunningTabsBar 切换走 view detach / re-attach (类比现有 HVMView reparent)
-- 工作量大头是 Phase 1 自写 patch A 主体, 失败率最高的也是这一步
-
-#### 进度记录 (各 Phase 完成时追加日期)
-
-- 2026-04-27: 调研完成, 方案敲定为 framebuffer shm + Metal (非真 virgl), 协议草案 + 分阶段 + 决策点落 todo
 
 ### L-2 · Rosetta share
 - **现状**: VZ 已有 API (`VZLinuxRosettaDirectoryShare`); 我们没集成
@@ -176,18 +68,6 @@
 - **现状**: 跑 `make qemu` 第一次要拉源码 + 编译 30 分钟; 想确认 brew deps / 路径配置正确不带编译
 - **要做**: `--dry-run` 只跑 preflight + ensure_homebrew + ensure_brew_packages
 
-### P-5 · 公共工具函数重构到 app/Sources/HVMUtils 模块
-- **现状**: 散在各业务模块的工具函数 (断点续传 / 字节大小格式化 / 错误信息助手 / 路径 escape 等) 缺统一组织, 易出现复制粘贴
-- **要做**: 新建 `app/Sources/HVMUtils` SwiftPM target 收纳跨模块复用 helper, 各业务模块依赖之替换内部重复实现
-- **入选示例 (待逐个核实)**:
-  - 断点续传 (HTTP resumable download)
-  - 字节大小格式化 (KB / MB / GB human readable)
-  - 错误信息格式化 (errno → 中文 message)
-  - 路径 helper (escape / normalize / sanitize)
-- **边界**: HVMCore 等基础模块不依赖 HVMUtils, 仅业务层用. 迁移时不改 API 行为, 只搬位置 + 收敛重复
-- **触发来源**: 用户反馈 (2026-04-27)
-- **工作量**: 看实际散点数量, 估 300-800 行 refactor
-
 ### P-4 · GUI + host 子进程 menu bar 双 status item 重复
 - **现状**: GUI 启动 QEMU/VZ host 子进程后, 主 GUI 与 host 子进程各自注册 NSStatusItem, menu bar 同时出现 2 个 HVM 图标
   - 主 GUI: `app/Sources/HVM/HVMApp.swift` (`HVM //0 running` 弹出)
@@ -205,6 +85,11 @@
 
 ## ✅ 最近完成 (供历史追溯, 滚动清理)
 
+- (2026-05-03) **自动下载 OS 镜像 (新功能)**: 新建 `OSImageCatalog` 内置 7 个 arm64 Linux 发行版 (Ubuntu 24.04 LTS / Ubuntu 22.04 LTS / Debian 13 / Fedora 44 / Alpine 3.20 / Rocky 9 / openSUSE Tumbleweed) + `OSImageFetcher` (catalog 下载 + custom URL 兜底 + SHA256 校验); UI: `OSImagePickerDialog` (linux 列发行版, windows 显示 Win11 Insider/UUP 提示 + Win10 不可用警告) + `OSImageFetchDialog` (含 `verifying` 阶段); CLI: `hvm-cli osimage list / fetch / cache / rm`; 缓存路径 `~/Library/Application Support/HVM/cache/os-images/<family>/`; CreateVMDialog Linux/Windows 分支 ISO 字段下加 "Download…" 按钮入口
+- (2026-05-03) **P-5 公共工具函数重构 (HVMUtils)**: 新建 `HVMUtils` SwiftPM target 收纳 `Format.bytes/rate/eta` (替换 4 处重复) + `Hashing.sha256Hex` (替换 2 处重复) + `ResumableDownloader` (从 IPSWFetcher 抽出 generic 断点续传 + If-Range + 416 重试 + atomic rename, 给 OS 镜像下载共用); IPSWFetcher 改为 wrapper, 调用方行为不变; 实测散点只有 ~60 行 refactor (todo 原估 300-800 行高估了 — 多处"看似重复"实为业务耦合不该抽)
+- (2026-05-03) **phase 4 socket_vmnet hell-vm 同款重构**: NetworkMode 切 5-mode (none/nat/vmnetShared/vmnetHost/vmnetBridged); QEMU 直接 `-netdev stream,addr.type=unix,addr.path=...` 接 daemon 固定路径 socket, 退役 sidecar fd-passing; install-vmnet-daemons.sh 走 osascript Touch ID 安装 launchd plist (label `com.hellmessage.hvm.vmnet.*`); 新建 VMSettingsNetworkSection 4 文件接 EditConfigDialog, 删老 vmnet UI 设施
+- (2026-04-30) **L-1 QEMU 显示嵌入主窗口**: framebuffer shm + Metal 零拷贝方案完整落地 — patches/qemu/0002-ui-iosurface-display-backend.patch + 0003-hw-display-hvm-gpu-ramfb-pci.patch 自写; HVMDisplayQemu 模块 (DisplayChannel / HDPProtocol / FramebufferRenderer / FramebufferHostView / InputForwarder / NSKeyCodeToQCode / VdagentClient); QemuArgsBuilder 接 `-display iosurface,socket=...`; HDP 协议 v1.0.0 规范固化到 docs/QEMU_DISPLAY_PROTOCOL.md
+- (2026-04-30) **M-3 GUI Snapshot 操作**: DetailBars 加 TerminalSection("Snapshots") 列表 + New Snapshot 按钮接 SnapshotCreateDialog + Restore / Delete 走 ConfirmPresenter
 - (2026-04-27) **L-3 (A1+B1)**: 多 VM 并发管理 UX — GUI 主窗口右栏顶部加 RunningTabsBar (运行中 VM 横向 tab + × 关闭, 切换走 selectedID 复用现有 transition); CLI `hvm-cli list --watch -w` + `--interval` (默认 2s, ANSI 清屏 + DispatchSource SIGINT 优雅退出, json 模式不清屏方便 jq pipe). 多 NSWindow 方向因 VZ Metal drawable 跨 window reparent 黑屏限制不可行, 已在 plan 备注
 - (2026-04-27) **U-1 / U-2 / U-3**: 三项实测全部验证通过 — Linux arm64 装机 (QEMU+HVF) 稳定 / Win11 arm64 装机 (swtpm+virtio-win+EDK2) 闭环 / socket_vmnet bridged 真出网
 - (2026-04-26) **M-1**: NetworkMode 加 .shared (跨 HVMBundle/HVMNet/HVMQemu/CLI 同步); GUI CreateVMDialog 加 Engine 选择器 (Linux 专用) + Network 段 (NAT/Bridged/Shared) + 接口枚举 + sudoers 检测 + osascript+复制 helper; EditConfigDialog 同步加 Network 编辑; install-vmnet-helper.sh 打包入 .app
@@ -223,4 +108,4 @@
 
 ---
 
-**最后更新**: 2026-04-27 (L-3 完成: GUI RunningTabsBar + CLI list --watch)
+**最后更新**: 2026-05-03 (P-5 HVMUtils + ResumableDownloader 落地, 新增 OSImageCatalog 7 发行版自动下载 + Win custom URL 兜底)
