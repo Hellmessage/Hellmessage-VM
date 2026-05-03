@@ -48,7 +48,7 @@ public enum QcowLuksFactory {
             try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
         }
 
-        let secret = try SecretFile(key: key)
+        let secret = try LuksSecretFile(key: key)
         defer { secret.cleanup() }
 
         Self.log.info("qcow2 LUKS create: \(url.lastPathComponent, privacy: .public) size=\(sizeBytes)b")
@@ -76,7 +76,7 @@ public enum QcowLuksFactory {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw HVMError.storage(.ioError(errno: ENOENT, path: url.path))
         }
-        let secret = try SecretFile(key: key)
+        let secret = try LuksSecretFile(key: key)
         defer { secret.cleanup() }
 
         Self.log.info("qcow2 LUKS grow: \(url.lastPathComponent, privacy: .public) → \(toBytes)b")
@@ -97,9 +97,9 @@ public enum QcowLuksFactory {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw HVMError.storage(.ioError(errno: ENOENT, path: url.path))
         }
-        let oldSecret = try SecretFile(key: oldKey)
+        let oldSecret = try LuksSecretFile(key: oldKey)
         defer { oldSecret.cleanup() }
-        let newSecret = try SecretFile(key: newKey)
+        let newSecret = try LuksSecretFile(key: newKey)
         defer { newSecret.cleanup() }
 
         // step 1: 加新 keyslot (state=active + new-secret)
@@ -155,45 +155,7 @@ public enum QcowLuksFactory {
 
     // MARK: - 内部 helper
 
-    /// 0o600 临时 key 文件. 调用方 defer { secret.cleanup() } 清.
-    /// 走 open(O_CREAT|O_EXCL, 0o600) 避免 race window.
-    private struct SecretFile {
-        let path: String
-
-        init(key: SymmetricKey) throws {
-            let url = URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent("hvm-luks-\(UUID().uuidString.prefix(12)).bin")
-            self.path = url.path
-
-            let fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
-            guard fd >= 0 else {
-                throw HVMError.encryption(.qemuImgFailed(
-                    verb: "secret-prep",
-                    exitCode: Int32(errno),
-                    stderr: "无法创建 secret 临时文件: errno=\(errno)"
-                ))
-            }
-            defer { close(fd) }
-
-            let written = key.withUnsafeBytes { rawPtr -> Int in
-                guard let base = rawPtr.baseAddress else { return -1 }
-                return write(fd, base, rawPtr.count)
-            }
-            guard written == 32 else {
-                Darwin.unlink(path)
-                throw HVMError.encryption(.qemuImgFailed(
-                    verb: "secret-prep",
-                    exitCode: -1,
-                    stderr: "写 secret 文件不完整: written=\(written)"
-                ))
-            }
-        }
-
-        /// 删除临时 key 文件. 不抛 — 文件可能已被外部清理.
-        func cleanup() {
-            _ = Darwin.unlink(path)
-        }
-    }
+    // SecretFile 已抽到 HVMEncryption/LuksSecretFile.swift (公共).
 
     /// 调 qemu-img. 失败抛 .qemuImgFailed.
     private static func runQemuImg(qemuImg: URL, verb: String, args: [String]) throws {

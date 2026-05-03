@@ -17,6 +17,9 @@ public enum BundleLayout {
     public static let snapshotsDirName  = "snapshots"
 
     public static let nvramFileName     = "efi-vars.fd"
+    /// 加密 VM 路径用的 NVRAM 文件名 (LUKS qcow2). 与 nvramFileName 互斥, 同 bundle 不能同时存在.
+    /// 加密 / 明文 状态判定: 看哪个文件存在 (EncryptedBundleIO 路由层做).
+    public static let nvramLuksFileName = "efi-vars.qcow2"
     public static let auxStorageName    = "aux-storage"
     public static let machineIdentifier = "machine-identifier"
     public static let hardwareModel     = "hardware-model"
@@ -65,6 +68,11 @@ public enum BundleLayout {
 
     public static func nvramURL(_ bundle: URL) -> URL {
         nvramDir(bundle).appendingPathComponent(nvramFileName)
+    }
+
+    /// 加密 NVRAM 路径 (LUKS qcow2). 仅加密 QEMU 路径 VM 用, 由 EncryptedBundleIO 路由层判定.
+    public static func nvramLuksURL(_ bundle: URL) -> URL {
+        nvramDir(bundle).appendingPathComponent(nvramLuksFileName)
     }
 
     public static func logsDir(_ bundle: URL) -> URL {
