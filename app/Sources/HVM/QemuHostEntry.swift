@@ -22,6 +22,7 @@ import HVMDisplayQemu
 import HVMInstall
 import HVMIPC
 import HVMQemu
+import HVMUtils
 
 public enum QemuHostEntry {
     @MainActor
@@ -48,7 +49,7 @@ public enum QemuHostEntry {
 
         let qmpSocketURL = HVMPaths.qmpSocketPath(for: config.id)
         // 清残留 socket (上次崩溃留的会让 QEMU bind 失败)
-        try? FileManager.default.removeItem(at: qmpSocketURL)
+        FSCleanup.removeQuietly(at: qmpSocketURL, context: "stale QMP socket")
 
         // 2. virtio-win 路径解析 (windows guest 才用; 缓存就绪才挂第二 cdrom).
         //    创建 Win VM 时 GUI 会前台触发 ensureCached; 这里不做下载, 缺则降级.
@@ -104,7 +105,7 @@ public enum QemuHostEntry {
         // 3.6 console socket 路径 (与 QMP / vmnet socket 同 runDir).
         // QemuConsoleBridge 在 QEMU 启动后 connect (见 6c).
         let consoleSocketURL = HVMPaths.consoleSocketPath(for: config.id)
-        try? FileManager.default.removeItem(at: consoleSocketURL)
+        FSCleanup.removeQuietly(at: consoleSocketURL, context: "stale console socket")
 
         // 3.7 AutoUnattend ISO (仅 windows + bypassInstallChecks/autoInstallVirtioWin/autoInstallSpiceTools 任一开).
         // 启动前用 hdiutil makehybrid 现做现挂; 失败 fail-soft (warn + 不挂第二 cdrom),
@@ -150,10 +151,10 @@ public enum QemuHostEntry {
         let qmpInputSocketURL   = HVMPaths.qmpInputSocketPath(for: config.id)
         let vdagentSocketURL    = HVMPaths.vdagentSocketPath(for: config.id)
         let qgaSocketURL        = HVMPaths.qgaSocketPath(for: config.id)
-        try? FileManager.default.removeItem(at: iosurfaceSocketURL)
-        try? FileManager.default.removeItem(at: qmpInputSocketURL)
-        try? FileManager.default.removeItem(at: vdagentSocketURL)
-        try? FileManager.default.removeItem(at: qgaSocketURL)
+        FSCleanup.removeQuietly(at: iosurfaceSocketURL, context: "stale iosurface socket")
+        FSCleanup.removeQuietly(at: qmpInputSocketURL,  context: "stale qmp-input socket")
+        FSCleanup.removeQuietly(at: vdagentSocketURL,   context: "stale vdagent socket")
+        FSCleanup.removeQuietly(at: qgaSocketURL,       context: "stale qga socket")
 
         let buildResult: QemuArgsBuilder.BuildResult
         do {
@@ -368,8 +369,8 @@ public enum QemuHostEntry {
         _ = try? HVMPaths.ensure(swtpmLogsDir)
         let logFile = swtpmLogsDir.appendingPathComponent("swtpm.log")
         // 清残留 socket / pid (上次崩溃留的会让 swtpm bind 失败 / 误以为已在跑)
-        try? FileManager.default.removeItem(atPath: sockPath)
-        try? FileManager.default.removeItem(at: pidPath)
+        FSCleanup.removeQuietly(atPath: sockPath, context: "stale swtpm socket")
+        FSCleanup.removeQuietly(at: pidPath,      context: "stale swtpm pid file")
 
         // 3. 构造 argv + 启动
         let swtpmArgs = SwtpmArgsBuilder.build(SwtpmArgsBuilder.Inputs(
@@ -429,9 +430,14 @@ public enum QemuHostEntry {
         deadlineSec: Int
     ) async -> QmpClient? {
         let deadline = Date().addingTimeInterval(TimeInterval(deadlineSec))
+        var lastError: Error?
+        var earlyExit: QemuProcessRunner.State?
         while Date() < deadline {
             switch runner.state {
-            case .exited, .crashed: return nil
+            case .exited, .crashed:
+                earlyExit = runner.state
+                fputs("HVMHost(qemu): QMP 连接放弃 — QEMU 早退 state=\(runner.state)\n", stderr)
+                return nil
             default: break
             }
             if !FileManager.default.fileExists(atPath: socketPath) {
@@ -443,9 +449,22 @@ public enum QemuHostEntry {
                 try await c.connect()
                 return c
             } catch {
+                lastError = error
                 c.close()
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
+        }
+        // 超时未连上, 把根因印出来 (区分 socket 不存在 / 协议 / 网络层失败)
+        if earlyExit == nil {
+            let detail: String
+            if let e = lastError {
+                detail = "最后错误: \(e)"
+            } else if !FileManager.default.fileExists(atPath: socketPath) {
+                detail = "QMP socket 始终未创建 (path=\(socketPath))"
+            } else {
+                detail = "QMP socket 存在但 connect 持续失败"
+            }
+            fputs("HVMHost(qemu): QMP 连接超时 (\(deadlineSec)s); \(detail)\n", stderr)
         }
         return nil
     }
@@ -549,7 +568,7 @@ final class QemuHostState {
                 try await client.systemPowerdown()
                 return .success(id: req.id)
             } catch {
-                return .failure(id: req.id, code: "backend.qmp_error", message: "\(error)")
+                return mapQmpFailure(req: req, error: error)
             }
 
         case IPCOp.kill.rawValue:
@@ -564,7 +583,7 @@ final class QemuHostState {
                 try await client.stop()
                 return .success(id: req.id)
             } catch {
-                return .failure(id: req.id, code: "backend.qmp_error", message: "\(error)")
+                return mapQmpFailure(req: req, error: error)
             }
 
         case IPCOp.resume.rawValue:
@@ -575,7 +594,7 @@ final class QemuHostState {
                 try await client.cont()
                 return .success(id: req.id)
             } catch {
-                return .failure(id: req.id, code: "backend.qmp_error", message: "\(error)")
+                return mapQmpFailure(req: req, error: error)
             }
 
         case IPCOp.dbgScreenshot.rawValue: return await handleDbgScreenshot(req: req)
@@ -682,7 +701,7 @@ final class QemuHostState {
             let uf = e.userFacing
             return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)
         } catch {
-            return .failure(id: req.id, code: "backend.qmp_error", message: "\(error)")
+            return mapQmpFailure(req: req, error: error)
         }
     }
 
@@ -709,7 +728,7 @@ final class QemuHostState {
             return .failure(id: req.id, code: "config.invalid_enum",
                             message: "未识别按键 / 字符: \(k)")
         } catch {
-            return .failure(id: req.id, code: "backend.qmp_error", message: "\(error)")
+            return mapQmpFailure(req: req, error: error)
         }
     }
 
@@ -768,7 +787,7 @@ final class QemuHostState {
             return .failure(id: req.id, code: "config.invalid_enum",
                             message: "button 必须是 left/right/middle, 实际 \(b)")
         } catch {
-            return .failure(id: req.id, code: "backend.qmp_error", message: "\(error)")
+            return mapQmpFailure(req: req, error: error)
         }
     }
 
@@ -1072,7 +1091,34 @@ final class QemuHostState {
             let uf = e.userFacing
             return .failure(id: req.id, code: uf.code, message: uf.message, details: uf.details)
         } catch {
+            return mapQmpFailure(req: req, error: error)
+        }
+    }
+
+    /// 把 QmpError 映射到稳定的 backend.qmp_* code, 让用户/客户端能区分 closed / timeout /
+    /// protocol error / socket error / qemu-side error. 老逻辑全部统一返 backend.qmp_error
+    /// 加 raw "\(error)", 用户看到 "Connection reset" 不知是哪种根因.
+    private func mapQmpFailure(req: IPCRequest, error: Error) -> IPCResponse {
+        guard let qe = error as? QmpError else {
             return .failure(id: req.id, code: "backend.qmp_error", message: "\(error)")
+        }
+        switch qe {
+        case .closed:
+            return .failure(id: req.id, code: "backend.qmp_closed",
+                            message: "QMP 连接已关闭")
+        case .timeout:
+            return .failure(id: req.id, code: "backend.qmp_timeout",
+                            message: "QMP 操作超时")
+        case .protocolError(let r):
+            return .failure(id: req.id, code: "backend.qmp_protocol_error", message: r)
+        case .parseError(let r):
+            return .failure(id: req.id, code: "backend.qmp_parse_error", message: r)
+        case .socketError(let r, let e):
+            return .failure(id: req.id, code: "backend.qmp_socket_error",
+                            message: "\(r) (errno=\(e))")
+        case .qemu(let cls, let desc):
+            return .failure(id: req.id, code: "backend.qmp_qemu_error",
+                            message: "\(cls): \(desc)")
         }
     }
 
