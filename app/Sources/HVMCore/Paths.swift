@@ -21,6 +21,22 @@ public enum HVMPaths {
         appSupport.appendingPathComponent("run", isDirectory: true)
     }
 
+    /// 加密 VM (VZ 路径) sparsebundle attach 后的挂载点根目录,
+    /// ~/Library/Application Support/HVM/mounts.
+    /// 设计稿 docs/v3/ENCRYPTION.md v2.3.
+    public static var mountsRoot: URL {
+        appSupport.appendingPathComponent("mounts", isDirectory: true)
+    }
+
+    /// 给定 VM uuid 的 sparsebundle 挂载点 (mountsRoot/<uuid8>/).
+    /// 用 uuid 前 8 位避免中文 / 特殊字符 / 同名 VM 冲突, 同时控制路径长度
+    /// (Unix domain socket sun_path 限 104 字符, 但 socket 走 runDir 不走 mount, 这里
+    /// 主要是防文件名冲突).
+    public static func mountpointFor(uuid: UUID) -> URL {
+        let uuid8 = uuid.uuidString.lowercased().prefix(8)
+        return mountsRoot.appendingPathComponent(String(uuid8), isDirectory: true)
+    }
+
     /// 全局日志目录. HVM 软件本身的所有 host 侧 .log 都落这里:
     ///   - 顶层 yyyy-MM-dd.log: LogSink mirror 的 os.Logger 输出 (跨 VM)
     ///   - 子目录 <displayName>-<uuid8>/: 该 VM 的 host 侧 .log
