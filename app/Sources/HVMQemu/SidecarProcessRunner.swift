@@ -138,6 +138,10 @@ public final class SidecarProcessRunner: @unchecked Sendable {
             self._state = newState
             let cbs = self.observers
             self.lock.unlock()
+            // 显式清 stderr readabilityHandler — 老逻辑只靠 availableData.isEmpty (EOF)
+            // 触发 self-clear, 但 SIGKILL 路径 kernel 可能不送干净 EOF, 读线程会陷入轮询.
+            // 进程 termination 是确定性信号, 在这里清最稳.
+            self.stderrPipe.fileHandleForReading.readabilityHandler = nil
             try? self.stderrFileHandle?.close()
             self.stderrFileHandle = nil
             for cb in cbs { cb(newState) }
