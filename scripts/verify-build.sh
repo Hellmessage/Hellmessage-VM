@@ -60,5 +60,20 @@ check_orphan_patches qemu
 check_orphan_patches edk2
 pass "patches series 无孤儿 (qemu + edk2)"
 
+# CLAUDE.md GUI 约束守卫: 业务 Dialog 必须走 ErrorDialog / ConfirmDialog, 禁 NSAlert 实例化.
+# 仅检查"实际调用" (NSAlert() / NSAlert.xxx), 排除注释 + 排除 Style/Dialogs/ 实现层
+# (它们注释中反向说明 "禁 NSAlert" 是合理的).
+# 新人易绕开注释强制, 这里 grep CI fail 防回归.
+NSALERT_HITS=$(grep -rEn 'NSAlert\(|NSAlert\.' "$ROOT/app/Sources/HVM/UI/" 2>/dev/null \
+    | grep -v '/Style/' \
+    | grep -v '/Dialogs/' \
+    | grep -vE '^\s*//' || true)
+if [ -n "$NSALERT_HITS" ]; then
+    echo "✗ 业务侧 UI 出现 NSAlert 实例化 (CLAUDE.md 禁用, 须走 ErrorDialog / ConfirmDialog):" >&2
+    echo "$NSALERT_HITS" >&2
+    exit 1
+fi
+pass "GUI 约束: 业务侧无 NSAlert 实例化"
+
 echo
 echo "M0 smoke test 全部通过 ✔"

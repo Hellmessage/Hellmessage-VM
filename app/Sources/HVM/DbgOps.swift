@@ -245,10 +245,17 @@ public final class DbgOps {
         }
         lastFrameSha256 = shot.sha256
 
-        // 有帧, 跑 OCR 看屏幕上有没有可识别文字
+        // 有帧, 跑 OCR 看屏幕上有没有可识别文字.
+        // OCR 失败明确报错而不是降级为 boot-logo 猜测 — 自动化测试若 OCR 框架挂了
+        // (Vision framework 初始化失败 / 内存不足等), 老逻辑 reply("boot-logo", 0.5)
+        // 会让调用方误判为"VM 在 boot logo 阶段", 实际是检测基础设施故障.
         let items: [OCREngine.TextItem]
-        do { items = try OCREngine.recognize(pngData: shot.data, region: nil) }
-        catch { return reply("boot-logo", 0.5) }
+        do {
+            items = try OCREngine.recognize(pngData: shot.data, region: nil)
+        } catch {
+            return .failure(id: req.id, code: "dbg.ocr_unavailable",
+                            message: "OCR 引擎故障: \(error)")
+        }
 
         let cls = BootPhaseClassifier.classify(items: items, guestOS: guestOS)
         return reply(cls.phase, cls.confidence)
