@@ -70,6 +70,13 @@ public enum HVMPaths {
         appSupport.appendingPathComponent("cache/utm-guest-tools", isDirectory: true)
     }
 
+    /// Linux / Windows guest ISO 自动下载缓存根目录,
+    /// ~/Library/Application Support/HVM/cache/os-images
+    /// 子目录按 family 分: ubuntu/ debian/ fedora/ alpine/ rocky/ opensuse/ custom/
+    public static var osImagesCacheDir: URL {
+        appSupport.appendingPathComponent("cache/os-images", isDirectory: true)
+    }
+
     /// 对给定 uuid 返回默认 IPC socket 路径 (HVMHost ↔ hvm-cli/hvm-dbg)
     public static func socketPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).sock")

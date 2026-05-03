@@ -30,6 +30,12 @@ struct DialogOverlay: View {
             if let pickerState = model.ipswCatalogPicker {
                 IpswCatalogPicker(model: model, errors: errors, onSelect: pickerState.onSelect)
             }
+            if let osPicker = model.osImagePickerRequest {
+                OSImagePickerDialog(model: model, errors: errors, request: osPicker)
+            }
+            if let osFetch = model.osImageFetchState {
+                OSImageFetchDialog(state: osFetch)
+            }
             if let editItem = model.editConfigItem {
                 EditConfigDialog(model: model, errors: errors, item: editItem)
             }

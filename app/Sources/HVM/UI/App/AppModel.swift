@@ -73,6 +73,38 @@ public final class AppModel {
     /// IPSW 版本选择器是否打开. 非 nil → DialogOverlay 显示 IpswCatalogPicker 模态.
     /// 选完后通过 onSelect 回调把 entry 交回上层 (向导)
     public var ipswCatalogPicker: IpswCatalogPickerState? = nil
+    /// Linux/Windows guest 镜像下载选择器. 非 nil → DialogOverlay 显示 OSImagePickerDialog
+    public var osImagePickerRequest: OSImagePickerRequest? = nil
+    /// 正在拉 OS 镜像 ISO 时的进度. 非 nil → DialogOverlay 显示 OSImageFetchDialog 模态
+    public var osImageFetchState: OSImageFetchUIState? = nil
+
+    /// OS 镜像选择器请求载体 (catalog list + custom URL 输入)
+    public struct OSImagePickerRequest: Identifiable {
+        public let id = UUID()
+        /// linux 时显示 catalog (6 个发行版); windows 时只显示 custom URL + Win10 不可用提示
+        public let guestOS: GuestOSType
+        /// 用户选完后回调本地 ISO 绝对路径 (catalog 下载完成 / custom 下载完成)
+        public let onSelect: @MainActor (URL) -> Void
+        public init(guestOS: GuestOSType, onSelect: @escaping @MainActor (URL) -> Void) {
+            self.guestOS = guestOS
+            self.onSelect = onSelect
+        }
+    }
+
+    /// OS 镜像下载 UI 状态. 与 IpswFetchState 字段对齐.
+    public struct OSImageFetchUIState: Sendable, Equatable {
+        public var phase: Phase
+        /// 例 "Ubuntu Server 24.04.4 LTS"; custom 时为 URL 文件名
+        public var info: String
+        public var receivedBytes: Int64
+        public var totalBytes: Int64?
+        public var bytesPerSecond: Double?
+        public var etaSeconds: Double?
+
+        public enum Phase: String, Sendable, Equatable {
+            case downloading, verifying, alreadyCached, completed
+        }
+    }
 
     /// IPSW catalog picker 状态, 含选完的回调.
     /// 用 @MainActor 闭包让 picker 直接通过 model 触发 startIpswFetch.
@@ -115,6 +147,8 @@ public final class AppModel {
             || virtioWinFetchState != nil
             || utmGuestToolsFetchState != nil
             || ipswCatalogPicker != nil
+            || osImagePickerRequest != nil
+            || osImageFetchState != nil
             || editConfigItem != nil
             || snapshotCreateItem != nil
             || diskAddItem != nil
@@ -570,6 +604,84 @@ public final class AppModel {
                 errors.present(error)
             }
         }
+    }
+
+    // MARK: - OS 镜像下载 (Linux 6 发行版 + Windows custom URL)
+
+    /// 异步下载 OSImageCatalog 内置 entry. 完成后回调 onComplete 把本地路径回填上层 (向导).
+    /// 失败走 errors.present, 不调 onComplete. 进度通过 osImageFetchState 更新.
+    public func startOSImageFetch(
+        entry: OSImageEntry,
+        errors: ErrorPresenter,
+        onComplete: @escaping @MainActor (URL) -> Void
+    ) {
+        osImageFetchState = OSImageFetchUIState(
+            phase: .downloading,
+            info: "\(entry.displayName) (\(entry.version))",
+            receivedBytes: 0,
+            totalBytes: nil,
+            bytesPerSecond: nil,
+            etaSeconds: nil
+        )
+        Task { @MainActor in
+            do {
+                let local = try await OSImageFetcher.downloadIfNeeded(entry: entry) { p in
+                    Task { @MainActor [self] in
+                        self.applyOSImageProgress(p)
+                    }
+                }
+                self.osImageFetchState = nil
+                onComplete(local)
+            } catch {
+                self.osImageFetchState = nil
+                errors.present(error)
+            }
+        }
+    }
+
+    /// 异步下载用户自填 URL (Win11 ARM ISO 等场景). 不做 SHA256 校验.
+    public func startOSImageCustomFetch(
+        url: URL,
+        errors: ErrorPresenter,
+        onComplete: @escaping @MainActor (URL) -> Void
+    ) {
+        osImageFetchState = OSImageFetchUIState(
+            phase: .downloading,
+            info: url.lastPathComponent.isEmpty ? "custom.iso" : url.lastPathComponent,
+            receivedBytes: 0,
+            totalBytes: nil,
+            bytesPerSecond: nil,
+            etaSeconds: nil
+        )
+        Task { @MainActor in
+            do {
+                let local = try await OSImageFetcher.downloadCustom(url: url) { p in
+                    Task { @MainActor [self] in
+                        self.applyOSImageProgress(p)
+                    }
+                }
+                self.osImageFetchState = nil
+                onComplete(local)
+            } catch {
+                self.osImageFetchState = nil
+                errors.present(error)
+            }
+        }
+    }
+
+    private func applyOSImageProgress(_ p: OSImageFetchProgress) {
+        guard var s = osImageFetchState else { return }
+        switch p.phase {
+        case .downloading:   s.phase = .downloading
+        case .verifying:     s.phase = .verifying
+        case .alreadyCached: s.phase = .alreadyCached
+        case .completed:     s.phase = .completed
+        }
+        s.receivedBytes = p.receivedBytes
+        s.totalBytes = p.totalBytes
+        s.bytesPerSecond = p.bytesPerSecond
+        s.etaSeconds = p.etaSeconds
+        osImageFetchState = s
     }
 
     /// session 自然结束时通知 (guestDidStop / error) -> 从 sessions 移除

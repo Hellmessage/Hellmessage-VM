@@ -253,13 +253,28 @@ struct CreateVMDialog: View {
                 }
             case .linux, .windows:
                 field("Installer ISO") {
-                    HVMTextField(
-                        guestOS == .windows
-                            ? "/path/to/Win11_arm64.iso"
-                            : "/path/to/ubuntu-arm64.iso",
-                        text: $isoPath,
-                        action: HVMTextField.ActionButton("Browse") { pickISO() }
-                    )
+                    VStack(alignment: .leading, spacing: HVMSpace.sm) {
+                        HVMTextField(
+                            guestOS == .windows
+                                ? "/path/to/Win11_arm64.iso"
+                                : "/path/to/ubuntu-arm64.iso",
+                            text: $isoPath,
+                            action: HVMTextField.ActionButton("Browse") { pickISO() }
+                        )
+                        HStack(spacing: HVMSpace.sm) {
+                            Button("Download…") { openOSImagePicker() }
+                                .buttonStyle(GhostButtonStyle())
+                                .disabled(
+                                    creating
+                                    || model.osImagePickerRequest != nil
+                                    || model.osImageFetchState != nil
+                                )
+                                .help(guestOS == .windows
+                                      ? "Win11/Win10 ARM 无官方直链, 走 Custom URL 自动下载"
+                                      : "选 Linux 发行版自动下载, 或走 Custom URL 兜底")
+                            Spacer()
+                        }
+                    }
                 }
             case .macOS:
                 field("Installer IPSW") {
@@ -556,6 +571,14 @@ struct CreateVMDialog: View {
                 self.ipswPath = localURL.path
                 self.reloadCache()
             }
+        }
+    }
+
+    /// 打开 Linux 发行版 / Win custom URL 镜像选择器. 用户选完 →
+    /// AppModel 自动下载 + 进度条 + 校验, 完成后回填 isoPath.
+    private func openOSImagePicker() {
+        model.osImagePickerRequest = AppModel.OSImagePickerRequest(guestOS: guestOS) { localURL in
+            self.isoPath = localURL.path
         }
     }
 
