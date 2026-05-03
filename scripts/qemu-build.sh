@@ -139,7 +139,9 @@ apply_patches() {
         return
     fi
     local count=0
-    while IFS= read -r line; do
+    # `|| [[ -n "$line" ]]` 兜底末行无 \n 的 series 文件 (编辑器 unix text 存档时常见漏读;
+    # edk2-build.sh apply_patches 已正确处理, 这里同步)
+    while IFS= read -r line || [[ -n "$line" ]]; do
         # 去除首尾空白
         line="${line#"${line%%[![:space:]]*}"}"
         line="${line%"${line##*[![:space:]]}"}"

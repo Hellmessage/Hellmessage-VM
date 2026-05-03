@@ -18,8 +18,10 @@ pass() { echo "✔ $1"; }
 [ -x "$BUILD/hvm-dbg" ] || fail "hvm-dbg 不存在"
 pass "产物结构完整"
 
-# bundle ID 正确
-BID=$(plutil -extract CFBundleIdentifier raw "$APP/Contents/Info.plist")
+# bundle ID 正确. plutil 失败 (Info.plist 损坏 / 缺 key) 时 BID 为空, 让上层 fail
+# 给清晰错误而不是 "期望 ..., 实际 (空)".
+BID=$(plutil -extract CFBundleIdentifier raw "$APP/Contents/Info.plist") \
+    || fail "Info.plist 损坏或缺 CFBundleIdentifier (plutil 解析失败)"
 [ "$BID" = "com.hellmessage.vm" ] || fail "CFBundleIdentifier 期望 com.hellmessage.vm, 实际 $BID"
 pass "Bundle ID 正确"
 
@@ -39,6 +41,24 @@ pass "virtualization entitlement 已注入"
 "$BUILD/hvm-cli" --version > /dev/null || fail "hvm-cli --version 执行失败"
 "$BUILD/hvm-dbg" --version > /dev/null || fail "hvm-dbg --version 执行失败"
 pass "CLI / dbg 可启动"
+
+# patches 孤儿检测: 任何 *.patch 必须列入 series. 漏列的 patch 在 qemu-build /
+# edk2-build 跑时不会被应用, 是常见误漏. CI 防回归.
+check_orphan_patches() {
+    local subsystem="$1"
+    local dir="$ROOT/patches/$subsystem"
+    local series="$dir/series"
+    [ -f "$series" ] || return 0  # 没 series 视为该子系统未启用
+    for p in "$dir"/*.patch; do
+        [ -f "$p" ] || continue  # 无 .patch 文件跳过
+        local base
+        base=$(basename "$p")
+        grep -qF "$base" "$series" || fail "孤儿 patch (未列入 series): patches/$subsystem/$base"
+    done
+}
+check_orphan_patches qemu
+check_orphan_patches edk2
+pass "patches series 无孤儿 (qemu + edk2)"
 
 echo
 echo "M0 smoke test 全部通过 ✔"

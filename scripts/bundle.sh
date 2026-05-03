@@ -55,8 +55,16 @@ cp "$SWIFT_BIN/hvm-dbg" "$MACOS/hvm-dbg"
 cp "$SWIFT_BIN/hvm-cli" "$BUILD/hvm-cli"
 cp "$SWIFT_BIN/hvm-dbg" "$BUILD/hvm-dbg"
 
-# 2. Info.plist (从 template 填版本号)
-VERSION=$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || echo "0.0.1")
+# 2. Info.plist (从 template 填版本号).
+# git describe 优先 (含 tag/dirty 信息); 无 tag / detached HEAD 时降级到 dev-<sha>,
+# 比之前固定 "0.0.1" 更可区分 (反复 dev build 能从 Info.plist 看出迭代).
+if VERSION=$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null); then
+    :
+elif SHA=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null); then
+    VERSION="dev-$SHA"
+else
+    VERSION="0.0.1"
+fi
 BUILD_NUM=$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo "1")
 sed \
     -e "s/__VERSION__/$VERSION/g" \

@@ -151,11 +151,11 @@ install: build
 	@echo "✔ 已安装: /Applications/HVM.app"
 
 # 开发期 dev loop: 编译 + 安装 + 重启 GUI 主进程 (保留运行中的 VM host 子进程).
-# 关键过滤: 主 GUI 进程 cmdline 只有一个 token (binary 路径), host 子进程
-# 多个 (--host-mode-bundle ...). awk NF == 2 严格匹配只杀主 GUI, 不动 host.
-# open .app 让 LaunchServices 起新 GUI; 老 host 子进程持有的 VM 继续运行.
+# 主 GUI 进程 cmdline 第二个 token 是 .app/Contents/MacOS/HVM; host 子进程是同一 binary
+# + --host-mode-bundle ... (cmdline 不以 HVM 结尾). 用 regex 匹配 cmdline 第二字段是否
+# 以 .../HVM.app/Contents/MacOS/HVM 结尾 — 比老的 NF==2 字段数判断稳健 (用户带参启动也不漏杀).
 run-app: install
-	@OLDPID=$$(ps -axo pid,command | awk 'NF == 2 && $$2 ~ /MacOS\/HVM$$/ {print $$1}'); \
+	@OLDPID=$$(ps -axo pid,command | awk '$$2 ~ /\/HVM\.app\/Contents\/MacOS\/HVM$$/ {print $$1}' | head -1); \
 	if [ -n "$$OLDPID" ]; then \
 		echo "ℹ 重启 GUI 主进程 pid=$$OLDPID (host 子进程不动)"; \
 		kill $$OLDPID 2>/dev/null || true; \
