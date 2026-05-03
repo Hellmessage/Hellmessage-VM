@@ -1,13 +1,14 @@
 # VM 整盘加密 (`HVMEncryption`)
 
-> 状态: **设计稿 v2.3 — 混合方案 + 强制密码 + LUKS passphrase base64 编码 (2026-05-04)**, PR-1 ~ PR-5 已落地, 后续 7 个 PR 待开。
+> 状态: **设计稿 v2.4 — QEMU 路径优先实施 (2026-05-04)**, PR-1 ~ PR-8 已落, PR-9~11 集中实施 QEMU 启动接入 / CLI / GUI; **VZ 路径接入推后**(底层 SparsebundleTool / EncryptedBundleIO 仍保留, 未删, 等待用户回头实施)。
 >
 > **设计变更日志**:
 > - **v1**: 单方案 A "sparsebundle 套整 bundle", 双后端透明 — **已废弃**
 > - **v2**: 改混合方案 — VZ 走 sparsebundle / QEMU 走 per-file native — **被 v2.2 部分覆盖**
 > - **v2.1**: E0/E1/E2 PoC 通过, D10/D11/D12 锁定
 > - **v2.2**: 用户拍板 **强制密码 + 跨机器 portable** — 取消 Keychain 缓存路径, master KEK 永远从 password PBKDF2 派生, salt + iter 写明文 routing JSON
-> - **v2.3 (当前)**: PR-5 实施时发现 **LUKS passphrase 必须 UTF-8 合法**, 32 字节 binary key 不能直接当 passphrase. 锁定 D13: **sub key → base64 编码 ASCII 字符串当 LUKS passphrase**, 通过公共 `LuksSecretFile` 模块强制. PR-4 测试侥幸 (用了合法 UTF-8 字节 0x42 等) 已修
+> - **v2.3**: PR-5 实施时发现 **LUKS passphrase 必须 UTF-8 合法**, 32 字节 binary key 不能直接当 passphrase. 锁定 D13: **sub key → base64 编码 ASCII 字符串当 LUKS passphrase**, 通过公共 `LuksSecretFile` 模块强制. PR-4 测试侥幸 (用了合法 UTF-8 字节 0x42 等) 已修
+> - **v2.4 (当前)**: 用户拍板 **QEMU 路径优先全套实施** (PR-9 启动接入 / PR-10 CLI / PR-11 GUI). VZ 路径接入推后 (底层模块 SparsebundleTool / EncryptedBundleIO VZ 分支保留, 等用户回头). PR-9 范围收窄为"仅 QEMU 启动接入", T1 真机验证只跑 QEMU; T4 真机 stale mount panic 留 VZ 接入时再做
 >
 > 见底部"设计变更"小节定位历史决策依据.
 
@@ -511,9 +512,9 @@ P1:
 | **PR-6** | **`SwtpmKeyHelper.swift`** — Pipe 透传 32 字节 binary key 到 swtpm stdin (fd=0); argv `--key fd=0,mode=aes-256-cbc,format=binary,remove=false`; 不落盘. 6 个测试 (4 单元 + 2 真跑 swtpm) | 1 天 | **✅ 已落** |
 | **PR-7** | `HVMPaths.mountpointFor(uuid:)` + `mountsRoot` + `MountReaper.reapStaleMounts` (VZ stale sparsebundle force detach, BundleLock.isBusy 跨进程探活). QEMU 路径不需 reap (Pipe + NSTemporaryDirectory cleanup). 4 测真跑 hdiutil. T4 真机 panic 模拟留 PR-9. | 1 天 | **✅ 已落** |
 | **PR-8** | `EncryptedBundleIO` 路由层 + `RoutingMetadata` (snake_case JSON, schema v2). create/unlock/detectScheme + Create/UnlockedHandle lifecycle (VZ detach 兜底). 跨机器 portable 闭环 (源 cp → 目标 unlock 同密码同 VM ID). 10 测真跑. | 2 天 | **✅ 已落** |
-| **PR-9** | `VMHost` / engine 启动路径接入 + T1 实测 (双后端真跑加密 VM) | 2 天 | 待开 |
-| **PR-10** | `hvm-cli encrypt / decrypt / rekey / encrypt-status` 子命令 + e2e | 2 天 | 待开 |
-| **PR-11** | GUI 创建向导加密复选框 + 详情页加密区 + 密码 modal | 3 天 | 待开 |
+| **PR-9** | **(QEMU only, v2.4)** QemuArgsBuilder LUKS argv 分支 + secret 文件准备 / 启动后 unlink + QemuHostEntry 接 EncryptedBundleIO.unlock + SwtpmKeyHelper Pipe 透传; T1 真机仅跑 QEMU. **VZ 路径接入推后** | 2 天 | 待开 |
+| **PR-10** | **(QEMU only)** `hvm-cli create --encrypt` + `hvm-cli encrypt / decrypt / rekey / encrypt-status` 子命令 + 启动期密码输入 (getpass + IPC). VZ 路径推后 | 2 天 | 待开 |
+| **PR-11** | **(QEMU only)** GUI 创建向导加密复选框 + 双密码框 + 启动期密码 modal + 详情页加密区. VZ 路径推后 | 3 天 | 待开 |
 | **PR-12** | 文档同步: 现状回写 v1 (新建 SECURITY.md / 改 STORAGE.md / VM_BUNDLE.md / CLI.md / GUI.md) + 约束回写 CLAUDE.md "加密约束" 节 + 本稿状态改 "代码已合入" | 1 天 | 待开 |
 
 合计 ~16.5 天 / 1 人. 顺序串行 (PR-2 / PR-4 可并行起草).
@@ -540,7 +541,27 @@ P1:
 
 ## 设计变更日志
 
-### 2026-05-04 v2.3 — LUKS passphrase base64 编码 (本稿当前状态)
+### 2026-05-04 v2.4 — QEMU 路径优先实施 (本稿当前状态)
+
+**变更**: 用户决策 "完整实现 QEMU 加密所有的东西, VZ 先放一边". PR-9~11 范围全部收窄到 QEMU 路径.
+
+**触发**: PR-1~8 已把双路径所有底层 + 路由层全部就绪, 但实际接 VMHost / engine / GUI 工作量大. 分批落地比一次双路径接入更稳, QEMU 优先有两个原因:
+1. QEMU 是 v2.2 用户硬要求"跨机器 portable"的主要载体 (Linux/Win guest 都走 QEMU)
+2. macOS guest 必走 VZ, 但加密 macOS 是高级场景, 可推后
+
+**影响**:
+- PR-9 范围: 仅 QEMU 启动接入 (LUKS argv / secret 文件 / swtpm Pipe 透传)
+- PR-10 / PR-11 范围: 仅 QEMU CLI / GUI
+- VZ 路径底层 (SparsebundleTool / EncryptedBundleIO VZ 分支 / MountReaper) 保留**不删**, 模块 + 测试都在; 等用户回头实施 VZ 接入时直接用
+- T1 真机验证只跑 QEMU; T4 stale mount panic 留 VZ 接入时
+- 设计稿其他部分 (双层密钥 / KDF / routing JSON / 跨机器 portable) 不变
+
+**保留 v2.3 决策**:
+- 强制密码 + 跨机器 portable + 无 Keychain 缓存 (v2.2)
+- LUKS passphrase base64 编码 (v2.3)
+- 双 scheme 并存 (vz-sparsebundle 仍是 routing JSON 合法值)
+
+### 2026-05-04 v2.3 — LUKS passphrase base64 编码
 
 **变更**: PR-5 实施 OVMFVarsLuksFactory 时 qemu-img convert 报 "Data from secret sec0 is not valid UTF-8". 根因: LUKS spec 要求 passphrase UTF-8 合法, 但 32 字节 binary master/sub key 大概率含非 UTF-8 字节.
 
@@ -628,4 +649,4 @@ P1:
 ---
 
 **最后更新**: 2026-05-04
-**状态**: 设计稿混合方案 v2.3; PR-1 ~ PR-8 已落, 加密底层 + 路由层 + 跨机器 portable 闭环全部就绪. T1 / T4 真机 panic 留 PR-9. 可进 PR-9 (VMHost 启动接入)
+**状态**: 设计稿 v2.4 (QEMU 优先); PR-1 ~ PR-8 已落 (双路径底层 + 路由), PR-9~11 集中 QEMU 接入. 可进 PR-9 QEMU only
