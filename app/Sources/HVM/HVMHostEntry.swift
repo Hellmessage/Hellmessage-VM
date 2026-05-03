@@ -138,6 +138,7 @@ public enum HVMHostEntry {
             HostState.shared.dbgOps = DbgOps(
                 view: view,
                 guestOS: config.guestOS,
+                displaySpec: config.effectiveDisplaySpec,
                 stateProvider: { handle.state },
                 startedAtProvider: { HostState.shared.startedAt },
                 consoleBridgeProvider: { handle.consoleBridge }

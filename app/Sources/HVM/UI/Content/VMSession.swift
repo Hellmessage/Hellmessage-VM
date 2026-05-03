@@ -46,6 +46,7 @@ public final class VMSession {
     private lazy var dbgOps: DbgOps = DbgOps(
         view: attachment.view,
         guestOS: config.guestOS,
+        displaySpec: config.effectiveDisplaySpec,
         stateProvider: { [weak self] in self?.state ?? .stopped },
         startedAtProvider: { [weak self] in self?.startedAt },
         consoleBridgeProvider: { [weak self] in self?.handle.consoleBridge }

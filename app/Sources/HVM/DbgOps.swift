@@ -18,17 +18,26 @@ import HVMIPC
 public final class DbgOps {
     private let view: HVMView
     private let guestOS: GuestOSType
+    /// 权威 framebuffer 尺寸. 调用方传 config.effectiveDisplaySpec, 或 nil 走 guestOS 兜底.
+    /// 这样 hvm-dbg screenshot 坐标 / 鼠标 abs 映射跟 VMConfig 真实尺寸对齐, 不再硬编码.
+    private let displaySpec: DisplaySpec
     private let stateProvider: () -> RunState
     private let startedAtProvider: () -> Date?
     private let consoleBridgeProvider: () -> ConsoleBridge?
     private var lastFrameSha256: String? = nil
 
     public init(view: HVMView, guestOS: GuestOSType,
+                displaySpec: DisplaySpec? = nil,
                 stateProvider: @escaping () -> RunState,
                 startedAtProvider: @escaping () -> Date? = { nil },
                 consoleBridgeProvider: @escaping () -> ConsoleBridge? = { nil }) {
         self.view = view
         self.guestOS = guestOS
+        // displaySpec 缺省 → 当前 guestOS 默认尺寸; 实际生产路径从 config.effectiveDisplaySpec 注入.
+        self.displaySpec = displaySpec ?? {
+            let fb = guestOS.defaultFramebufferSize
+            return DisplaySpec(width: fb.width, height: fb.height, ppi: 220)
+        }()
         self.stateProvider = stateProvider
         self.startedAtProvider = startedAtProvider
         self.consoleBridgeProvider = consoleBridgeProvider
@@ -302,11 +311,10 @@ public final class DbgOps {
 
     // MARK: - 辅助
 
-    /// guest framebuffer 分辨率 (与 ConfigBuilder 当前硬编码对齐).
-    /// TODO: 将来 VMConfig 加 displaySpec 后, 这里改成读 config.
+    /// 权威 guest framebuffer 尺寸. 现在直接读 displaySpec (init 时由 config.effectiveDisplaySpec
+    /// 注入); 老的"读 guestOS.defaultFramebufferSize"路径已合并到 effectiveDisplaySpec 兜底.
     private func guestFramebufferSize() -> (Int, Int) {
-        let s = guestOS.defaultFramebufferSize
-        return (s.width, s.height)
+        return (displaySpec.width, displaySpec.height)
     }
 
     private func parsePoint(_ x: String?, _ y: String?) throws -> CGPoint {

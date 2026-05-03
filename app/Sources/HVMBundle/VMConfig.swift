@@ -40,6 +40,22 @@ public enum DiskRole: String, Codable, Sendable {
     case data
 }
 
+/// guest framebuffer 显式尺寸 + DPI. 老 yaml 缺该字段时, VMConfig.effectiveDisplaySpec
+/// 兜底到 GuestOSType.defaultFramebufferSize. 加这个字段是为了让 dbg 工具 / hvm-dbg
+/// screenshot 坐标计算 / VZ Linux scanout 共用同一份"权威尺寸", 不再硬编码散落在 ConfigBuilder
+/// 与 DbgOps. 加字段不需 schema 升级 (可选, 老 yaml 兜底).
+public struct DisplaySpec: Codable, Sendable, Equatable {
+    public var width: Int
+    public var height: Int
+    /// PPI 仅 VZMacGraphicsDisplayConfiguration 用; Linux/Windows guest 忽略.
+    public var ppi: Int
+    public init(width: Int, height: Int, ppi: Int = 220) {
+        self.width = width
+        self.height = height
+        self.ppi = ppi
+    }
+}
+
 /// 磁盘文件格式. 持久化到 config.yaml, 运行时读 disk.format 不再靠扩展名推断.
 ///   - raw   → ftruncate sparse, VZ 后端必走
 ///   - qcow2 → qemu-img create / resize, QEMU 后端走
@@ -334,6 +350,9 @@ public struct VMConfig: Codable, Sendable, Equatable {
     /// 关闭后行为退回老逻辑: cmd → meta_l (Win 键), 用户用 control+c 复制.
     /// GUI 进程内 view-instance 级开关, 不持久化到 host 子进程 — 改完无须重启 VM, 关掉编辑面板生效.
     public var macStyleShortcuts: Bool
+    /// guest framebuffer 显式尺寸. nil 表示走 GuestOSType.defaultFramebufferSize 兜底.
+    /// 加可选字段不变 schema 版本; 老 yaml decode 时缺该字段视为 nil, init(from:) 已兜底.
+    public var displaySpec: DisplaySpec?
     public var macOS: MacOSSpec?
     public var linux: LinuxSpec?
     public var windows: WindowsSpec?
@@ -353,6 +372,7 @@ public struct VMConfig: Codable, Sendable, Equatable {
         windowsDriversInstalled: Bool = false,
         clipboardSharingEnabled: Bool = true,
         macStyleShortcuts: Bool = true,
+        displaySpec: DisplaySpec? = nil,
         macOS: MacOSSpec? = nil,
         linux: LinuxSpec? = nil,
         windows: WindowsSpec? = nil
@@ -372,6 +392,7 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.windowsDriversInstalled = windowsDriversInstalled
         self.clipboardSharingEnabled = clipboardSharingEnabled
         self.macStyleShortcuts = macStyleShortcuts
+        self.displaySpec = displaySpec
         self.macOS = macOS
         self.linux = linux
         self.windows = windows
@@ -381,7 +402,7 @@ public struct VMConfig: Codable, Sendable, Equatable {
         case schemaVersion, id, createdAt, displayName, guestOS, engine,
              cpuCount, memoryMiB, disks, networks, installerISO,
              bootFromDiskOnly, windowsDriversInstalled, clipboardSharingEnabled,
-             macStyleShortcuts, macOS, linux, windows
+             macStyleShortcuts, displaySpec, macOS, linux, windows
     }
 
     /// 自定义 decode: 仅为 engine 字段提供"缺省 .vz"兜底, 其他字段沿用合成默认行为
@@ -407,9 +428,23 @@ public struct VMConfig: Codable, Sendable, Equatable {
         // 老 yaml 缺字段 → 默认 true (符合"开箱可用, 用户没显式关就开"的预期)
         self.clipboardSharingEnabled = try c.decodeIfPresent(Bool.self, forKey: .clipboardSharingEnabled) ?? true
         self.macStyleShortcuts = try c.decodeIfPresent(Bool.self, forKey: .macStyleShortcuts) ?? true
+        // 老 yaml 缺 displaySpec → nil, effectiveDisplaySpec 计算属性兜底到 GuestOSType 默认
+        self.displaySpec = try c.decodeIfPresent(DisplaySpec.self, forKey: .displaySpec)
         self.macOS = try c.decodeIfPresent(MacOSSpec.self, forKey: .macOS)
         self.linux = try c.decodeIfPresent(LinuxSpec.self, forKey: .linux)
         self.windows = try c.decodeIfPresent(WindowsSpec.self, forKey: .windows)
+    }
+
+    // MARK: - 显示尺寸权威读取
+
+    /// 权威 framebuffer 尺寸: 优先 displaySpec 字段, 否则按 guestOS 兜底.
+    /// 所有需要 framebuffer 尺寸的地方 (DbgOps screenshot 坐标计算 / 鼠标 abs 映射 / VZ
+    /// scanout 配置) 都应走这, 不再硬编码或单独 grep guestOS.defaultFramebufferSize.
+    public var effectiveDisplaySpec: DisplaySpec {
+        if let s = displaySpec { return s }
+        let fb = guestOS.defaultFramebufferSize
+        // ppi 默认 220 (跟 macOS 1080p Retina 一致). Linux/Windows guest 不消费 ppi.
+        return DisplaySpec(width: fb.width, height: fb.height, ppi: 220)
     }
 
     // MARK: - 主盘路径 helper (运行时不要用 BundleLayout.mainDiskName 之类常量推断)
