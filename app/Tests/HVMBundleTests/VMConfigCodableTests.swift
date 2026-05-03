@@ -187,6 +187,48 @@ final class VMConfigCodableTests: XCTestCase {
         XCTAssertThrowsError(try cfg.validate())
     }
 
+    // MARK: - EncryptionSpec (schema v3)
+
+    func testCurrentSchemaVersionIsV3() {
+        XCTAssertEqual(VMConfig.currentSchemaVersion, 3)
+    }
+
+    func testEncryptionSpecDefaultsToNil() throws {
+        let cfg = VMConfig(
+            displayName: "x",
+            guestOS: .linux,
+            cpuCount: 1, memoryMiB: 256,
+            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 1, format: .raw)]
+        )
+        XCTAssertNil(cfg.encryption, "新建 VM encryption 默认 nil (明文)")
+    }
+
+    func testEncryptionSpecRoundTrip() throws {
+        let enc = EncryptionSpec(enabled: true,
+                                 scheme: .vzSparsebundle,
+                                 createdAt: Date(timeIntervalSince1970: 1700000000))
+        let cfg = VMConfig(
+            displayName: "encrypted",
+            guestOS: .linux,
+            cpuCount: 1, memoryMiB: 256,
+            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 1, format: .raw)],
+            encryption: enc
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(cfg)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(VMConfig.self, from: data)
+        XCTAssertEqual(decoded.encryption, cfg.encryption)
+        XCTAssertEqual(decoded.encryption?.scheme, .vzSparsebundle)
+    }
+
+    func testEncryptionSchemeRawValuesStable() {
+        XCTAssertEqual(EncryptionSpec.EncryptionScheme.vzSparsebundle.rawValue, "vz-sparsebundle")
+        XCTAssertEqual(EncryptionSpec.EncryptionScheme.qemuPerfile.rawValue,    "qemu-perfile")
+    }
+
     /// 合法组合: macOS+vz / linux+vz / linux+qemu / windows+qemu 都不报错
     func testValidateAccepts_all_legal_combos() throws {
         let combos: [(GuestOSType, Engine)] = [

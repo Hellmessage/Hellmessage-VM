@@ -316,10 +316,55 @@ public struct WindowsSpec: Codable, Sendable, Equatable {
     }
 }
 
+/// 整 VM 加密元信息 (schema v3 加). 设计稿 docs/v3/ENCRYPTION.md.
+/// 明文 VM 缺该字段或 enabled=false. 真正加密 VM 加密形态见 scheme.
+/// 注: KDF 参数 (salt / iterations) **不**在这里 — 它们在 routing JSON (`meta/encryption.json` /
+/// `<bundle>.encryption.json`), 因为 config 自身可能加密了 (QEMU per-file 路径), 解开 config 才能
+/// 读 KDF 参数会陷死循环. routing JSON 是明文外部元数据, 跨机器 portable 入口.
+public struct EncryptionSpec: Codable, Sendable, Equatable {
+    /// 是否启用加密. 明文 VM 这里是 false (或字段缺省, init(from:) 兜底)
+    public var enabled: Bool
+    /// 加密形态. 仅 enabled=true 时有效:
+    ///   - vz-sparsebundle  整 bundle 套加密 sparsebundle (VZ 路径)
+    ///   - qemu-perfile     每文件独立加密 (QEMU 路径; qcow2 LUKS / OVMF LUKS / swtpm key / config AES-GCM)
+    public var scheme: EncryptionScheme?
+    /// 创建时间, 仅展示
+    public var createdAt: Date?
+
+    public enum EncryptionScheme: String, Codable, Sendable, CaseIterable {
+        case vzSparsebundle = "vz-sparsebundle"
+        case qemuPerfile    = "qemu-perfile"
+    }
+
+    public init(enabled: Bool = false,
+                scheme: EncryptionScheme? = nil,
+                createdAt: Date? = nil) {
+        self.enabled = enabled
+        self.scheme = scheme
+        self.createdAt = createdAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled, scheme, createdAt
+    }
+
+    /// 老 yaml 缺字段兜底:
+    ///   - enabled 缺 → false
+    ///   - scheme  缺 → nil
+    ///   - createdAt 缺 → nil
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        self.scheme = try c.decodeIfPresent(EncryptionScheme.self, forKey: .scheme)
+        self.createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt)
+    }
+}
+
 public struct VMConfig: Codable, Sendable, Equatable {
     /// schema v1: JSON, DiskSpec 无 format 字段 (已断兼容, 不再读)
     /// schema v2: YAML, DiskSpec 加 format (raw / qcow2)
-    public static let currentSchemaVersion = 2
+    /// schema v3: 加 encryption 顶层字段 (EncryptionSpec)
+    public static let currentSchemaVersion = 3
 
     public var schemaVersion: Int
     public var id: UUID
@@ -356,6 +401,8 @@ public struct VMConfig: Codable, Sendable, Equatable {
     public var macOS: MacOSSpec?
     public var linux: LinuxSpec?
     public var windows: WindowsSpec?
+    /// 加密元信息 (schema v3 加). nil 或 enabled=false → 明文 VM. 详见 EncryptionSpec.
+    public var encryption: EncryptionSpec?
 
     public init(
         id: UUID = UUID(),
@@ -375,7 +422,8 @@ public struct VMConfig: Codable, Sendable, Equatable {
         displaySpec: DisplaySpec? = nil,
         macOS: MacOSSpec? = nil,
         linux: LinuxSpec? = nil,
-        windows: WindowsSpec? = nil
+        windows: WindowsSpec? = nil,
+        encryption: EncryptionSpec? = nil
     ) {
         self.schemaVersion = VMConfig.currentSchemaVersion
         self.id = id
@@ -396,13 +444,14 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.macOS = macOS
         self.linux = linux
         self.windows = windows
+        self.encryption = encryption
     }
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, id, createdAt, displayName, guestOS, engine,
              cpuCount, memoryMiB, disks, networks, installerISO,
              bootFromDiskOnly, windowsDriversInstalled, clipboardSharingEnabled,
-             macStyleShortcuts, displaySpec, macOS, linux, windows
+             macStyleShortcuts, displaySpec, macOS, linux, windows, encryption
     }
 
     /// 自定义 decode: 仅为 engine 字段提供"缺省 .vz"兜底, 其他字段沿用合成默认行为
@@ -433,6 +482,8 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.macOS = try c.decodeIfPresent(MacOSSpec.self, forKey: .macOS)
         self.linux = try c.decodeIfPresent(LinuxSpec.self, forKey: .linux)
         self.windows = try c.decodeIfPresent(WindowsSpec.self, forKey: .windows)
+        // 老 v2 yaml 缺 encryption → nil. 走 ConfigMigrator v2→v3 后会写入 enabled=false.
+        self.encryption = try c.decodeIfPresent(EncryptionSpec.self, forKey: .encryption)
     }
 
     // MARK: - 显示尺寸权威读取
