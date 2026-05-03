@@ -1,10 +1,12 @@
 # VM 整盘加密 (`HVMEncryption`)
 
-> 状态: **设计稿 — 混合方案 (2026-05-04 决策)**, PR-1 (`SparsebundleTool`) 已落地, 后续 11 个 PR 待开。
+> 状态: **设计稿 v2.2 — 混合方案 + 强制密码 (2026-05-04)**, PR-1 (`SparsebundleTool`) 已落地, 后续 11 个 PR 待开。
 >
 > **设计变更日志**:
-> - **2026-05-04 v1**: 单方案 A "sparsebundle 套整 bundle", 双后端透明 — **已废弃**
-> - **2026-05-04 v2**: 改混合方案 — VZ 走 sparsebundle (容器级), QEMU 走 per-file native (qcow2 LUKS + nvram LUKS + swtpm `--key` + config AES-GCM). 触发原因: 用户反馈 sparsebundle 整体方案与 VMware "per-file 独立加密" 形态差距过大, 运行期 host root 进程能直接读挂载点明文; QEMU 走 native LUKS 能获得形似 + 神似 (运行期密文不出 QEMU 进程内存)
+> - **v1**: 单方案 A "sparsebundle 套整 bundle", 双后端透明 — **已废弃**
+> - **v2**: 改混合方案 — VZ 走 sparsebundle / QEMU 走 per-file native — **被 v2.2 部分覆盖**
+> - **v2.1**: E0/E1/E2 PoC 通过, D10/D11/D12 锁定
+> - **v2.2 (当前)**: 用户拍板 **强制密码 + 跨机器 portable** — 取消 Keychain 缓存路径, master KEK 永远从 password PBKDF2 派生, salt + iter 写明文 routing JSON. 任意机器拿到 sparsebundle / .hvmz 输密码即开. KeychainKEK 模块作废, 不进 PR-2
 >
 > 见底部"设计变更"小节定位历史决策依据.
 
@@ -14,11 +16,13 @@
 - **双后端混合实现**:
   - **VZ** → sparsebundle 套整 bundle (整体容器级加密, **VZ raw 不能 in-place 加密的硬约束**)
   - **QEMU** → 每个文件独立加密 (qcow2 LUKS / OVMF VARS LUKS / swtpm key / AES-GCM config), **接近 VMware per-file 形态**
-- **macOS 原生路径**: 走 hdiutil sparsebundle / qcow2 LUKS / Apple CryptoKit / Keychain (Touch ID), 不引第三方加密库, 不写自家 crypto
+- **跨机器 portable** (v2.2 硬要求): 加密 VM 拷到任意 macOS 机器, 输原密码即可启动. 不依赖目标机 Keychain / 不依赖 iCloud / 不依赖 HVM 安装时机
+- **强制密码每次输入** (v2.2 硬要求): 启动 VM 必须输密码, **不**提供"记住密码"选项. 用户对密码可控, 防设备未锁屏被启 VM
+- **macOS 原生路径**: 走 hdiutil sparsebundle / qcow2 LUKS / Apple CryptoKit, 不引第三方加密库, 不写自家 crypto
 - **不破坏现有 bundle 语义**: VZ 路径 attach 后挂载点目录布局 1:1, QEMU 路径文件位置不变 (内容 ciphertext)
 - **可逆**: 用户可把已加密 VM 转回明文, 反之亦然 (冷迁移, 不在线)
-- **改密无重密**: master KEK 改 → 派生 key 全换, 但 qcow2 LUKS 是 keyslot 级 rekey (毫秒级, 不重密 DEK)
-- **忘密不可恢复**: 不留 master key / 后门
+- **改密**: master KEK 改 → 重密 keyslot (qcow2 / sparsebundle keybag, 毫秒级, 不重密 DEK)
+- **忘密不可恢复**: 不留 master key / 后门 / Keychain 缓存
 
 ## VMware 模型对照
 
@@ -145,53 +149,99 @@ E1 / E2 不通过 → 改方案 (e.g., swtpm 走 sparsebundle 子方案, secret 
 
 ## 密钥管理
 
-### 双层密钥
-
-- **DEK** (Data Encryption Key, AES-256-XTS / AES-256-GCM):
-  - VZ 路径: sparsebundle 内部 keybag 管, HVM 进程**不持有**
-  - QEMU 路径: 每个 qcow2 / OVMF / swtpm 内部 keyslot 管, HVM 进程**不持有**
-- **Master KEK** (Key Encryption Key):
-  - 32 字节 random 或用户密码经 PBKDF2 派生
-  - 对 VZ: 直接喂给 hdiutil
-  - 对 QEMU: HKDF-SHA256 派生 4 个子 key (`info=qcow2-disk` / `qcow2-nvram` / `swtpm` / `config`)
+### 三层密钥(v2.2)
 
 ```
-master KEK
-   ├─ VZ path:    feed → hdiutil (sparsebundle)
-   └─ QEMU path:  HKDF-SHA256(master, info=...) →
-                   ├─ qcow2-disk-key  → -object secret,id=sec_disk
-                   ├─ qcow2-nvram-key → -object secret,id=sec_nvram
-                   ├─ swtpm-key       → swtpm --key file=...
-                   └─ config-key      → AES.GCM.SealedBox(config.yaml)
+user password (用户记忆 / 输入, 永远不落盘)
+       │
+       │  PBKDF2-SHA256(password, salt, iter=600k, keylen=32)
+       │  salt 16 字节随机, 每 VM 独立, 写明文 routing JSON
+       ↓
+master KEK (32 字节, HVM 进程内存中, 启动后即刻 drop)
+       │
+       ├─ VZ path:    feed password 字符串给 hdiutil → hdiutil 自家 PBKDF2 → keybag → DEK
+       │              (注: VZ 路径 master KEK 不在 HVM 进程持有, hdiutil 自包管 KDF)
+       │
+       └─ QEMU path:  HKDF-SHA256(master, info=...) →
+                       ├─ qcow2-disk-key  (32B) → -object secret,id=sec_disk,file=…
+                       ├─ qcow2-nvram-key (32B) → -object secret,id=sec_nvram,file=…
+                       ├─ swtpm-key       (32B) → swtpm --key fd=N
+                       └─ config-key      (32B) → AES.GCM.SealedBox(config.yaml)
+
+DEK (qcow2/sparsebundle 内部 keyslot, HVM 进程**绝不持有**)
 ```
 
-HKDF info 字符串**当作版本** — 未来加新加密点不影响老 key.
+**关键**: master KEK 是 password + salt 的纯函数, 永远从输入端派生, **不缓存到 Keychain / 不写盘**. salt 公开(写明文)— 标准做法, 不损失安全性.
 
-### KEK 来源
+### KEK 来源 (单一)
 
-| `kek_source` | 启动体验 | 风险 |
+| 来源 | 启动体验 | 风险 |
 |---|---|---|
-| `password` | 每次启动手输 | 输错锁定; 密码丢失不可恢复 |
-| `keychain` | 随机 KEK 存 Keychain `kSecAttrAccessControl=userPresence`, Touch ID 解锁 | 设备丢失不会泄密 (Secure Enclave 守); 用户被胁迫场景仍会泄密 |
+| **`password`** (唯一) | 每次启动手输 | 输错重试; 密码丢失数据不可恢复 |
 
-`keychain` 模式 Keychain item 名: `com.hellmessage.vm.kek.<uuid>`.
+**v2.2 删除 Keychain 缓存路径**. 理由:
+1. 跨机器 portable 必须 password 派生 (Keychain 不跨机器)
+2. 用户拍板"取消记录密码, 强制每次输" — VeraCrypt / BitLocker / FileVault Recovery 同款. 安全 / 直观, 防设备未锁屏直接启 VM
+3. 简化代码 (不需要 KeychainKEK 模块) + 简化 UX (不需要 "记住密码 (Touch ID)" 切换 / 钥匙串损坏 fallback)
+
+### KDF 参数 (写 routing JSON, 跨机器必备)
+
+| 参数 | 默认值 | 备注 |
+|---|---|---|
+| `kdf_algo` | `pbkdf2-sha256` | 算法 ID (未来切 argon2id 时升 v2 字段) |
+| `kdf_iterations` | `600000` | 2024 OWASP 推荐值, 1Password / Bitwarden 同款. M1/M2/M3 单次派生 ~150 ms 可接受 |
+| `kdf_salt` | 16 字节 random, base64 | 每 VM 独立, 创建时一次性生成 |
+| `kdf_keylen` | `32` | 256 bit AES |
+
+routing JSON 例:
+```json
+{
+  "schemaVersion": 2,
+  "vm_id": "<uuid>",
+  "scheme": "qemu-perfile",
+  "kdf_algo": "pbkdf2-sha256",
+  "kdf_iterations": 600000,
+  "kdf_salt": "Y2NkZjI4NDY2NTQ4ZmE5Y2RkYWRkOTQ2",
+  "kdf_keylen": 32,
+  "display_name": "Foo"
+}
+```
+
+### 跨机器迁移
+
+```
+源机:                        目标机:
+1. Foo.hvmz/.sparsebundle    1. cp -R Foo.hvmz/sparsebundle from 源
+   或 Foo.hvmz/ (QEMU 路径)      到目标 ~/Library/.../HVM/VMs/
+2. routing JSON 同上          2. 自动识别加密 VM (扩展名 / routing JSON)
+                              3. 启动 → 弹密码框
+                              4. 输源机密码
+                                 ↓
+                                 PBKDF2(password, salt from routing JSON)
+                                 → master KEK
+                                 ↓
+                                 [VZ] hdiutil attach
+                                 [QEMU] HKDF 派生 → 注入
+                              5. VM 起
+```
+
+**目标机不需安装任何额外组件**(只要装了 HVM). Keychain / iCloud / 网络都不需要.
 
 ### 改密 (rekey)
 
-VZ 路径: `hdiutil chpass <sparsebundle>` — 仅换 keybag KEK, 几毫秒.
+VZ 路径: `hdiutil chpass <sparsebundle>` — 仅换 keybag, 几毫秒.
 
 QEMU 路径:
-1. 派生新 master 的 4 个子 key
-2. `qemu-img reencrypt` 改各 qcow2 keyslot (毫秒级, 不重密底层 DEK)
-3. swtpm: rewrite NVRAM with new key (停机时改)
-4. AES-GCM 重密 config.yaml (毫秒)
-
-`keychain` 模式同时改 Keychain item.
+1. 用户输老密码 → PBKDF2 → 老 master KEK → HKDF → 老 4 子 key
+2. 用户输新密码 → 生成新 salt → PBKDF2 → 新 master KEK → HKDF → 新 4 子 key
+3. `qemu-img reencrypt` 改各 qcow2 keyslot (毫秒)
+4. swtpm: stop → 用老 key 解出 state, 用新 key 重写 → start (短停机)
+5. AES-GCM 重密 config.yaml
+6. 写新 salt 到 routing JSON
 
 ### 忘密 / 失锁
 
-- `password`: 数据永久不可读. 不留后门
-- `keychain`: 用户主动删 Keychain item 等价于忘密. GUI 创建时建议用户**导出一份恢复密码**到外部密码管理器
+数据永久不可读. **不留后门 / 不留 Keychain 备份 / 不留 master KEK escrow**.
 
 ## config.yaml schema 变化 (v3)
 
@@ -201,46 +251,52 @@ QEMU 路径:
 schemaVersion: 3
 encryption:
   enabled: true
-  scheme: vz-sparsebundle      # VZ 路径
-  # 或:
-  # scheme: qemu-perfile       # QEMU 路径
-  kek_source: keychain         # password | keychain
-  keychain_item: com.hellmessage.vm.kek.<uuid>
+  scheme: vz-sparsebundle      # vz-sparsebundle | qemu-perfile
   created_at: 2026-05-04T...
 ```
 
 明文 VM 的 `encryption` 字段缺省 / `enabled: false`.
 
-### 路由元数据(明文,在加密**外**)
+KDF 参数 (`kdf_algo` / `kdf_iterations` / `kdf_salt` / `kdf_keylen`) **不**写到 config.yaml — config.yaml 自身可能加密 (QEMU 路径), 解开 config.yaml 才能读 KDF 参数会陷死循环. 所以 KDF 参数全在 routing JSON.
 
-VZ 路径: sparsebundle **同级**写 `Foo.hvmz.encryption.json`(明文,只放 routing):
+### 路由元数据(明文,在加密**外**) — 跨机器 portable 关键
+
+VZ 路径: sparsebundle **同级**写 `Foo.hvmz.encryption.json`(明文,只放 routing + KDF):
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "vm_id": "<uuid>",
   "scheme": "vz-sparsebundle",
-  "kek_source": "keychain",
-  "keychain_item": "com.hellmessage.vm.kek.<uuid>",
+  "kdf_algo": "pbkdf2-sha256",
+  "kdf_iterations": 600000,
+  "kdf_salt": "<16 bytes base64>",
+  "kdf_keylen": 32,
   "display_name": "Foo"
 }
 ```
+
+注: VZ 路径 master KEK 不由 HVM 派生 (hdiutil 自管 PBKDF2), 所以这里的 `kdf_*` 字段对 VZ 路径**仅记录信息, 不参与启动派生**. 但写在 routing JSON 里方便后续 cross-engine 改密 / 工具诊断.
 
 QEMU 路径: `<bundle>/meta/encryption.json` 直接放在 bundle 内 (config.yaml 加密了, 这个路由文件不能加密):
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "vm_id": "<uuid>",
   "scheme": "qemu-perfile",
-  "kek_source": "keychain",
-  "keychain_item": "com.hellmessage.vm.kek.<uuid>",
+  "kdf_algo": "pbkdf2-sha256",
+  "kdf_iterations": 600000,
+  "kdf_salt": "<16 bytes base64>",
+  "kdf_keylen": 32,
   "display_name": "Foo",
   "encrypted_paths": ["disks/os.qcow2", "disks/data-*.qcow2", "nvram/efi-vars.qcow2", "tpm/permall", "config.yaml"]
 }
 ```
 
-不挂载 / 不解密就能列 VM + 显示加密状态. 路由文件**不含**任何 KEK / DEK 可解密信息.
+**跨机器 portable 全靠 routing JSON**: 目标机读 routing JSON → 拿 salt + iter → PBKDF2(password, salt) → 派生同样的 master KEK → 解密 / 启动.
+
+不挂载 / 不解密就能列 VM + 显示加密状态. 路由文件**不含**任何密码 / KEK / DEK 可解密信息.
 
 ### ConfigMigrator
 
@@ -252,28 +308,29 @@ v2 → v3: `encryption` 缺省塞 `enabled: false` 即升完. 无破坏性变更
 
 VZ 路径:
 ```
-1. 用户向导勾"加密"+ 选 KEK 源 + 输密码
+1. 用户向导勾"加密"+ 输密码 (一次, 创建时确定)
 2. EncryptedBundleIO.create:
-   a. SparsebundleTool.create(at:.hvmz.sparsebundle, password:KEK, ...)
-   b. SparsebundleTool.attach → mountpoint
-   c. 在 mountpoint 内走原 BundleIO.create (写 config.yaml 等)
-   d. 在 sparsebundle 同级写 .encryption.json routing
-   e. keychain 模式: 把 KEK 存 Keychain
-   f. detach (除非紧接着启动)
+   a. 生成 16 字节 random salt → 写 .encryption.json routing (含 kdf_* 参数)
+   b. SparsebundleTool.create(at:.hvmz.sparsebundle, password:user-input, ...)
+      (hdiutil 自家 PBKDF2 包 password 到 keybag)
+   c. SparsebundleTool.attach → mountpoint
+   d. 在 mountpoint 内走原 BundleIO.create (写 config.yaml 等)
+   e. detach (除非紧接着启动)
 ```
 
 QEMU 路径:
 ```
-1. 用户向导勾"加密"+ 选 KEK 源 + 输密码
+1. 用户向导勾"加密"+ 输密码
 2. EncryptedBundleIO.create:
    a. mkdir <bundle>.hvmz/...
-   b. HKDF 派生 4 个子 key
-   c. QcowLuksFactory.create(<bundle>/disks/os.qcow2, sizeGiB, key=qcow2-disk-key)
-   d. QcowLuksFactory.create(<bundle>/nvram/efi-vars.qcow2, ..., key=qcow2-nvram-key) — OVMF VARS 模板转 LUKS qcow2
-   e. swtpm state 用 swtpm-key 加密初始化 (Win VM)
-   f. EncryptedConfigIO.save(config, key=config-key) → config.yaml AES-GCM in-place
-   g. 写 <bundle>/meta/encryption.json routing
-   h. keychain 模式: 把 master KEK 存 Keychain
+   b. 生成 16 字节 random salt → 写 meta/encryption.json routing (含 kdf_* 参数)
+   c. master_KEK = PBKDF2-SHA256(password, salt, iter=600k, keylen=32)
+   d. 4 子 key = HKDF-SHA256(master, info=...)
+   e. QcowLuksFactory.create(disks/os.qcow2, sizeGiB, key=qcow2-disk-key)
+   f. QcowLuksFactory.create(nvram/efi-vars.qcow2, ..., key=qcow2-nvram-key)
+   g. swtpm state 用 swtpm-key 加密初始化 (Win VM)
+   h. EncryptedConfigIO.save(config, key=config-key) → config.yaml AES-GCM in-place
+   i. master_KEK / 子 key 立即从内存清理 (尽量, Swift Data 不强保证)
 ```
 
 ### 启动加密 VM
@@ -281,9 +338,10 @@ QEMU 路径:
 VZ 路径:
 ```
 1. 检测 .hvmz.sparsebundle 形态
-2. 读 sibling .encryption.json → kek_source / keychain_item
-3. 拉 master KEK (Keychain Touch ID / GUI 密码框)
-4. SparsebundleTool.attach(at:, password:KEK, mountpoint:)
+2. 读 sibling .encryption.json (信息性, 不参与解密)
+3. 弹密码框 → 用户输 password
+4. SparsebundleTool.attach(at:, password:user-input, mountpoint:)
+   (hdiutil 自家 PBKDF2 解 keybag)
 5. BundleIO.load(mountpoint/<name>.hvmz)
 6. 走原 flock + VZ engine 启动路径
 ```
@@ -291,13 +349,17 @@ VZ 路径:
 QEMU 路径:
 ```
 1. 检测 <bundle>/meta/encryption.json scheme=qemu-perfile
-2. 拉 master KEK
-3. HKDF 派生 4 个子 key
-4. EncryptedConfigIO.load(config.yaml, key=config-key) 解出 VMConfig
-5. 子 key 写到 0600 临时文件 (~/Library/.../HVM/run/<uuid>.key.{disk,nvram,swtpm}), QEMU 启动后立即 unlink
-6. swtpm 启动: argv 加 --key file=<run>/<uuid>.key.swtpm
-7. QEMU 启动: argv 加 -object secret,id=sec_disk,file=<run>/<uuid>.key.disk + 各 -drive file.driver=luks,key-secret=sec_disk
-8. 启动完成后回内存擦除 (memset 子 key buffer)
+2. 读 routing JSON 拿 kdf_salt + kdf_iterations
+3. 弹密码框 → 用户输 password
+4. master_KEK = PBKDF2-SHA256(password, salt, iter, 32)
+5. 4 子 key = HKDF-SHA256(master, info=...)
+6. EncryptedConfigIO.load(config.yaml, key=config-key) 解出 VMConfig
+   (失败 → 密码错, 提示重试)
+7. 子 key 走 fd= (swtpm) 或 file= (qemu-img secret) 注入:
+    - swtpm 走 --key fd=<dup2 透传>, 不落盘
+    - QEMU 走 -object secret,file=<run/<uuid>.key.{disk,nvram}> 0600 临时文件
+8. QEMU 启动后 HVM 立即 unlink 临时 key 文件 (子进程已读完, fd 还在)
+9. master_KEK / 4 子 key 从 HVM 内存清理
 ```
 
 ### 停止加密 VM
@@ -440,7 +502,8 @@ P1:
 | PR | 内容 | 时间盒 | 状态 |
 |---|---|---|---|
 | **PR-1** | `HVMEncryption/SparsebundleTool.swift` (hdiutil 包装) + 8 个真跑测试 + `EncryptionError` enum + 多语言 stderr 识别 | 1 天 | **✅ 已落** |
-| **PR-2** | `KeychainKEK.swift` 封装 SecItem read/write/delete + Touch ID + 单测 (mock) | 1 天 | 待开 |
+| **~~PR-2 (旧)~~** | ~~`KeychainKEK.swift`~~ — **v2.2 取消**, 不需要 Keychain 缓存 | — | ❌ 废 |
+| **PR-2 (新)** | `MasterKey.swift` (32 字节值类型 + random) + `PasswordKDF.swift` (PBKDF2-SHA256, 600k iter) + 单测 | 1 天 | 待开 |
 | **PR-3** | `EncryptionKDF.swift` (HKDF-SHA256 派生 4 个子 key) + `EncryptedConfigIO.swift` (CryptoKit AES-GCM in-place 包 config.yaml) + ConfigMigrator v2→v3 | 2 天 | 待开 |
 | **PR-4** | **`QcowLuksFactory.swift`** — qcow2 LUKS create / resize / reencrypt 包 `qemu-img -o encrypt.format=luks` (含 E3 性能 PoC) | 1.5 天 | 待开 |
 | **PR-5** | **OVMF vars LUKS** — `efi-vars.fd` 改成 LUKS qcow2; QEMU argv 加 `-drive file.driver=luks,file.key-secret=`; **secret 注入机制** (含 E2 PoC) | 1 天 | 待开 |
@@ -464,16 +527,40 @@ P1:
 | D2 | "明文 + 加密"两种 VM 同时存在, 还是全局开关 | 允许共存 | 已决 |
 | D3 | sparsebundle band 大小默认值 (VZ 路径) | 8 MiB (待 T2) | T2 后 |
 | D4 | sparsebundle 容器初始上限策略 | `+ 32 GiB` (可 grow) | 已决 |
-| D5 | `keychain` 模式是否要求**同时**设回退密码 | 是, 创建时双轨; Keychain 失效用回退 | 待决 |
+| ~~D5~~ | ~~Keychain 模式是否要求回退密码~~ | **v2.2 删除 — 取消 Keychain 缓存, 一律密码** | 已决 |
 | D6 | 是否支持加密 VM 放外置 NVMe | 支持 (sparsebundle 与卷无关; qcow2 同) | 已决 |
-| D7 | Mac Studio / mini 无 Touch ID 的 keychain 体验 | 退到系统密码 prompt | 已决 |
-| D8 | 加密 VM 的迁移工具 | VZ: cp sparsebundle; QEMU: cp 整 .hvmz 后 rekey | 已决 |
+| ~~D7~~ | ~~Mac Studio / mini 无 Touch ID 的 keychain 体验~~ | **v2.2 删除 — 不再用 Touch ID** | 已决 |
+| D8 | 加密 VM 的迁移工具 | **v2.2 改: 直接 cp + 输密码即可 (含 routing JSON 跨机器派生)** | 已决 |
 | **D9** | 加密 VM 的克隆是否支持 | 不支持 (本稿). 后续 PR 补; VZ 易 (cp + chpass), QEMU 难 (4 个 key 全部 reencrypt) | 待决 — 看用户需求 |
 | **D10** | swtpm 加密方式 | ✅ **已决 (E1 通过)**: 走 `--key fd=<fd>,mode=aes-256-cbc,format=binary` — HVM 主进程 dup2 透传 fd, 不落盘. swtpm `--key` 原生支持, 无需 sparsebundle fallback | 已决 |
 | **D11** | QEMU secret 注入方式 | ✅ **已决 (E2 通过)**: 走 `-object secret,id=<id>,file=<path>` — HVM 写 0600 临时文件 (`run/<uuid>.luks-key.{disk,nvram}`), 启动 QEMU 后立即 unlink. fifo 形式作未来优化项 (跳过磁盘) | 已决 |
 | **D12** | QEMU OVMF VARS 加密形态 | 走 `-drive if=pflash,format=qcow2,file=<luks qcow2>,readonly=off,file.driver=luks,file.key-secret=sec_nvram`. OVMF VARS 模板初次写入时由 QcowLuksFactory 创建空白 LUKS qcow2, 装机第一次 boot 由 OVMF 自己写入 EFI VARS | E0 通过后即可定 |
 
 ## 设计变更日志
+
+### 2026-05-04 v2.2 — 强制密码 + 跨机器 portable (本稿当前状态)
+
+**变更**: 用户拍板 "取消记录密码, 强制每次输". 同时新增硬要求 "加密 VM 复制到其他机器输密码即开".
+
+**触发**: 用户两个连续反馈 —
+1. "加密盘要实现复制到其他机器也能通过密码启动" (portability)
+2. "取消记录密码, 强制要求每次都输入密码" (no Keychain cache)
+
+**影响**:
+- **删 KeychainKEK 模块** (`KeychainKEK.swift` 已写但作废, 不进 PR)
+- **新模块**: `PasswordKDF.swift` (PBKDF2-SHA256, 600k iter)
+- **PR-2 重定义**: 从 KeychainKEK 改为 MasterKey + PasswordKDF
+- **routing JSON schema 升 v2**: 加 `kdf_algo` / `kdf_iterations` / `kdf_salt` / `kdf_keylen` 字段, 跨机器派生 master KEK 必备
+- **D5 / D7 删除**: 不再讨论 Keychain 模式, 一律密码
+- **新增 D9-portability**: 加密 VM 跨机器迁移作硬要求
+- **生命周期"启动"步骤改写**: 永远从用户输入派生, 不查 Keychain
+- **HVMError 删 keychain*** 5 个 case, ErrorCodes 同步删
+- **PR 总数微调**: 11 PR + 1 PR-1 已落 = 12 PR 不变, 但 PR-2 范围收窄, 工时 1 天
+
+**保留 v2.1 决策**:
+- 双后端混合 (VZ-sparsebundle / QEMU-per-file)
+- 三个 PoC E0/E1/E2 通过结果
+- D10 / D11 / D12 锁定 (swtpm fd= / QEMU file= / OVMF LUKS)
 
 ### 2026-05-04 v2.1 — E0/E1/E2 PoC 通过, D10/D11/D12 锁定
 
@@ -522,4 +609,4 @@ P1:
 ---
 
 **最后更新**: 2026-05-04
-**状态**: 设计稿混合方案 v2.1; PR-1 已落, E0 / E1 / E2 PoC 通过, T1 / T4 留 PR-9 真机跑. 可进 PR-2
+**状态**: 设计稿混合方案 v2.2 (强制密码 + 跨机器 portable); PR-1 已落, E0 / E1 / E2 PoC 通过, T1 / T4 留 PR-9 真机跑. 可进 PR-2 (MasterKey + PasswordKDF)
