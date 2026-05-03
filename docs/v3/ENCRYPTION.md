@@ -509,7 +509,7 @@ P1:
 | **PR-4** | **`QcowLuksFactory.swift`** — qcow2 LUKS create / resize / rekey (走 amend 两步, qemu-img 10.2 没 reencrypt). 10 个真跑测试 | 1.5 天 | **✅ 已落** |
 | **PR-5** | **`OVMFVarsLuksFactory.swift`** + `LuksSecretFile.swift` (公共) + `BundleLayout.nvramLuksFileName`. qemu-img convert raw fd → LUKS qcow2. **argv 改造移到 PR-9** (需 VMHost 启动期 secret 注入). 6 个真跑测试 | 0.5 天 | **✅ 已落** |
 | **PR-6** | **`SwtpmKeyHelper.swift`** — Pipe 透传 32 字节 binary key 到 swtpm stdin (fd=0); argv `--key fd=0,mode=aes-256-cbc,format=binary,remove=false`; 不落盘. 6 个测试 (4 单元 + 2 真跑 swtpm) | 1 天 | **✅ 已落** |
-| **PR-7** | `HVMPaths.mountpointFor(uuid:)` + `MountReaper` (VZ 路径 stale mount 清理) + 临时 key 文件 reaper (QEMU 路径) + T4 实测 | 1 天 | 待开 |
+| **PR-7** | `HVMPaths.mountpointFor(uuid:)` + `mountsRoot` + `MountReaper.reapStaleMounts` (VZ stale sparsebundle force detach, BundleLock.isBusy 跨进程探活). QEMU 路径不需 reap (Pipe + NSTemporaryDirectory cleanup). 4 测真跑 hdiutil. T4 真机 panic 模拟留 PR-9. | 1 天 | **✅ 已落** |
 | **PR-8** | `EncryptedBundleIO` 路由层 — engine 分流 (VZ-sparsebundle / QEMU-perfile); routing JSON 读写 | 2 天 | 待开 |
 | **PR-9** | `VMHost` / engine 启动路径接入 + T1 实测 (双后端真跑加密 VM) | 2 天 | 待开 |
 | **PR-10** | `hvm-cli encrypt / decrypt / rekey / encrypt-status` 子命令 + e2e | 2 天 | 待开 |
@@ -628,4 +628,4 @@ P1:
 ---
 
 **最后更新**: 2026-05-04
-**状态**: 设计稿混合方案 v2.3; PR-1 ~ PR-6 已落, 加密四件套底层全部就绪. T1 / T4 留 PR-9 真机跑. 可进 PR-7 (MountReaper / 临时 key 文件 reaper)
+**状态**: 设计稿混合方案 v2.3; PR-1 ~ PR-7 已落, 加密底层 + 路径管理就绪. T1 / T4 真机 panic 留 PR-9. 可进 PR-8 (EncryptedBundleIO 路由层)
