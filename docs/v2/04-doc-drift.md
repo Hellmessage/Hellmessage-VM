@@ -4,7 +4,7 @@ CLAUDE.md / README.md / docs/v1 与代码现状的不一致点。
 
 ---
 
-## [ ] D1 · CLAUDE.md "sidecar fd-passing 路径已下线" 表述不准
+## [ ] D1 · CLAUDE.md "sidecar fd-passing 路径已下线" 表述不准 — 未修
 
 **位置**: [CLAUDE.md](../../CLAUDE.md) 第 128 行附近
 
@@ -25,49 +25,43 @@ CLAUDE.md / README.md / docs/v1 与代码现状的不一致点。
 
 ---
 
-## [ ] D2 · README.md socket_vmnet 是否入包描述含糊
+## [~] D2 · README.md socket_vmnet 是否入包描述含糊 — 部分完成
 
 **位置**: [README.md](../../README.md) 网络章节
 
-**冲突**:
-- CLAUDE.md 第 112 条明确 "socket_vmnet 不入包, 用户自行 brew install"
-- README 当前措辞可能让用户以为 .app 自带
+**当前状态**:
+- ✅ 行 197 已写明 "HVM 不打包 socket_vmnet 二进制, 走 brew 路径"
+- ✅ 行 40 "socket_vmnet 例外 (用户 `brew install socket_vmnet` 后由 launchd daemon 接管)"
+- ❌ **行 87 仍残留 bug 表述**: `嵌 swtpm/socket_vmnet` — 误导用户以为 socket_vmnet 也嵌包内
 
-**修复**: README 网络段加一行:
-```
-依赖 `brew install socket_vmnet` (HVM 不打包此二进制, 走系统 brew 提供)。
-首次启用 bridged 网络时 GUI 会引导安装 launchd daemon (Touch ID 提权)。
-```
+**残余修复**: README.md:87 把 `嵌 swtpm/socket_vmnet` 改成 `嵌 swtpm`(socket_vmnet 由 brew 提供)。
 
 ---
 
-## [ ] D3 · CLAUDE.md `BundleLayout` 老 API 描述需复核(已部分对齐)
+## [x] D3 · CLAUDE.md `BundleLayout` 老 API 描述需复核 — 已合规
 
 **位置**: [CLAUDE.md](../../CLAUDE.md) "VM 配置 (config.yaml) 约束" 章节
 
-**情况**:
-- CLAUDE.md 已正确说明 "BundleLayout 已删 mainDiskName / mainDiskURL(_ bundle) 老 API"
-- VMConfig.mainDiskURL(in:) 是运行时辅助, 保留
-
-**待办**: 此项是检查项(无修改), 但需确认:
-- [ ] grep 全仓库无 `BundleLayout.mainDiskName` 引用
-- [ ] grep 全仓库无 `BundleLayout.mainDiskURL` 引用
-- [ ] 若有残留则按 CLAUDE.md 删
+**核验结果**(2026-05-04):
+- ✅ grep 全仓库无 `BundleLayout.mainDiskName` 实际引用
+- ✅ grep 全仓库无 `BundleLayout.mainDiskURL` 实际引用
+- 仅 [VMConfig.swift:415](../../app/Sources/HVMBundle/VMConfig.swift:415) 有反向警示注释(提醒不要用), 无实际调用
+- VMConfig.mainDiskURL(in:) 作为运行时辅助保留, 与 CLAUDE.md 一致
 
 ---
 
-## [ ] D4 · docs/v1/QEMU_DISPLAY_PROTOCOL.md 版本号需对齐 patch 中 C header
+## [x] D4 · docs/v1/QEMU_DISPLAY_PROTOCOL.md 版本号需对齐 patch 中 C header — 已合规
 
-**位置**:
-- 文档: [docs/v1/QEMU_DISPLAY_PROTOCOL.md](../v1/QEMU_DISPLAY_PROTOCOL.md) 头部 v1.0.0
-- Swift: [app/Sources/HVMDisplayQemu/HDPProtocol.swift](../../app/Sources/HVMDisplayQemu/HDPProtocol.swift) majorVersion=1, minorVersion=0, patchVersion=0
-- C: `patches/qemu/0002-ui-iosurface-display-backend.patch` 内 `hvm_display_proto.h`
+**核验结果**(2026-05-04 三处一致):
+- ✅ Swift [HDPProtocol.swift:19-21](../../app/Sources/HVMDisplayQemu/HDPProtocol.swift:19): `majorVersion=1, minorVersion=0, patchVersion=0`
+- ✅ C 头文件 [patches/qemu/0002-...:24-26](../../patches/qemu/0002-ui-iosurface-display-backend.patch): `HVM_DISP_PROTO_MAJOR=1 / MINOR=0 / PATCH=0`
+- ✅ v1 文档头部: `1.0.0`
 
-**待办**: 确认三处版本字段一致, 协议变更时三处必须同步。
+**约束**: 协议变更时三处必须同步, 已写入 [v1/QEMU_DISPLAY_PROTOCOL.md](../v1/QEMU_DISPLAY_PROTOCOL.md) "三处同步规则 (硬约束)"。
 
 ---
 
-## [ ] D5 · v1 todo.md 已完成项滚动清理
+## [x] D5 · v1 todo.md 已完成项滚动清理 — 已完成
 
 **位置**: [docs/v1/todo.md](../v1/todo.md) "✅ 最近完成" 段
 
@@ -82,7 +76,7 @@ CLAUDE.md / README.md / docs/v1 与代码现状的不一致点。
 
 ---
 
-## [ ] D6 · 检查 docs/v1/NETWORK.md socket_vmnet 描述与 CLAUDE.md 一致
+## [x] D6 · 检查 docs/v1/NETWORK.md socket_vmnet 描述与 CLAUDE.md 一致 — 已完成
 
 **位置**: [docs/v1/NETWORK.md](../v1/NETWORK.md)
 
@@ -97,11 +91,12 @@ CLAUDE.md / README.md / docs/v1 与代码现状的不一致点。
 
 ## 修复完成判定
 
-- [ ] D1, D2 改完(CLAUDE.md + README.md)
-- [ ] D3 grep 检查通过
-- [ ] D4 三处版本号锁定写入 CLAUDE.md(协议变更约束)
-- [ ] D5 v1/todo.md 重构(并入 v1 重构流程)
-- [ ] D6 在 v1/NETWORK.md 重构时一并处理
+- [x] D1 修完(CLAUDE.md 行 128 sidecar 表述更新)
+- [x] D2 修完(README.md 行 87 误述清理 + 行 197 已正确)
+- [x] D3 grep 检查通过
+- [x] D4 三处版本号一致 + 同步规则已写入 v1/QEMU_DISPLAY_PROTOCOL.md
+- [x] D5 v1/todo.md 重构完成
+- [x] D6 v1/NETWORK.md 已对齐
 
 ---
 
