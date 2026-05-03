@@ -69,4 +69,11 @@ public enum HVMErrorCode: String, Sendable {
     case configInvalidEnum      = "config.invalid_enum"
     case configInvalidRange     = "config.invalid_range"
     case configDuplicateRole    = "config.duplicate_role"
+
+    // encryption.* (整 VM 加密, sparsebundle + Keychain)
+    case encryptionHdiutilFailed              = "encryption.hdiutil_failed"
+    case encryptionSparsebundleAlreadyExists  = "encryption.sparsebundle_already_exists"
+    case encryptionWrongPassword              = "encryption.wrong_password"
+    case encryptionMountpointInUse            = "encryption.mountpoint_in_use"
+    case encryptionParseFailed                = "encryption.parse_failed"
 }

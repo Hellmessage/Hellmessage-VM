@@ -53,6 +53,10 @@ let package = Package(
         .target(name: "HVMInstall", dependencies: ["HVMCore", "HVMBundle", "HVMStorage", "HVMBackend", "HVMUtils"]),
         .target(name: "HVMIPC",     dependencies: ["HVMCore"]),
 
+        // 整 VM 加密 (sparsebundle + Keychain). 设计稿 docs/v3/ENCRYPTION.md.
+        // SparsebundleTool 包 hdiutil; KeychainKEK / EncryptedBundleIO 等待后续 PR.
+        .target(name: "HVMEncryption", dependencies: ["HVMCore"]),
+
         // QEMU 后端: 进程编排 + argv 构造 + QMP 客户端 (与 HVMBackend 平行, 不依赖 VZ)
         .target(name: "HVMQemu",    dependencies: ["HVMCore", "HVMBundle", "HVMUtils"]),
 
@@ -129,6 +133,10 @@ let package = Package(
         .testTarget(
             name: "HVMScmRecvTests",
             dependencies: ["HVMScmRecv"]
+        ),
+        .testTarget(
+            name: "HVMEncryptionTests",
+            dependencies: ["HVMEncryption", "HVMCore"]
         ),
     ]
 )

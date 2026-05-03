@@ -13,6 +13,7 @@ public enum HVMError: Error, Sendable {
     case net(NetError)
     case ipc(IPCError)
     case config(ConfigError)
+    case encryption(EncryptionError)
 }
 
 // MARK: - Bundle
@@ -102,6 +103,21 @@ public enum IPCError: Error, Sendable {
     case serverBindFailed(path: String, errno: Int32)
 }
 
+// MARK: - Encryption (整 VM 加密, sparsebundle + Keychain, docs/v3/ENCRYPTION.md)
+
+public enum EncryptionError: Error, Sendable {
+    /// hdiutil 子命令以非 0 退出. verb 指 create/attach/detach/chpass/info 等
+    case hdiutilFailed(verb: String, exitCode: Int32, stderr: String)
+    /// sparsebundle 已存在, create 拒绝覆盖
+    case sparsebundleAlreadyExists(path: String)
+    /// 密码错 (attach / chpass 时 hdiutil 报 "Authentication error" 等)
+    case wrongPassword
+    /// 挂载点已有挂载或不可用
+    case mountpointInUse(path: String)
+    /// hdiutil 输出 plist 解析失败 (理论上 hdiutil 有变动才会触发)
+    case parseFailed(reason: String)
+}
+
 // MARK: - Config (手动编辑 config.json 产生的语义错)
 
 public enum ConfigError: Error, Sendable {
@@ -132,13 +148,14 @@ public extension HVMError {
     /// 翻译为面向用户的错误; details 里的值未做脱敏, 调用方入日志时应用 sanitize
     var userFacing: UserFacingError {
         switch self {
-        case .bundle(let e):   return e.userFacing
-        case .storage(let e):  return e.userFacing
-        case .backend(let e):  return e.userFacing
-        case .install(let e):  return e.userFacing
-        case .net(let e):      return e.userFacing
-        case .ipc(let e):      return e.userFacing
-        case .config(let e):   return e.userFacing
+        case .bundle(let e):     return e.userFacing
+        case .storage(let e):    return e.userFacing
+        case .backend(let e):    return e.userFacing
+        case .install(let e):    return e.userFacing
+        case .net(let e):        return e.userFacing
+        case .ipc(let e):        return e.userFacing
+        case .config(let e):     return e.userFacing
+        case .encryption(let e): return e.userFacing
         }
     }
 }
@@ -404,6 +421,34 @@ public extension IPCError {
             return .init(code: "ipc.server_bind_failed",
                          message: "无法绑定 IPC socket",
                          details: ["path": p, "errno": "\(e)"])
+        }
+    }
+}
+
+public extension EncryptionError {
+    var userFacing: UserFacingError {
+        switch self {
+        case .hdiutilFailed(let verb, let code, let stderr):
+            return .init(code: HVMErrorCode.encryptionHdiutilFailed.rawValue,
+                         message: "磁盘镜像操作失败 (hdiutil \(verb))",
+                         details: ["verb": verb, "exitCode": "\(code)", "stderr": stderr.prefix(400).trimmingCharacters(in: .whitespacesAndNewlines)])
+        case .sparsebundleAlreadyExists(let p):
+            return .init(code: HVMErrorCode.encryptionSparsebundleAlreadyExists.rawValue,
+                         message: "加密容器已存在",
+                         details: ["path": p],
+                         hint: "换个名称或先删除已有 sparsebundle")
+        case .wrongPassword:
+            return .init(code: HVMErrorCode.encryptionWrongPassword.rawValue,
+                         message: "密码错误",
+                         hint: "重新输入密码; 多次失败请确认密码")
+        case .mountpointInUse(let p):
+            return .init(code: HVMErrorCode.encryptionMountpointInUse.rawValue,
+                         message: "挂载点已被占用",
+                         details: ["path": p])
+        case .parseFailed(let reason):
+            return .init(code: HVMErrorCode.encryptionParseFailed.rawValue,
+                         message: "hdiutil 输出解析失败",
+                         details: ["reason": reason])
         }
     }
 }
