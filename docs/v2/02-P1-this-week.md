@@ -4,7 +4,7 @@
 
 ---
 
-## [ ] #7 · UI 业务侧硬编码 `.font(.system(size:))` ≈ 35 处违反 CLAUDE.md UI 控件约束
+## [x] #7 · UI 业务侧硬编码 `.font(.system(size:))` ≈ 35 处违反 CLAUDE.md UI 控件约束 — 已修 (commit 6ebe53d)
 
 **集中点**:
 - [Content/DetailBars.swift](../../app/Sources/HVM/UI/Content/DetailBars.swift) — 7 处 (size 10/11/12/38)
@@ -39,7 +39,7 @@
 
 ---
 
-## [ ] #8 · UI 业务侧硬编码 RGB / 系统色 8 处
+## [x] #8 · UI 业务侧硬编码 RGB / 系统色 8 处 — 已修 (commit 6ebe53d)
 
 **位置**:
 | 文件:行 | 当前 | 建议 token |
@@ -59,7 +59,7 @@
 
 ---
 
-## [ ] #9 · UI 业务侧硬编码 padding 数字 ≈ 6 处
+## [x] #9 · UI 业务侧硬编码 padding 数字 ≈ 6 处 — 已修 (commit 6ebe53d)
 
 **位置**:
 - [Buttons.swift:15,36,77,96](../../app/Sources/HVM/UI/Content/Buttons.swift:15) — vertical padding 7/6/5/10 不统一
@@ -84,7 +84,7 @@ public extension HVMSpace {
 
 ---
 
-## [ ] #10 · `hvm-cli` 与 `hvm-dbg` 的 `OutputFormat.bail / bailJSON` 完全重复
+## [x] #10 · `hvm-cli` 与 `hvm-dbg` 的 `OutputFormat.bail / bailJSON` 完全重复 — 已修 (commit 08a5190)
 
 **位置**:
 - [app/Sources/hvm-cli/Support/OutputFormat.swift](../../app/Sources/hvm-cli/Support/OutputFormat.swift)
@@ -102,7 +102,7 @@ public extension HVMSpace {
 
 ---
 
-## [ ] #11 · `DetailBars.swift` 卡片样式 `RoundedRectangle.fill + RoundedRectangle.stroke` 重复 5+ 处
+## [x] #11 · `DetailBars.swift` 卡片样式 `RoundedRectangle.fill + RoundedRectangle.stroke` 重复 5+ 处 — 已修 (commit 08a5190)
 
 **位置**: [DetailBars.swift:301,339,365,379,509](../../app/Sources/HVM/UI/Content/DetailBars.swift:301)
 
@@ -127,7 +127,7 @@ public extension View {
 
 ---
 
-## [ ] #12 · `BundleIO` schema v1 → v2 断兼容路径完全无测
+## [x] #12 · `BundleIO` schema v1 → v2 断兼容路径完全无测 — 已修 (commit c4b6e19)
 
 **位置**:
 - 实现: [app/Sources/HVMBundle/BundleIO.swift](../../app/Sources/HVMBundle/BundleIO.swift)
@@ -147,7 +147,7 @@ public extension View {
 
 ---
 
-## [ ] #13 · QEMU display protocol (HDP) 解析层无 malformed input 测试
+## [x] #13 · QEMU display protocol (HDP) 解析层无 malformed input 测试 — 已修 (commit c4b6e19)
 
 **位置**:
 - 协议层: [app/Sources/HVMDisplayQemu/HDPProtocol.swift](../../app/Sources/HVMDisplayQemu/HDPProtocol.swift)
@@ -170,7 +170,7 @@ public extension View {
 
 ---
 
-## [ ] #14 · 多处 `try? FileManager.removeItem` / `try? close` 静默吞错
+## [x] #14 · 多处 `try? FileManager.removeItem` / `try? close` 静默吞错 — 已修 (commit ac8c7c7)
 
 **位置**:
 - [QemuHostEntry.swift:51,107,153,185,371,382](../../app/Sources/HVM/QemuHostEntry.swift)
@@ -194,7 +194,7 @@ catch {
 
 ---
 
-## [ ] #15 · QMP 连接 / 截图错误日志只输出原始 `\(error)`,无法定位根因
+## [x] #15 · QMP 连接 / 截图错误日志只输出原始 `\(error)`,无法定位根因 — 已修 (commit ac8c7c7)
 
 **位置**:
 - [QemuHostEntry.swift:215-225](../../app/Sources/HVM/QemuHostEntry.swift:215) 连接超时分支
@@ -219,7 +219,7 @@ catch {
 
 ---
 
-## [ ] #16 · `Makefile` 无增量,每次 `make build` 都重签 ~30 个 QEMU dylib
+## [x] #16 · `Makefile` 无增量,每次 `make build` 都重签 ~30 个 QEMU dylib — 已修 (commit 9fd4291 + 4a36ff0 stamp deps 修补)
 
 **位置**: [Makefile:22-56](../../Makefile:22)
 
@@ -247,7 +247,7 @@ clean:
 
 ---
 
-## [ ] #17 · `install-vmnet-daemons.sh` 拼 plist 不转义 XML
+## [x] #17 · `install-vmnet-daemons.sh` 拼 plist 不转义 XML — 已修 (commit 4a36ff0)
 
 **位置**: [scripts/install-vmnet-daemons.sh:101-123](../../scripts/install-vmnet-daemons.sh:101)
 
@@ -266,11 +266,27 @@ clean:
 
 ## P1 完成判定
 
-- [ ] 11 项全部勾掉
-- [ ] UI 漂移 grep 全清(7/8/9 三项零结果)
-- [ ] Test 套件多出 BundleIO_LegacyJSON / HDPProtocolFuzz 两组
-- [ ] `make build` 实测增量生效(连跑两次第二次秒过)
-- [ ] CLAUDE.md UI 控件约束 + BUILD_SIGN.md 同步更新
+- [x] 11 项全部勾掉
+- [x] UI 漂移 grep 全清(7/8/9 三项零结果, 仅 GuestIcon 动态尺寸 + MenuPopoverView divider 几何对齐两处合规例外)
+- [x] Test 套件多出 BundleIO_LegacyJSON / HDPProtocolFuzz 两组(待项目 toolchain 修 xcode-select → Xcode.app 可跑)
+- [x] `make build` 实测增量生效(第一次 6.8s, 第二次 1.1s, bundle.sh 完全跳过)
+- [ ] **待批量同步**: CLAUDE.md UI 控件约束(token 清单更新) + BUILD_SIGN.md 同步("|| true 漏洞 v2 #1" 改成"已修") — 不阻塞 P2
+
+## 修复 commit 索引
+
+| 项 | 内容 | commit |
+|---|---|---|
+| #16 | Makefile 增量 stamp 机制 | [`9fd4291`](https://example/commit/9fd4291) + [`4a36ff0`](https://example/commit/4a36ff0) (stamp deps 修补) |
+| #7 | 业务侧 .font(.system(size:)) ≈35 处 → HVMFont token | [`6ebe53d`](https://example/commit/6ebe53d) |
+| #8 | RGB / 系统色 9 处 → HVMColor token | [`6ebe53d`](https://example/commit/6ebe53d) |
+| #9 | padding 数字 30+ 处 → HVMSpace token | [`6ebe53d`](https://example/commit/6ebe53d) |
+| #10 | bail/bailJSON/printJSON 抽到 HVMUtils.CliExit | [`08a5190`](https://example/commit/08a5190) |
+| #11 | DetailBars 卡片 5 处 → .hvmCard() ViewModifier | [`08a5190`](https://example/commit/08a5190) |
+| #14 | FSCleanup.removeQuietly + 6 处 socket 清理 | [`ac8c7c7`](https://example/commit/ac8c7c7) |
+| #15 | mapQmpFailure: backend.qmp_* 按 QmpError 子类型映射 | [`ac8c7c7`](https://example/commit/ac8c7c7) |
+| #12 | BundleIO_LegacyJSONTests 3 cases | [`c4b6e19`](https://example/commit/c4b6e19) |
+| #13 | HDPProtocolFuzzTests 12 cases + 新建 HVMDisplayQemuTests target | [`c4b6e19`](https://example/commit/c4b6e19) |
+| #17 | install-vmnet-daemons.sh socket_vmnet 路径白名单 | [`4a36ff0`](https://example/commit/4a36ff0) |
 
 ---
 
