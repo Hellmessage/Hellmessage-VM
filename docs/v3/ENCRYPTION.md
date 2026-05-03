@@ -414,12 +414,13 @@ QEMU 路径无 mount, 但临时 key 文件清理: `~/Library/.../HVM/run/<uuid>.
 
 P0 (must-pass before 对应 PR):
 
-| 编号 | 项目 | 验证方法 | 阶段 |
+| 编号 | 项目 | 状态 | 阶段 |
 |---|---|---|---|
-| **E1** | swtpm `--key` 加密 NVRAM 是否真支持 | PoC: HVM 打包的 swtpm 跑 `--key file=...,mode=aes-cbc-256`, reboot 验证持久化 | **PR-6 前** |
-| **E2** | QEMU `-object secret,file=...` 是否能用 unix socket / fifo | PoC: 测试 socket / fifo 兼容; 不行 fallback 0600 临时文件 + 启动后 unlink | **PR-5 前** |
-| **T1** | VZ + QEMU 进程 sandbox / TCC 能否读写自家挂载的 sparsebundle (VZ 路径) | 真机 PoC: sparsebundle attach 后 VZ 跑 alpine ISO, QEMU 跑 alpine ISO | **PR-9 前** |
-| **T4** | host crash 后 stale mount 清理 (VZ 路径) | kill -9 主进程模拟 panic, 看下次启动能否 force detach 并重挂 | **PR-9 前** |
+| **E0** | HVM 包内 qemu-img 是否支持 LUKS create / info | ✅ **2026-05-04 验证通过**: qemu-img 10.2.0 含 luks block driver, AES-256-XTS / SHA256 / 16M iter PBKDF2 全 OK | PR-4 前 |
+| **E1** | swtpm `--key` 加密 NVRAM 是否真支持 | ✅ **2026-05-04 验证通过**: swtpm 0.10.1 支持 `--key file=<path>,mode=aes-256-cbc,format=binary,remove=true`(读完自删)+ `--key fd=<fd>` (HVM 主进程 dup2 透传) | PR-6 前 |
+| **E2** | QEMU `-object secret,file=...` 注入路径 | ✅ **2026-05-04 验证通过**: 0600 文件 file= 形式工作正常, 启动期一次性读完后 HVM 可立即 unlink. **意外发现**: fifo 也能当 file= (可未来优化, 不落盘) | PR-5 前 |
+| **T1** | VZ + QEMU 进程 sandbox / TCC 能否读写自家挂载的 sparsebundle (VZ 路径) | 待真机跑 | **PR-9 前** |
+| **T4** | host crash 后 stale mount 清理 (VZ 路径) | 待 PR-7 落 MountReaper 后跑 | **PR-9 前** |
 
 P1:
 
@@ -468,12 +469,23 @@ P1:
 | D7 | Mac Studio / mini 无 Touch ID 的 keychain 体验 | 退到系统密码 prompt | 已决 |
 | D8 | 加密 VM 的迁移工具 | VZ: cp sparsebundle; QEMU: cp 整 .hvmz 后 rekey | 已决 |
 | **D9** | 加密 VM 的克隆是否支持 | 不支持 (本稿). 后续 PR 补; VZ 易 (cp + chpass), QEMU 难 (4 个 key 全部 reencrypt) | 待决 — 看用户需求 |
-| **D10** | swtpm 不支持 `--key` 时的 fallback | 把 `tpm/` 单独套个 mini sparsebundle (只对 QEMU 路径) | E1 PoC 后定 |
-| **D11** | QEMU `secret` 注入失败的 fallback (E2 不通过) | 走 `secret-key=base64,data=...` 直接 argv (理论 ps 可见, 但 QEMU 子进程权限同 HVM, ps 防御意义有限) | E2 PoC 后定 |
+| **D10** | swtpm 加密方式 | ✅ **已决 (E1 通过)**: 走 `--key fd=<fd>,mode=aes-256-cbc,format=binary` — HVM 主进程 dup2 透传 fd, 不落盘. swtpm `--key` 原生支持, 无需 sparsebundle fallback | 已决 |
+| **D11** | QEMU secret 注入方式 | ✅ **已决 (E2 通过)**: 走 `-object secret,id=<id>,file=<path>` — HVM 写 0600 临时文件 (`run/<uuid>.luks-key.{disk,nvram}`), 启动 QEMU 后立即 unlink. fifo 形式作未来优化项 (跳过磁盘) | 已决 |
+| **D12** | QEMU OVMF VARS 加密形态 | 走 `-drive if=pflash,format=qcow2,file=<luks qcow2>,readonly=off,file.driver=luks,file.key-secret=sec_nvram`. OVMF VARS 模板初次写入时由 QcowLuksFactory 创建空白 LUKS qcow2, 装机第一次 boot 由 OVMF 自己写入 EFI VARS | E0 通过后即可定 |
 
 ## 设计变更日志
 
-### 2026-05-04 v2 — 改混合方案 (本稿当前状态)
+### 2026-05-04 v2.1 — E0/E1/E2 PoC 通过, D10/D11/D12 锁定
+
+**变更**: PR-2 起手前先跑了 E0(qemu-img LUKS) / E1(swtpm `--key`) / E2(QEMU `-object secret`) 三个 PoC, 全部通过. 设计稿不需要架构改动, 仅锁定原方案细节:
+
+- swtpm 走 `--key fd=<fd>,mode=aes-256-cbc,format=binary`(HVM dup2 透传 fd, 不落盘)
+- QEMU secret 走 `-object secret,file=<0600 path>` + 启动后立即 unlink
+- OVMF VARS 走 LUKS qcow2 + `-drive file.driver=luks`
+
+无需 sparsebundle fallback / argv data= fallback. **可放心进 PR-2**.
+
+### 2026-05-04 v2 — 改混合方案
 
 **变更**: 单方案 A (sparsebundle 套整 bundle, 双后端共用) → 混合 (VZ-sparsebundle + QEMU-per-file).
 
@@ -510,4 +522,4 @@ P1:
 ---
 
 **最后更新**: 2026-05-04
-**状态**: 设计稿混合方案 v2; PR-1 已落地, 等评审 / E1 / E2 / T1 / T4 PoC 通过后启动 PR-2
+**状态**: 设计稿混合方案 v2.1; PR-1 已落, E0 / E1 / E2 PoC 通过, T1 / T4 留 PR-9 真机跑. 可进 PR-2
