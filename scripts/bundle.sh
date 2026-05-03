@@ -131,25 +131,30 @@ if [ "$EMBED_QEMU" = "1" ]; then
     if [ "$SIGN" != "-" ]; then
         QEMU_SIGN_ARGS+=(--options runtime)
     fi
+    # 三段都用 process substitution 而非 pipe — pipe 把 while 放进 subshell, 即使
+    # 删 || true, codesign 失败也只让 subshell 退, 不会传播 set -e 给父脚本.
+    # < <() 让 while 跑在父 shell, 失败立即退. 历史上这里 lib/ + libexec/ 用过
+    # || true 吞错, 任何未签的 dylib 会让用户启动 .app 时被 AMFI SIGKILL.
+
     # dylib (lib/ 可能不存在, 取决于 configure 是否启用动态依赖)
     if [ -d "$RESOURCES/QEMU/lib" ]; then
-        find "$RESOURCES/QEMU/lib" -type f \( -name '*.dylib' -o -name '*.so' \) -print0 \
-            | while IFS= read -r -d '' f; do
-                codesign "${QEMU_SIGN_ARGS[@]}" "$f" || true
-            done
+        while IFS= read -r -d '' f; do
+            codesign "${QEMU_SIGN_ARGS[@]}" "$f" \
+                || { echo "✗ codesign 失败: $f" >&2; exit 1; }
+        done < <(find "$RESOURCES/QEMU/lib" -type f \( -name '*.dylib' -o -name '*.so' \) -print0)
     fi
     # libexec helper (qemu-bridge-helper 等)
     if [ -d "$RESOURCES/QEMU/libexec" ]; then
-        find "$RESOURCES/QEMU/libexec" -type f -perm -u+x -print0 \
-            | while IFS= read -r -d '' f; do
-                codesign "${QEMU_SIGN_ARGS[@]}" "$f" || true
-            done
+        while IFS= read -r -d '' f; do
+            codesign "${QEMU_SIGN_ARGS[@]}" "$f" \
+                || { echo "✗ codesign 失败: $f" >&2; exit 1; }
+        done < <(find "$RESOURCES/QEMU/libexec" -type f -perm -u+x -print0)
     fi
     # bin (qemu-system-aarch64 + 其他可执行) — 必须签成功
-    find "$RESOURCES/QEMU/bin" -type f -perm -u+x -print0 \
-        | while IFS= read -r -d '' f; do
-            codesign "${QEMU_SIGN_ARGS[@]}" "$f"
-        done
+    while IFS= read -r -d '' f; do
+        codesign "${QEMU_SIGN_ARGS[@]}" "$f" \
+            || { echo "✗ codesign 失败: $f" >&2; exit 1; }
+    done < <(find "$RESOURCES/QEMU/bin" -type f -perm -u+x -print0)
 fi
 
 # 5.1 签 HVM 自家 binary
