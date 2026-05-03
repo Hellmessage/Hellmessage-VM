@@ -12,8 +12,8 @@ final class VMConfigCodableTests: XCTestCase {
             guestOS: .linux,
             cpuCount: 4,
             memoryMiB: 4096,
-            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 32)],
-            networks: [NetworkSpec(mode: .nat, macAddress: "02:11:22:33:44:55")],
+            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 32, format: .raw)],
+            networks: [NetworkSpec(mode: .user, macAddress: "02:11:22:33:44:55")],
             installerISO: "/Users/me/ubuntu.iso",
             bootFromDiskOnly: false,
             macOS: nil,
@@ -41,8 +41,8 @@ final class VMConfigCodableTests: XCTestCase {
             guestOS: .macOS,
             cpuCount: 4,
             memoryMiB: 8192,
-            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 80)],
-            networks: [NetworkSpec(mode: .nat, macAddress: "02:aa:bb:cc:dd:ee")],
+            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 80, format: .raw)],
+            networks: [NetworkSpec(mode: .user, macAddress: "02:aa:bb:cc:dd:ee")],
             installerISO: nil,
             bootFromDiskOnly: false,
             macOS: MacOSSpec(ipsw: "/Users/me/macOS.ipsw", autoInstalled: false),
@@ -55,14 +55,15 @@ final class VMConfigCodableTests: XCTestCase {
     }
 
     func testNetworkModeNATCoding() throws {
-        let nat = NetworkSpec(mode: .nat, macAddress: "02:00:00:00:00:01")
+        let nat = NetworkSpec(mode: .user, macAddress: "02:00:00:00:00:01")
         let data = try JSONEncoder().encode(nat)
         let decoded = try JSONDecoder().decode(NetworkSpec.self, from: data)
         XCTAssertEqual(decoded, nat)
     }
 
     func testNetworkModeBridgedCoding() throws {
-        let br = NetworkSpec(mode: .bridged(interface: "en0"), macAddress: "02:00:00:00:00:01")
+        let br = NetworkSpec(mode: .vmnetBridged, macAddress: "02:00:00:00:00:01",
+                             bridgedInterface: "en0")
         let data = try JSONEncoder().encode(br)
         let decoded = try JSONDecoder().decode(NetworkSpec.self, from: data)
         XCTAssertEqual(decoded, br)
@@ -75,7 +76,7 @@ final class VMConfigCodableTests: XCTestCase {
             guestOS: .linux,
             cpuCount: 1,
             memoryMiB: 256,
-            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 1)]
+            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 1, format: .raw)]
         )
         let data = try JSONEncoder().encode(cfg)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -115,7 +116,7 @@ final class VMConfigCodableTests: XCTestCase {
             engine: .qemu,
             cpuCount: 4,
             memoryMiB: 4096,
-            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 32)],
+            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 32, format: .raw)],
             linux: LinuxSpec()
         )
         let encoder = JSONEncoder()
@@ -136,8 +137,8 @@ final class VMConfigCodableTests: XCTestCase {
             engine: .qemu,
             cpuCount: 4,
             memoryMiB: 8192,
-            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 64)],
-            networks: [NetworkSpec(mode: .nat, macAddress: "02:de:ad:be:ef:01")],
+            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 64, format: .qcow2)],
+            networks: [NetworkSpec(mode: .user, macAddress: "02:de:ad:be:ef:01")],
             installerISO: "/Users/me/win11-arm64.iso",
             bootFromDiskOnly: false,
             windows: WindowsSpec(secureBoot: true, tpmEnabled: true)
@@ -168,7 +169,7 @@ final class VMConfigCodableTests: XCTestCase {
             engine: .qemu,
             cpuCount: 4,
             memoryMiB: 8192,
-            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 80)]
+            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 80, format: .raw)]
         )
         XCTAssertThrowsError(try cfg.validate())
     }
@@ -181,7 +182,7 @@ final class VMConfigCodableTests: XCTestCase {
             engine: .vz,
             cpuCount: 4,
             memoryMiB: 8192,
-            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 64)]
+            disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 64, format: .qcow2)]
         )
         XCTAssertThrowsError(try cfg.validate())
     }
@@ -201,7 +202,7 @@ final class VMConfigCodableTests: XCTestCase {
                 engine: engine,
                 cpuCount: 1,
                 memoryMiB: 512,
-                disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 1)]
+                disks: [DiskSpec(role: .main, path: "disks/main.img", sizeGiB: 1, format: .raw)]
             )
             XCTAssertNoThrow(try cfg.validate(), "合法组合 (\(os), \(engine)) 不应报错")
         }

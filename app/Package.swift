@@ -41,7 +41,9 @@ let package = Package(
                 .product(name: "Yams", package: "Yams"),
             ]
         ),
-        .target(name: "HVMStorage", dependencies: ["HVMCore", "HVMBundle"]),
+        // HVMStorage 依赖 HVMNet 仅用于 CloneManager 重生 NIC MAC (走 MACAddressGenerator),
+        // 与 BundleIO/DiskFactory 平行. 拒绝在 CloneManager 里复制一份 MAC 生成逻辑.
+        .target(name: "HVMStorage", dependencies: ["HVMCore", "HVMBundle", "HVMNet"]),
         .target(name: "HVMNet",     dependencies: ["HVMCore", "HVMBundle"]),
         .target(name: "HVMDisplay", dependencies: ["HVMCore", "HVMBundle", "HVMUtils"]),
         .target(

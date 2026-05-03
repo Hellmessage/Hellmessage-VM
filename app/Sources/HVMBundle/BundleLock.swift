@@ -9,7 +9,9 @@
 import Foundation
 import HVMCore
 
-public final class BundleLock {
+/// `@unchecked Sendable`: 内部所有可变状态 (released) 都由 `releaseLock: NSLock` 串行化,
+/// 其它字段 (fd / bundleURL) 在 init 后只读. release() 100 路并发已有覆盖测试 (BundleLockTests).
+public final class BundleLock: @unchecked Sendable {
     public enum Mode: String, Sendable {
         case runtime
         case edit

@@ -43,6 +43,9 @@ public enum StorageError: Error, Sendable {
     case volumeSpaceInsufficient(requiredBytes: UInt64, availableBytes: UInt64)
     /// 导入磁盘镜像时的所有防呆错误 (格式不支持 / qemu-img 解析失败 / 越界缩容 / 文件不可读)
     case importInvalid(reason: String, path: String)
+    /// CloneManager: 源 bundle 与目标父目录分别在不同 APFS 卷, clonefile(2) 跨卷会被
+    /// 内核拒 (EXDEV); 提前 statfs 探测到差异时直接抛, 而非让底层报模糊错
+    case crossVolumeNotAllowed(source: String, target: String)
 }
 
 // MARK: - Backend
@@ -233,6 +236,11 @@ public extension StorageError {
                          message: "导入磁盘镜像不可用",
                          details: ["reason": reason, "path": p],
                          hint: "仅支持 qcow2 / raw 镜像; 校验镜像可读、大小在合理范围")
+        case .crossVolumeNotAllowed(let src, let tgt):
+            return .init(code: HVMErrorCode.storageCrossVolumeNotAllowed.rawValue,
+                         message: "克隆要求源与目标在同一卷",
+                         details: ["source": src, "target": tgt],
+                         hint: "APFS clonefile 不能跨卷; 把目标位置选在与源同卷的目录")
         }
     }
 }
