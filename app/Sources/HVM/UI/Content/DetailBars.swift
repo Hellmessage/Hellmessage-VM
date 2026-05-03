@@ -316,8 +316,7 @@ struct StoppedContentView: View {
         }
         .padding(HVMSpace.md)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).fill(HVMColor.bgCard))
-        .overlay(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).stroke(HVMColor.border, lineWidth: 1))
+        .hvmCard()
     }
 
     // MARK: metadata
@@ -336,8 +335,7 @@ struct StoppedContentView: View {
                 kvRow("Boot",   bootModeLabel)
                 kvRow("Bundle", item.bundleURL.path, truncating: true, mono: true, last: true)
             }
-            .background(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).fill(HVMColor.bgCard))
-            .overlay(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).stroke(HVMColor.border, lineWidth: 1))
+            .hvmCard()
         }
     }
 
@@ -364,8 +362,7 @@ struct StoppedContentView: View {
             }
             .padding(HVMSpace.md)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).fill(HVMColor.bgCard))
-            .overlay(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).stroke(HVMColor.border, lineWidth: 1))
+            .hvmCard()
         }
     }
 
@@ -377,8 +374,7 @@ struct StoppedContentView: View {
                 disksHeader
                 disksRows
             }
-            .background(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).fill(HVMColor.bgCard))
-            .overlay(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).stroke(HVMColor.border, lineWidth: 1))
+            .hvmCard()
         }
     }
 
@@ -508,8 +504,7 @@ struct StoppedContentView: View {
                     snapshotRows
                 }
             }
-            .background(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).fill(HVMColor.bgCard))
-            .overlay(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).stroke(HVMColor.border, lineWidth: 1))
+            .hvmCard()
         }
     }
 

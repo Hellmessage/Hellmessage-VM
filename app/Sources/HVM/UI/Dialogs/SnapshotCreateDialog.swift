@@ -82,8 +82,7 @@ struct SnapshotCreateDialog: View {
                     }
                 }
                 .frame(maxHeight: 140)
-                .background(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).fill(HVMColor.bgCard))
-                .overlay(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).stroke(HVMColor.border, lineWidth: 1))
+                .hvmCard()
             }
         }
     }
