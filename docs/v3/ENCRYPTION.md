@@ -508,7 +508,7 @@ P1:
 | **PR-3** | `EncryptionKDF.swift` (HKDF-SHA256 派生 4 个子 key) + `EncryptedConfigIO.swift` (CryptoKit AES-GCM in-place 包 config.yaml) + ConfigMigrator v2→v3 | 2 天 | 待开 |
 | **PR-4** | **`QcowLuksFactory.swift`** — qcow2 LUKS create / resize / rekey (走 amend 两步, qemu-img 10.2 没 reencrypt). 10 个真跑测试 | 1.5 天 | **✅ 已落** |
 | **PR-5** | **`OVMFVarsLuksFactory.swift`** + `LuksSecretFile.swift` (公共) + `BundleLayout.nvramLuksFileName`. qemu-img convert raw fd → LUKS qcow2. **argv 改造移到 PR-9** (需 VMHost 启动期 secret 注入). 6 个真跑测试 | 0.5 天 | **✅ 已落** |
-| **PR-6** | **swtpm `--key`** 接入; 含 E1 PoC | 1 天 | 待开 |
+| **PR-6** | **`SwtpmKeyHelper.swift`** — Pipe 透传 32 字节 binary key 到 swtpm stdin (fd=0); argv `--key fd=0,mode=aes-256-cbc,format=binary,remove=false`; 不落盘. 6 个测试 (4 单元 + 2 真跑 swtpm) | 1 天 | **✅ 已落** |
 | **PR-7** | `HVMPaths.mountpointFor(uuid:)` + `MountReaper` (VZ 路径 stale mount 清理) + 临时 key 文件 reaper (QEMU 路径) + T4 实测 | 1 天 | 待开 |
 | **PR-8** | `EncryptedBundleIO` 路由层 — engine 分流 (VZ-sparsebundle / QEMU-perfile); routing JSON 读写 | 2 天 | 待开 |
 | **PR-9** | `VMHost` / engine 启动路径接入 + T1 实测 (双后端真跑加密 VM) | 2 天 | 待开 |
@@ -628,4 +628,4 @@ P1:
 ---
 
 **最后更新**: 2026-05-04
-**状态**: 设计稿混合方案 v2.3; PR-1 ~ PR-5 已落, T1 / T4 留 PR-9 真机跑. 可进 PR-6 (swtpm `--key fd=`)
+**状态**: 设计稿混合方案 v2.3; PR-1 ~ PR-6 已落, 加密四件套底层全部就绪. T1 / T4 留 PR-9 真机跑. 可进 PR-7 (MountReaper / 临时 key 文件 reaper)
