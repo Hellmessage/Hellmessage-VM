@@ -1,12 +1,13 @@
 # VM 整盘加密 (`HVMEncryption`)
 
-> 状态: **设计稿 v2.2 — 混合方案 + 强制密码 (2026-05-04)**, PR-1 (`SparsebundleTool`) 已落地, 后续 11 个 PR 待开。
+> 状态: **设计稿 v2.3 — 混合方案 + 强制密码 + LUKS passphrase base64 编码 (2026-05-04)**, PR-1 ~ PR-5 已落地, 后续 7 个 PR 待开。
 >
 > **设计变更日志**:
 > - **v1**: 单方案 A "sparsebundle 套整 bundle", 双后端透明 — **已废弃**
 > - **v2**: 改混合方案 — VZ 走 sparsebundle / QEMU 走 per-file native — **被 v2.2 部分覆盖**
 > - **v2.1**: E0/E1/E2 PoC 通过, D10/D11/D12 锁定
-> - **v2.2 (当前)**: 用户拍板 **强制密码 + 跨机器 portable** — 取消 Keychain 缓存路径, master KEK 永远从 password PBKDF2 派生, salt + iter 写明文 routing JSON. 任意机器拿到 sparsebundle / .hvmz 输密码即开. KeychainKEK 模块作废, 不进 PR-2
+> - **v2.2**: 用户拍板 **强制密码 + 跨机器 portable** — 取消 Keychain 缓存路径, master KEK 永远从 password PBKDF2 派生, salt + iter 写明文 routing JSON
+> - **v2.3 (当前)**: PR-5 实施时发现 **LUKS passphrase 必须 UTF-8 合法**, 32 字节 binary key 不能直接当 passphrase. 锁定 D13: **sub key → base64 编码 ASCII 字符串当 LUKS passphrase**, 通过公共 `LuksSecretFile` 模块强制. PR-4 测试侥幸 (用了合法 UTF-8 字节 0x42 等) 已修
 >
 > 见底部"设计变更"小节定位历史决策依据.
 
@@ -505,8 +506,8 @@ P1:
 | **~~PR-2 (旧)~~** | ~~`KeychainKEK.swift`~~ — **v2.2 取消**, 不需要 Keychain 缓存 | — | ❌ 废 |
 | **PR-2 (新)** | `MasterKey.swift` (32 字节值类型 + random) + `PasswordKDF.swift` (PBKDF2-SHA256, 600k iter) + 单测 | 1 天 | 待开 |
 | **PR-3** | `EncryptionKDF.swift` (HKDF-SHA256 派生 4 个子 key) + `EncryptedConfigIO.swift` (CryptoKit AES-GCM in-place 包 config.yaml) + ConfigMigrator v2→v3 | 2 天 | 待开 |
-| **PR-4** | **`QcowLuksFactory.swift`** — qcow2 LUKS create / resize / reencrypt 包 `qemu-img -o encrypt.format=luks` (含 E3 性能 PoC) | 1.5 天 | 待开 |
-| **PR-5** | **OVMF vars LUKS** — `efi-vars.fd` 改成 LUKS qcow2; QEMU argv 加 `-drive file.driver=luks,file.key-secret=`; **secret 注入机制** (含 E2 PoC) | 1 天 | 待开 |
+| **PR-4** | **`QcowLuksFactory.swift`** — qcow2 LUKS create / resize / rekey (走 amend 两步, qemu-img 10.2 没 reencrypt). 10 个真跑测试 | 1.5 天 | **✅ 已落** |
+| **PR-5** | **`OVMFVarsLuksFactory.swift`** + `LuksSecretFile.swift` (公共) + `BundleLayout.nvramLuksFileName`. qemu-img convert raw fd → LUKS qcow2. **argv 改造移到 PR-9** (需 VMHost 启动期 secret 注入). 6 个真跑测试 | 0.5 天 | **✅ 已落** |
 | **PR-6** | **swtpm `--key`** 接入; 含 E1 PoC | 1 天 | 待开 |
 | **PR-7** | `HVMPaths.mountpointFor(uuid:)` + `MountReaper` (VZ 路径 stale mount 清理) + 临时 key 文件 reaper (QEMU 路径) + T4 实测 | 1 天 | 待开 |
 | **PR-8** | `EncryptedBundleIO` 路由层 — engine 分流 (VZ-sparsebundle / QEMU-perfile); routing JSON 读写 | 2 天 | 待开 |
@@ -534,11 +535,29 @@ P1:
 | **D9** | 加密 VM 的克隆是否支持 | 不支持 (本稿). 后续 PR 补; VZ 易 (cp + chpass), QEMU 难 (4 个 key 全部 reencrypt) | 待决 — 看用户需求 |
 | **D10** | swtpm 加密方式 | ✅ **已决 (E1 通过)**: 走 `--key fd=<fd>,mode=aes-256-cbc,format=binary` — HVM 主进程 dup2 透传 fd, 不落盘. swtpm `--key` 原生支持, 无需 sparsebundle fallback | 已决 |
 | **D11** | QEMU secret 注入方式 | ✅ **已决 (E2 通过)**: 走 `-object secret,id=<id>,file=<path>` — HVM 写 0600 临时文件 (`run/<uuid>.luks-key.{disk,nvram}`), 启动 QEMU 后立即 unlink. fifo 形式作未来优化项 (跳过磁盘) | 已决 |
-| **D12** | QEMU OVMF VARS 加密形态 | 走 `-drive if=pflash,format=qcow2,file=<luks qcow2>,readonly=off,file.driver=luks,file.key-secret=sec_nvram`. OVMF VARS 模板初次写入时由 QcowLuksFactory 创建空白 LUKS qcow2, 装机第一次 boot 由 OVMF 自己写入 EFI VARS | E0 通过后即可定 |
+| **D12** | QEMU OVMF VARS 加密形态 | 走 `-drive if=pflash,driver=qcow2,file.filename=<luks qcow2>,file.driver=luks,file.key-secret=sec_nvram`. **OVMF VARS 走 qemu-img convert raw → LUKS qcow2** (PR-5 已落 OVMFVarsLuksFactory), 不是空白 qcow2 — 必须从 stock template 拷字节, 否则 OVMF 起不来 | ✅ 已落 PR-5 |
+| **D13** | LUKS passphrase 编码 (32 字节 binary 不是 UTF-8 合法) | ✅ **base64 编码后 ASCII 字符串当 passphrase**. LUKS spec 要求 passphrase UTF-8 合法; PBKDF2 / HKDF 输出 32 字节 binary 大概率含非 UTF-8 字节 (0x80-0xBF 等). 走 `bytes.base64EncodedString()` → ASCII 字符串 → `LuksSecretFile` 写入 → qemu-img / qemu-system 当 passphrase. 跨机器一致性: 同 32 字节 → 同 base64 → 同 LUKS passphrase | ✅ 已决 PR-5 |
 
 ## 设计变更日志
 
-### 2026-05-04 v2.2 — 强制密码 + 跨机器 portable (本稿当前状态)
+### 2026-05-04 v2.3 — LUKS passphrase base64 编码 (本稿当前状态)
+
+**变更**: PR-5 实施 OVMFVarsLuksFactory 时 qemu-img convert 报 "Data from secret sec0 is not valid UTF-8". 根因: LUKS spec 要求 passphrase UTF-8 合法, 但 32 字节 binary master/sub key 大概率含非 UTF-8 字节.
+
+**触发**: PR-5 真跑测试遇到 0x88 等非 UTF-8 字节失败 (PR-4 测试用 0x42 / 0x01 / 0x02 等合法 UTF-8 字节侥幸通过).
+
+**影响**:
+- 新增 `HVMEncryption/LuksSecretFile.swift` 公共模块 — 把 32 字节 binary 走 `base64EncodedString()` → ASCII 字符串 → 写 0o600 file → qemu-img secret file=
+- `QcowLuksFactory` (PR-4) + `OVMFVarsLuksFactory` (PR-5) 都通过 LuksSecretFile 注入 — 删私有 SecretFile 副本
+- D13 已决: base64 编码后 ASCII 字符串当 LUKS passphrase
+- 跨机器一致性: 同 32 字节 → 同 base64 → 同 LUKS passphrase, portable 不变
+
+**保留 v2.2 决策**:
+- 强制密码 + 跨机器 portable + 无 Keychain 缓存
+- master KEK = PBKDF2(password, salt) + HKDF 派生 4 子 key
+- 密钥统一从用户输入派生
+
+### 2026-05-04 v2.2 — 强制密码 + 跨机器 portable
 
 **变更**: 用户拍板 "取消记录密码, 强制每次输". 同时新增硬要求 "加密 VM 复制到其他机器输密码即开".
 
@@ -609,4 +628,4 @@ P1:
 ---
 
 **最后更新**: 2026-05-04
-**状态**: 设计稿混合方案 v2.2 (强制密码 + 跨机器 portable); PR-1 已落, E0 / E1 / E2 PoC 通过, T1 / T4 留 PR-9 真机跑. 可进 PR-2 (MasterKey + PasswordKDF)
+**状态**: 设计稿混合方案 v2.3; PR-1 ~ PR-5 已落, T1 / T4 留 PR-9 真机跑. 可进 PR-6 (swtpm `--key fd=`)
