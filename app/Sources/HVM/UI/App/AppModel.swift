@@ -118,6 +118,9 @@ public final class AppModel {
     public var editConfigItem: VMListItem? = nil
     /// 新建 snapshot 弹窗的当前 VM. 非 nil → DialogOverlay 显示 SnapshotCreateDialog 模态
     public var snapshotCreateItem: VMListItem? = nil
+    /// 克隆 VM 弹窗的当前源 VM. 非 nil → DialogOverlay 显示 CloneVMDialog 模态.
+    /// 对话框内部维护 form / running / done 三态, 走 HVMStorage.CloneManager.
+    public var cloneItem: VMListItem? = nil
     /// 新建数据盘弹窗的当前 VM. 非 nil → DialogOverlay 显示 DiskAddDialog 模态
     public var diskAddItem: VMListItem? = nil
     /// 扩容磁盘弹窗的请求 (item + diskID + 当前大小). 非 nil → DialogOverlay 显示 DiskResizeDialog 模态
@@ -151,6 +154,7 @@ public final class AppModel {
             || osImageFetchState != nil
             || editConfigItem != nil
             || snapshotCreateItem != nil
+            || cloneItem != nil
             || diskAddItem != nil
             || diskResizeRequest != nil
             || errors.current != nil

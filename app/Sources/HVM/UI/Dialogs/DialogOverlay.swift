@@ -42,6 +42,9 @@ struct DialogOverlay: View {
             if let snapItem = model.snapshotCreateItem {
                 SnapshotCreateDialog(model: model, errors: errors, item: snapItem)
             }
+            if let cloneSrc = model.cloneItem {
+                CloneVMDialog(model: model, errors: errors, item: cloneSrc)
+            }
             if let diskAdd = model.diskAddItem {
                 DiskAddDialog(model: model, errors: errors, item: diskAdd)
             }

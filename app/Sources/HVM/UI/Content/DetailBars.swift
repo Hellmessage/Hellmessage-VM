@@ -714,6 +714,13 @@ struct StoppedContentView: View {
                 .help("装完 OS 后切到只从硬盘启动")
             }
 
+            // Clone — APFS clonefile + 身份字段重生. 必须 stopped (CloneManager 内部会再校验).
+            Button { model.cloneItem = item } label: {
+                Text("Clone")
+            }
+            .buttonStyle(GhostButtonStyle())
+            .help("从此 VM 克隆出一台独立 VM (APFS clonefile, 几乎零空间)")
+
             // 危险操作 (Delete) 放最右, 走 ConfirmDialog 弹窗确认避免误触.
             Button(role: .destructive) { deleteAction() } label: {
                 Text("Delete")
