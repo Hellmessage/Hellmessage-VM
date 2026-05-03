@@ -66,12 +66,13 @@ public enum QemuPaths {
         return bin
     }
 
-    // 注: 不暴露 socket_vmnet_client locator. socket_vmnet daemon 协议是 length-prefix,
-    // 与 QEMU -netdev stream 不匹配; 但 socket_vmnet_client wrapper 只能透传单 fd, 多 NIC
-    // 桥接装不下. 实际跑时 HVM/hvm-dbg 自己 connect 每个 daemon socket, 通过
-    // posix_spawn 把 fd 落到子进程 fd 3, 4, 5... (与 lima 实现一致), QEMU 命令行写
-    // -netdev socket,id=netN,fd=K. socket_vmnet_client 仍打包入 .app 仅作排查兜底,
-    // 不在运行时引用.
+    // 注: 不提供 socket_vmnet locator — 该二进制**不入 .app**, 由用户 brew install,
+    // 系统级 launchd daemon (label `com.hellmessage.hvm.vmnet.*`) 拉起, 监听固定路径
+    // `/var/run/socket_vmnet[.host|.bridged.<iface>]`. QEMU argv 直接
+    // `-netdev stream,addr.type=unix,addr.path=...` 连 daemon — daemon 协议 (4-byte
+    // length-prefix framing) 跟 QEMU `-netdev stream` 兼容, 不需要 socket_vmnet_client
+    // wrapper, 不需要父进程透传 fd (老 sidecar fd-passing 路径已下线).
+    // 详见 CLAUDE.md "socket_vmnet 网络约束" 与 docs/v1/NETWORK.md.
 
     /// EDK2 aarch64 UEFI firmware (Linux + Windows arm64 启动必需)
     public static func edk2Firmware() throws -> URL {

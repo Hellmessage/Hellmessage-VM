@@ -71,7 +71,7 @@ public struct HVMTextField: View {
             if let error, !error.isEmpty {
                 HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.circle.fill")
-                        .font(.system(size: 10))
+                        .font(HVMFont.tiny)
                         .foregroundStyle(HVMColor.danger)
                     Text(error)
                         .font(HVMFont.small)
@@ -92,7 +92,7 @@ public struct HVMTextField: View {
             }
         }
         .padding(.horizontal, HVMSpace.md)
-        .padding(.vertical, 7)
+        .padding(.vertical, HVMSpace.buttonPadV7)
         .background(
             RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous)
                 .fill(HVMColor.bgCardHi)
