@@ -53,6 +53,20 @@ struct EditConfigDialog: View {
                         }
                     }
 
+                    // 剪贴板共享 — 仅 QEMU 后端 (VZ macOS guest 自带剪贴板)
+                    if item.config.engine == .qemu {
+                        HVMToggle(
+                            "剪贴板共享",
+                            isOn: $draft.clipboardSharingEnabled,
+                            help: "host ↔ guest UTF-8 文本双向同步, 走 vdagent virtio-serial. 运行中也可在详情顶栏即时切换"
+                        )
+                        HVMToggle(
+                            "macOS 风格快捷键",
+                            isOn: $draft.macStyleShortcuts,
+                            help: "把 host cmd 当 guest ctrl 转发 (cmd+c → ctrl+c 等). 关闭后回到 cmd → Win 键. 关闭并重开 VM 详情或独立窗口生效"
+                        )
+                    }
+
                     VMSettingsNetworkSection(draft: $draft, item: item)
                 }
                 .padding(.vertical, HVMSpace.xs)
@@ -98,6 +112,8 @@ struct EditConfigDialog: View {
             config.cpuCount = cpuInt
             config.memoryMiB = memGiB * 1024
             config.networks = draft.networks
+            config.clipboardSharingEnabled = draft.clipboardSharingEnabled
+            config.macStyleShortcuts = draft.macStyleShortcuts
             try BundleIO.save(config: config, to: item.bundleURL)
             model.refreshList()
             close()

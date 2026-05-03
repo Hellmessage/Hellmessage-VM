@@ -423,6 +423,30 @@ public final class AppModel {
         }
     }
 
+    /// 切换剪贴板共享: 改 yaml 持久化; 若 VM 在跑, 同时通过 IPC clipboard.setEnabled 即时生效.
+    /// VM 不在跑时 IPC 部分跳过 (启动时按 yaml 自动生效). 失败抛 HVMError, 由调用方走 errors.present.
+    public func toggleClipboardSharing(item: VMListItem, enabled: Bool) throws {
+        // 1) 落 yaml — 即便 IPC 失败也要先持久化, 防止重启后回到旧值
+        var cfg = try BundleIO.load(from: item.bundleURL)
+        cfg.clipboardSharingEnabled = enabled
+        try BundleIO.save(config: cfg, to: item.bundleURL)
+        // 2) running → IPC 即时切换
+        if item.runState == "running",
+           let holder = BundleLock.inspect(bundleURL: item.bundleURL),
+           !holder.socketPath.isEmpty {
+            let req = IPCRequest(
+                op: IPCOp.clipboardSetEnabled.rawValue,
+                args: ["enabled": enabled ? "1" : "0"]
+            )
+            // IPC 失败不抛 — yaml 已保存, 用户可手动重启 VM 让设置生效
+            if let resp = try? SocketClient.request(socketPath: holder.socketPath, request: req, timeoutSec: 3),
+               !resp.ok {
+                // 静默 (yaml 已成功)
+            }
+        }
+        refreshList()
+    }
+
     // MARK: - macOS guest 装机
 
     /// 跑 VZMacOSInstaller 流程. 进度更新 self.installState, DialogOverlay 监听显示.

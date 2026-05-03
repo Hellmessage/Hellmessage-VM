@@ -272,7 +272,7 @@ final class DetailContainerView: NSView {
             buildEmpty(); return
         }
 
-        let topBar = NSHostingView(rootView: DetailTopBar(model: model, item: item))
+        let topBar = NSHostingView(rootView: DetailTopBar(model: model, errors: errors, item: item))
         topBar.translatesAutoresizingMaskIntoConstraints = false
         topBar.sizingOptions = .intrinsicContentSize
         topBar.setContentHuggingPriority(.required, for: .vertical)
@@ -367,7 +367,7 @@ final class DetailContainerView: NSView {
         // 主窗口 transition 离开时只 removeSubscriber, 不停 fanout (除非 VM 真停止).
         let fanout = model.ensureQemuFanout(id: id, bundleURL: item.bundleURL)
 
-        let topBar = NSHostingView(rootView: DetailTopBar(model: model, item: item))
+        let topBar = NSHostingView(rootView: DetailTopBar(model: model, errors: errors, item: item))
         topBar.translatesAutoresizingMaskIntoConstraints = false
         topBar.sizingOptions = .intrinsicContentSize
         topBar.setContentHuggingPriority(.required, for: .vertical)
@@ -383,6 +383,7 @@ final class DetailContainerView: NSView {
         let bottomDivider = makeHorizontalDivider()
 
         let fbView = FramebufferHostView(frame: .zero)
+        fbView.macStyleShortcuts = item.config.macStyleShortcuts
         fbView.translatesAutoresizingMaskIntoConstraints = false
         fbView.setContentHuggingPriority(.defaultLow, for: .vertical)
         fbView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)

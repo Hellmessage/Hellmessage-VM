@@ -122,6 +122,14 @@ public enum IPCOp: String, Sendable {
     /// virtio-serial port org.qemu.guest_agent.0 (chardev qga). 不依赖 keyboard typing
     /// (避 IME 字符替换) / OCR (避识别误差) / GUI mouse (避 USB tablet 坐标问题).
     case dbgExecGuest    = "dbg.exec.guest"
+    /// host (GUI) 通知 VMHost 改 guest 显示分辨率, args.width/height. VMHost 持有
+    /// 持久 vdagent socket, 通过 vdagent VDAgentMonitorsConfig 转给 guest spice-vdagent.
+    /// 取代老的"GUI 直连 vdagent socket"路径 — vdagent socket 是 single-client,
+    /// 必须由 VMHost 唯一持有 (PasteboardBridge 也用同一 socket).
+    case displaySetMonitors = "display.setMonitors"
+    /// host (GUI) 通知 VMHost 切换剪贴板共享 enabled, args.enabled = "1" / "0".
+    /// 立即生效 (不必重启 VM). 持久化由 GUI 侧负责 (改 yaml).
+    case clipboardSetEnabled = "clipboard.setEnabled"
 }
 
 /// dbg.display.info payload — guest 真实当前 framebuffer 尺寸.

@@ -51,6 +51,12 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
     /// 切焦点 / 字母一直输入这种灵异现象. 释放焦点前必须遍历此集合一次性补发 keyUp.
     private var pressedKeys: Set<String> = []
 
+    /// NSEvent local monitor (process-global hook), 专治"按住 cmd 时字符键 keyUp 不送 view"
+    /// 这个 macOS 已知行为. UTM 同款做法: 在 keyUp + modifierFlags.contains(.command)
+    /// 时把 event 直接转发给本 view 的 keyUp(with:), 绕过 NSWindow 的丢弃.
+    /// 进 / 出 window 时 install / uninstall, 防 monitor 泄漏到 view 销毁后还活着.
+    private var cmdKeyUpMonitor: Any?
+
     /// 当前是否藏了 host 鼠标. NSCursor.hide/unhide 是引用计数 (HIToolbox 内部),
     /// 多 hide 没匹配 unhide 鼠标会一直消失; view 销毁前必须保证净 hide 计数 = 0.
     private var cursorHidden = false
@@ -78,6 +84,13 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
     ///   - 立即释放当前 first responder, 防止键盘事件残留 routing 到本 view
     /// 主用途: 同 VM 有独立窗口 (detached) 时, 主窗口的嵌入 view 让出输入,
     /// 用户操作完全在独立窗口里完成, 避免主窗口意外抢 mouse/key 焦点.
+    /// macOS 风格快捷键: host `cmd` 当 guest `ctrl` 转发 (cmd+c → ctrl+c). 默认 true.
+    /// 副作用: 失去发 Win/super 键的能力 (Win11 开始菜单要鼠标点). 关闭后回到老逻辑
+    /// (cmd → meta_l/Win 键, 用户用 control+c 复制).
+    /// 由 caller (DetailContainerView / DetachedVMWindowController) 在 view 创建后按
+    /// VMConfig.macStyleShortcuts 设置.
+    public var macStyleShortcuts: Bool = true
+
     public var inputCaptureEnabled: Bool = true {
         didSet {
             guard oldValue != inputCaptureEnabled else { return }
@@ -108,11 +121,12 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
         wantsLayer = true
         autoResizeDrawable = true
         translatesAutoresizingMaskIntoConstraints = false
-        // displayLink 60Hz 保底 + setNeedsDisplay 额外触发: 收到 SURFACE_DAMAGE
-        // 时 markFramebufferDirty 调 setNeedsDisplay 立即调度 draw, 即便 M3 Max
-        // ProMotion 把 displayLink throttle 到 ~6Hz 也不会卡 (manual draw 唤醒).
+        // 60Hz displayLink-driven auto draw (UTM 同款做法, MTKView 默认行为).
+        // **不**启用 enableSetNeedsDisplay — 那会把 view 切成"仅 needsDisplay 才 draw"
+        // 模式, NSWindow resize 后 guest 静止 (没新 SURFACE_DAMAGE) 时 view 立即停绘
+        // 卡在最后一帧, 用户拖 detached 窗口改分辨率后画面冻死. 60Hz 持续 present 是
+        // Metal triangle-strip 廉价操作, Apple Silicon UMA 下 CPU 占用 < 2%.
         preferredFramesPerSecond = 60
-        enableSetNeedsDisplay = true
         isPaused = false
         delegate = self
     }
@@ -285,6 +299,14 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
                 window?.makeFirstResponder(nil)
             }
             showHostCursor()
+            uninstallCmdKeyUpMonitor()
+        }
+    }
+
+    public override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            installCmdKeyUpMonitor()
         }
     }
 
@@ -395,13 +417,28 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
         // syncCapsLockIfNeeded 又看 host bit vs guest LED 不一致 → 重复 toggle
         // 抵消. 单一 source: keyDown 时统一查 expectedGuestCaps 同步.
 
+        // 兜底: cmd 由 down → up 时, 给所有 stuck 字符键补 keyUp.
+        // 主要靠 cmdKeyUpMonitor 把 cmd+keyUp 路由进 view (UTM 同款), 但用户极快地
+        // 先松 cmd 再松字符键时 monitor 可能已经处理过 keyUp 也可能没处理到, 双保险.
+        // releaseAllPressedKeys 内部会从 pressedKeys 移除 — monitor 已 keyUp 过的也无害
+        // (此时 pressedKeys 已不含该 qcode), 只补真正卡住的.
+        let cmdReleased = prev.contains(.command) && !cur.contains(.command)
+        if cmdReleased {
+            releaseAllPressedKeys()
+        }
+
         // Shift / Control / Option / Command: 普通 down/up modifier.
-        // NSEvent.ModifierFlags 不区分左右, 我们都映射到左侧 qcode (shift/ctrl/alt/meta_l).
+        // NSEvent.ModifierFlags 不区分左右, 都映射到左侧 qcode (shift/ctrl/alt/meta_l).
+        // macStyleShortcuts: host `cmd` → guest `ctrl` (cmd+c→ctrl+c 等 macOS 习惯快捷键).
+        // 关闭时回到 cmd → meta_l (Win 键). 副作用见 macStyleShortcuts 字段注释.
+        // 注: 当用户同时按 host control + host command 时, release 路径已在上面 return,
+        // 不会进到这里, 不会出现 guest ctrl 重复 down/up.
+        let cmdQcode = macStyleShortcuts ? "ctrl" : "meta_l"
         let map: [(NSEvent.ModifierFlags, String)] = [
             (.shift,   "shift"),
             (.control, "ctrl"),
             (.option,  "alt"),
-            (.command, "meta_l"),
+            (.command, cmdQcode),
         ]
         for (flag, qcode) in map {
             let was = prev.contains(flag)
@@ -411,13 +448,42 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
         }
     }
 
+    /// 装 NSEvent local monitor 拦截 keyUp-with-cmd (macOS 已知行为: 按住 .command 时
+    /// 字符键 keyUp 不送 NSView, 后果是 guest 看 keyDown 没对应 keyUp → auto-repeat 卡键).
+    /// 直接把 event 路由给 self.keyUp, 然后 return event 让 NSApp 自由 dispatch (不影响其他).
+    /// guard: 仅本 view 是 first responder + 输入捕获 + 修饰含 cmd 才 take over,
+    /// 否则放行 (避免主嵌入 + detached 双 view 抢 keyUp 路由).
+    private func installCmdKeyUpMonitor() {
+        guard cmdKeyUpMonitor == nil else { return }
+        cmdKeyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyUp]) { [weak self] event in
+            guard let self else { return event }
+            if self.inputCaptureEnabled,
+               self.window?.firstResponder === self,
+               event.modifierFlags.contains(.command) {
+                self.keyUp(with: event)
+            }
+            return event
+        }
+    }
+
+    private func uninstallCmdKeyUpMonitor() {
+        if let m = cmdKeyUpMonitor {
+            NSEvent.removeMonitor(m)
+            cmdKeyUpMonitor = nil
+        }
+    }
+
     /// 释放 first responder 时给 guest 补 keyUp, 防止 stuck modifier (例如
     /// 用户按住 ctrl 按 cmd 触发 release, 没补 keyUp 的话 guest 会卡在 ctrl down).
+    /// command 的目标 qcode 必须跟 flagsChanged 里的 cmdQcode 同步, 否则 cmd 发的 down
+    /// 跟 release 时发的 up 不平衡, guest 卡键.
     private func sendModifierUpAll(_ flags: NSEvent.ModifierFlags) {
         if flags.contains(.shift)   { forwarder?.keyUp(qcode: "shift") }
         if flags.contains(.control) { forwarder?.keyUp(qcode: "ctrl") }
         if flags.contains(.option)  { forwarder?.keyUp(qcode: "alt") }
-        if flags.contains(.command) { forwarder?.keyUp(qcode: "meta_l") }
+        if flags.contains(.command) {
+            forwarder?.keyUp(qcode: macStyleShortcuts ? "ctrl" : "meta_l")
+        }
     }
 
     /// 给所有已 keyDown 但未 keyUp 的 normal key (Tab / Return / 字母 / 数字 etc)

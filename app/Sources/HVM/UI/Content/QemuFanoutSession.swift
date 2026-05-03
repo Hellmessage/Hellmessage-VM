@@ -30,6 +30,7 @@ import HVMCore
 import HVMBundle
 import HVMQemu
 import HVMDisplayQemu
+import HVMIPC
 
 private let log = Logger(subsystem: "com.hellmessage.vm", category: "QemuFanout")
 
@@ -53,13 +54,6 @@ final class QemuFanoutSession {
     /// 每个 view 在 viewCoords 调用前先 setViewSize 同步 view 自己的 size,
     /// NSEvent 一时刻只送一个 view, 序列化无竞争.
     private let forwarder: InputForwarder
-
-    /// spice-vdagent client. user 拖 HVM 主窗口 → resize master view 的
-    /// onDrawableSizeChange 调 sendMonitorsConfig(w, h), 直接通过 vdagent
-    /// virtio-serial chardev 发 VDAgentMonitorsConfig 给 guest 内 spice-vdagent
-    /// 服务 → SetDisplayConfig → 改分辨率. 没装 vdagent 的 guest 不响应没事
-    /// (chardev 写穿过去, guest 端没 reader 静默丢, 主路径不阻塞).
-    private let vdagent: VdagentClient
 
     /// 弱引用包. View 销毁后 fanout 自动跳过 (不需要显式 unsubscribe 也安全).
     private final class WeakBox {
@@ -105,18 +99,17 @@ final class QemuFanoutSession {
         self.bundleURL = bundleURL
         let iosurfacePath = HVMPaths.iosurfaceSocketPath(for: vmID).path
         let qmpInputPath  = HVMPaths.qmpInputSocketPath(for: vmID).path
-        let vdagentPath   = HVMPaths.vdagentSocketPath(for: vmID).path
         self.channel = DisplayChannel(socketPath: iosurfacePath)
         self.forwarder = InputForwarder(qmpSocketPath: qmpInputPath)
-        self.vdagent = VdagentClient(socketPath: vdagentPath)
     }
 
     /// 启动连接 + 事件循环. 不阻塞调用线程. 多次调用安全 (第二次无效).
+    /// vdagent socket 由 VMHost 进程持久 own (single-client 限制), GUI 不直连; 拖窗口 resize
+    /// 走 IPC `display.setMonitors` 让 VMHost 内的 vdagent.sendMonitorsConfig 转 guest.
     func start() {
         guard connectTask == nil else { return }
         log.info("start: retry connecting HDP channel for vm=\(self.vmID.uuidString)")
         forwarder.connect()
-        vdagent.connect()
         startThumbnailTimer()
         runConnectLoop()
     }
@@ -165,7 +158,6 @@ final class QemuFanoutSession {
         pendingResizeWorkItem?.cancel(); pendingResizeWorkItem = nil
         channel.disconnect()
         forwarder.disconnect()
-        vdagent.disconnect()
         if cachedSurfaceFD >= 0 {
             Darwin.close(cachedSurfaceFD); cachedSurfaceFD = -1
         }
@@ -175,10 +167,9 @@ final class QemuFanoutSession {
 
     deinit {
         // deinit 跨线程, 不能 call MainActor-isolated 方法.
-        // channel.disconnect / forwarder.disconnect / vdagent.disconnect 内部 DispatchQueue 已线程安全.
+        // channel.disconnect / forwarder.disconnect 内部 DispatchQueue 已线程安全.
         channel.disconnect()
         forwarder.disconnect()
-        vdagent.disconnect()
         connectTask?.cancel()
         eventLoopTask?.cancel()
         if cachedSurfaceFD >= 0 {
@@ -209,23 +200,15 @@ final class QemuFanoutSession {
         // 两路并发, guest 哪条 work 哪条生效 (Linux 用 #1, Win 用 #2).
         // **debounce**: 拖动过程中高频 drawableSizeWillChange 不直接下发, 用户停
         // resizeDebounceSeconds 后才真正推一次, 防 Win guest 反复改分辨率刷屏.
-        if isResizeMaster {
-            view.onDrawableSizeChange = { [weak self] w, h in
-                self?.scheduleResize(width: w, height: h)
-            }
-            // 防 race: window.contentView 可能在本 addSubscriber 之前就触发过一次
-            // mtkView.drawableSizeWillChange, 那时 onDrawableSizeChange 还没赋值,
-            // 首次 resize 信号会被错过. 这里如果 view 当前已经有合理 drawable size,
-            // 手动补一次 (走 debounce 通路, 真正推送由 timer 触发, 不会重复).
-            let dsize = view.drawableSize
-            if dsize.width >= 1, dsize.height >= 1 {
-                let w = UInt32(dsize.width.rounded())
-                let h = UInt32(dsize.height.rounded())
-                self.scheduleResize(width: w, height: h)
-            }
-        } else {
-            view.onDrawableSizeChange = nil
-        }
+        // **不**绑 view.onDrawableSizeChange = scheduleResize: 那样 mtkView 任何
+        // drawableSizeWillChange (window setContentSize / 主嵌入 ↔ detached 切换 / chrome
+        // 估算误差导致的 layout 微调) 都会盲发 resize 请求, 用户没拖窗口 guest 也被改
+        // 分辨率. 现在只在用户真正拖窗口结束 (NSWindow live resize) 时才发, 由
+        // DetachedVMWindowController.windowDidEndLiveResize 主动调 fanout.scheduleResize.
+        // isResizeMaster 字段保留 (语义: 当前 view 是否是 resize 决策者, 调用方据此决定
+        // 是否监听 windowDidEndLiveResize). 主嵌入永远 false.
+        view.onDrawableSizeChange = nil
+        _ = isResizeMaster
 
         // replay 当前 surface (如果已有)
         if let info = cachedSurfaceInfo, cachedSurfaceFD >= 0 {
@@ -255,21 +238,70 @@ final class QemuFanoutSession {
         subscribers.removeAll { $0.view == nil || $0.view === view }
     }
 
-    /// resize 防抖入口. 拖动过程中高频被调, 真正下发由 main queue timer 触发.
+    /// 用户主动触发 resize (NSWindow live resize 结束). 调用方: DetachedVMWindowController
+    /// 的 windowDidEndLiveResize. 对外入口, internal 可见.
+    @MainActor
+    func requestResizeFromUser(width: UInt32, height: UInt32) {
+        scheduleResize(width: width, height: height)
+    }
+
+    /// resize 防抖入口. 拖动过程中高频被调 (live resize 期间 windowDidResize),
+    /// 真正下发由 main queue timer 触发.
+    /// 双通路:
+    ///   1) HDP RESIZE_REQUEST — GUI 自家直连 iosurface socket (Linux virtio-gpu 走这条)
+    ///   2) IPC display.setMonitors → VMHost vdagent.sendMonitorsConfig (Win spice-vdagent 走这条)
+    /// IPC 走 background queue 防 main 阻塞; 失败 silent (vdagent 通道挂了不该卡 UI).
+    ///
+    /// **dedup**: 跟 guest 当前 framebuffer (cachedSurfaceInfo) 一致就跳过, 双保险防
+    /// 用户"拖动结束但 size 没真的变" 的边界情况. 没收过 SURFACE_NEW 也跳过 (不知
+    /// guest 状态不盲发).
     @MainActor
     private func scheduleResize(width: UInt32, height: UInt32) {
+        // dedup: 跟当前 guest framebuffer 一致 → 跳过
+        if let info = cachedSurfaceInfo, info.width == width, info.height == height {
+            return
+        }
+        // 没收过 SURFACE_NEW → 不知 guest 当前 size → 不轻易发
+        guard cachedSurfaceInfo != nil else {
+            log.info("scheduleResize \(width)x\(height) skipped: no cachedSurfaceInfo (waiting first SURFACE_NEW)")
+            return
+        }
         pendingResizeWorkItem?.cancel()
         let channel = self.channel
-        let vdagent = self.vdagent
+        let bundleURL = self.bundleURL
         let vmIDStr = self.vmID.uuidString
         let item = DispatchWorkItem {
-            log.info("FanoutSession[\(vmIDStr)] resize debounced \(width)x\(height) → fan out to HDP+vdagent")
+            log.info("FanoutSession[\(vmIDStr)] resize debounced \(width)x\(height) → HDP + IPC")
             channel.requestResize(width: width, height: height)
-            vdagent.sendMonitorsConfig(width: width, height: height)
+            DispatchQueue.global(qos: .userInitiated).async {
+                Self.ipcSetMonitors(bundleURL: bundleURL, width: width, height: height)
+            }
         }
         pendingResizeWorkItem = item
         DispatchQueue.main.asyncAfter(
             deadline: .now() + Self.resizeDebounceSeconds, execute: item)
+    }
+
+    /// 后台线程调: BundleLock.inspect 取 socket → SocketClient.request display.setMonitors.
+    /// 任一步失败 silent log.warn — vdagent 通道挂了不该让 GUI 卡或弹错.
+    nonisolated private static func ipcSetMonitors(bundleURL: URL, width: UInt32, height: UInt32) {
+        guard let holder = BundleLock.inspect(bundleURL: bundleURL),
+              !holder.socketPath.isEmpty else {
+            log.warning("FanoutSession resize: BundleLock.inspect 失败, 跳过 IPC")
+            return
+        }
+        let req = IPCRequest(
+            op: IPCOp.displaySetMonitors.rawValue,
+            args: ["width": "\(width)", "height": "\(height)"]
+        )
+        do {
+            let resp = try SocketClient.request(socketPath: holder.socketPath, request: req, timeoutSec: 3)
+            if !resp.ok {
+                log.warning("FanoutSession resize IPC failed: \(resp.error?.message ?? "?")")
+            }
+        } catch {
+            log.warning("FanoutSession resize IPC error: \(String(describing: error))")
+        }
     }
 
     /// 当前活跃 subscriber 数 (compaction 后). 上层 (AppModel) 用这个判断
@@ -374,12 +406,15 @@ final class QemuFanoutSession {
     }
 
     /// 把新到达的 SurfaceArrival fan-out 给所有 alive subscriber.
-    /// 第一个 subscriber 拿原 fd, 其余 dup; fanout 自己再 dup 一份缓存供后续
-    /// addSubscriber replay 使用 (替换并关闭老缓存 fd).
+    /// **先一次性 dup 出所有需要的 fd, 再分发** — 之前用"第一个 subscriber 拿原 fd, 其余
+    /// dup" 的写法有 bug: 第一个 subscriber 的 FramebufferRenderer.bindShm 内 mmap 后
+    /// 立即 close(fd), close 完后续循环再 dup(arrival.shmFD) 全部 EBADF, detached 窗口
+    /// 等任何 idx>0 的 subscriber 永远收不到新 surface, 卡在 resize 前那一帧.
+    /// 现在统一: cache + 每个 subscriber 各 dup 一份, 最后再 close 原 fd, 顺序无歧义.
     private func broadcastSurface(_ arrival: DisplayChannel.SurfaceArrival) {
         let alive = subscribers.compactMap { $0.view }
 
-        // 关旧缓存, 用新 fd 重新 dup 一份缓存
+        // 关旧缓存, dup 一份新 fd 进 cache (供后续 addSubscriber replay)
         if cachedSurfaceFD >= 0 {
             Darwin.close(cachedSurfaceFD); cachedSurfaceFD = -1
         }
@@ -392,25 +427,22 @@ final class QemuFanoutSession {
             cachedSurfaceInfo = nil
         }
 
-        if alive.isEmpty {
-            // 没人接, 关掉原 fd 防泄漏 (cache 已 dup 一份, 不影响以后 replay)
-            Darwin.close(arrival.shmFD)
-            return
-        }
-
-        // 第一个 subscriber 拿原 fd, 其余各 dup 一份各自 mmap
-        for (idx, view) in alive.enumerated() {
-            let fd: Int32
-            if idx == 0 {
-                fd = arrival.shmFD
-            } else {
-                let d = Darwin.dup(arrival.shmFD)
-                if d < 0 {
-                    log.error("broadcastSurface: dup for subscriber \(idx) failed errno=\(errno)")
-                    continue
-                }
-                fd = d
+        // 给每个 subscriber 提前 dup 一份独立 fd. 必须在分发前全部 dup 完, 否则
+        // 第一个 view.bindSurface 内 close 原 fd 后, 后续 dup 失败.
+        var subFds: [Int32] = []
+        subFds.reserveCapacity(alive.count)
+        for _ in alive {
+            let d = Darwin.dup(arrival.shmFD)
+            if d < 0 {
+                log.error("broadcastSurface: dup for subscriber failed errno=\(errno)")
             }
+            subFds.append(d)
+        }
+        // 原 fd 已不再用 (cache + N 个 subscriber 各持独立 dup), close 防泄漏
+        Darwin.close(arrival.shmFD)
+
+        for (view, fd) in zip(alive, subFds) {
+            if fd < 0 { continue }
             let copy = DisplayChannel.SurfaceArrival(info: arrival.info, shmFD: fd)
             view.bindSurface(copy)
         }

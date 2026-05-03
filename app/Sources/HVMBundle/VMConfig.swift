@@ -324,6 +324,16 @@ public struct VMConfig: Codable, Sendable, Equatable {
     /// 改挂 hvm-gpu-ramfb-pci 让 viogpudo 接管 virtio-gpu 通路 (dynamic resize / vdagent).
     /// Linux/macOS 字段忽略.
     public var windowsDriversInstalled: Bool
+    /// host ↔ guest 剪贴板共享开关 (UTF-8 文本, 双向). 默认 true.
+    /// 仅 QEMU 后端生效 (走 vdagent virtio-serial chardev); VZ 后端的 macOS guest VZ 框架
+    /// 自带剪贴板, 这字段忽略. 运行中可通过 IPC `clipboard.setEnabled` 即时切换 (不必重启 VM).
+    public var clipboardSharingEnabled: Bool
+    /// macOS 风格快捷键: host `cmd` 当 guest `ctrl` 转发 (cmd+c → ctrl+c 等). 默认 true.
+    /// 仅 QEMU 后端 (Win/Linux guest) 生效, VZ macOS guest 忽略此字段.
+    /// 副作用: 开启后失去发 Win/super 键的能力 (用鼠标点开始菜单代替).
+    /// 关闭后行为退回老逻辑: cmd → meta_l (Win 键), 用户用 control+c 复制.
+    /// GUI 进程内 view-instance 级开关, 不持久化到 host 子进程 — 改完无须重启 VM, 关掉编辑面板生效.
+    public var macStyleShortcuts: Bool
     public var macOS: MacOSSpec?
     public var linux: LinuxSpec?
     public var windows: WindowsSpec?
@@ -341,6 +351,8 @@ public struct VMConfig: Codable, Sendable, Equatable {
         installerISO: String? = nil,
         bootFromDiskOnly: Bool = false,
         windowsDriversInstalled: Bool = false,
+        clipboardSharingEnabled: Bool = true,
+        macStyleShortcuts: Bool = true,
         macOS: MacOSSpec? = nil,
         linux: LinuxSpec? = nil,
         windows: WindowsSpec? = nil
@@ -358,6 +370,8 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.installerISO = installerISO
         self.bootFromDiskOnly = bootFromDiskOnly
         self.windowsDriversInstalled = windowsDriversInstalled
+        self.clipboardSharingEnabled = clipboardSharingEnabled
+        self.macStyleShortcuts = macStyleShortcuts
         self.macOS = macOS
         self.linux = linux
         self.windows = windows
@@ -366,7 +380,8 @@ public struct VMConfig: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, id, createdAt, displayName, guestOS, engine,
              cpuCount, memoryMiB, disks, networks, installerISO,
-             bootFromDiskOnly, windowsDriversInstalled, macOS, linux, windows
+             bootFromDiskOnly, windowsDriversInstalled, clipboardSharingEnabled,
+             macStyleShortcuts, macOS, linux, windows
     }
 
     /// 自定义 decode: 仅为 engine 字段提供"缺省 .vz"兜底, 其他字段沿用合成默认行为
@@ -389,6 +404,9 @@ public struct VMConfig: Codable, Sendable, Equatable {
         //   - 老 Windows VM 已经在 hvm-gpu-ramfb-pci 跑 (bootFromDiskOnly=true) → 默认 true 不回退到 ramfb
         //   - 装机阶段 (false) → 默认 false 跟新建 VM 一致
         self.windowsDriversInstalled = try c.decodeIfPresent(Bool.self, forKey: .windowsDriversInstalled) ?? self.bootFromDiskOnly
+        // 老 yaml 缺字段 → 默认 true (符合"开箱可用, 用户没显式关就开"的预期)
+        self.clipboardSharingEnabled = try c.decodeIfPresent(Bool.self, forKey: .clipboardSharingEnabled) ?? true
+        self.macStyleShortcuts = try c.decodeIfPresent(Bool.self, forKey: .macStyleShortcuts) ?? true
         self.macOS = try c.decodeIfPresent(MacOSSpec.self, forKey: .macOS)
         self.linux = try c.decodeIfPresent(LinuxSpec.self, forKey: .linux)
         self.windows = try c.decodeIfPresent(WindowsSpec.self, forKey: .windows)

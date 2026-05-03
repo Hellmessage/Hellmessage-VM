@@ -233,6 +233,22 @@ public enum QemuHostEntry {
             // 6.1 thumbnail 抓帧定时器 (M-4): 与 VZ 路径周期一致, 抓 → 写 bundle/meta/thumbnail.png
             QemuHostState.shared.startThumbnailTimer()
 
+            // 6.4 vdagent 持久 connect + (按配置) 启动剪贴板桥.
+            // vdagent socket 是 single-client (-chardev server=on), 必须由 VMHost 唯一持有.
+            // GUI 想改分辨率 / 切剪贴板都走 IPC (display.setMonitors / clipboard.setEnabled),
+            // 由 VMHost 转 vdagent. 这条路径同时给 hvm-dbg display.resize 复用.
+            let vdagent = VdagentClient(socketPath: vdagentSocketURL.path)
+            vdagent.connect()
+            QemuHostState.shared.vdagent = vdagent
+            if config.clipboardSharingEnabled {
+                let bridge = PasteboardBridge(vdagent: vdagent)
+                bridge.start()
+                QemuHostState.shared.pasteboardBridge = bridge
+                fputs("HVMHost(qemu): clipboard sharing 已启动 (vdagent + NSPasteboard 桥)\n", stderr)
+            } else {
+                fputs("HVMHost(qemu): clipboard sharing 关闭 (config.clipboardSharingEnabled=false)\n", stderr)
+            }
+
             // 6.5 console bridge: poll-wait socket 文件 + connect; 失败仅警告, 不阻塞 VM 启动
             let bridge = QemuConsoleBridge(
                 socketPath: consoleSocketURL.path,
@@ -461,6 +477,12 @@ final class QemuHostState {
     /// VM 列表 thumbnail 抓帧定时器 (M-4): QMP screendump → bundle/meta/thumbnail.png. 与 VZ 路径同周期 10s
     var thumbnailTimer: Timer?
 
+    /// 持久 vdagent client. 启动后立即 connect 并保活, 给 GUI 转发 resize +
+    /// 给 PasteboardBridge 做剪贴板双向同步. socket 是 single-client, 由 VMHost 唯一持有.
+    var vdagent: VdagentClient?
+    /// host ↔ guest 剪贴板桥. nil 表示用户关掉了 clipboard sharing.
+    var pasteboardBridge: PasteboardBridge?
+
     var statusItem: NSStatusItem?
     var statusMenu: QemuStatusMenuController?
 
@@ -568,6 +590,8 @@ final class QemuHostState {
         case IPCOp.dbgDisplayInfo.rawValue:   return await handleDbgDisplayInfo(req: req)
         case IPCOp.dbgDisplayResize.rawValue: return await handleDbgDisplayResize(req: req)
         case IPCOp.dbgExecGuest.rawValue:     return await handleDbgExecGuest(req: req)
+        case IPCOp.displaySetMonitors.rawValue:  return handleDisplaySetMonitors(req: req)
+        case IPCOp.clipboardSetEnabled.rawValue: return handleClipboardSetEnabled(req: req)
 
         default:
             if req.op.hasPrefix("dbg.") {
@@ -903,6 +927,57 @@ final class QemuHostState {
         }
     }
 
+    // MARK: - 非 dbg op: 业务级 IPC
+
+    /// display.setMonitors — GUI 拖主窗口 (debounce 后) 通过 IPC 让 VMHost 改 guest 分辨率.
+    /// 走 VMHost 持有的持久 vdagent.sendMonitorsConfig (无重连开销, 也避开 single-client 抢 socket).
+    /// args.width / args.height (字符串). 失败返 ipc.bad_args 或 backend.vdagent_unavailable.
+    private func handleDisplaySetMonitors(req: IPCRequest) -> IPCResponse {
+        guard let widthStr = req.args["width"], let w = UInt32(widthStr) else {
+            return .failure(id: req.id, code: "ipc.bad_args", message: "需要 args.width")
+        }
+        guard let heightStr = req.args["height"], let h = UInt32(heightStr) else {
+            return .failure(id: req.id, code: "ipc.bad_args", message: "需要 args.height")
+        }
+        guard w >= 320, w <= 7680, h >= 240, h <= 4320 else {
+            return .failure(id: req.id, code: "ipc.bad_args", message: "width/height 越界")
+        }
+        guard let vdagent = self.vdagent else {
+            return .failure(id: req.id, code: "backend.vdagent_unavailable",
+                            message: "vdagent client 未初始化")
+        }
+        vdagent.sendMonitorsConfig(width: w, height: h)
+        return .success(id: req.id)
+    }
+
+    /// clipboard.setEnabled — GUI 切剪贴板共享 toggle, 立即生效不重启.
+    /// args.enabled = "1" / "0". 持久化由 GUI 侧负责 (改 yaml).
+    private func handleClipboardSetEnabled(req: IPCRequest) -> IPCResponse {
+        guard let raw = req.args["enabled"] else {
+            return .failure(id: req.id, code: "ipc.bad_args", message: "需要 args.enabled (1/0)")
+        }
+        let on = (raw == "1" || raw.lowercased() == "true")
+        guard let vdagent = self.vdagent else {
+            return .failure(id: req.id, code: "backend.vdagent_unavailable",
+                            message: "vdagent client 未初始化")
+        }
+        if on {
+            if pasteboardBridge == nil {
+                let bridge = PasteboardBridge(vdagent: vdagent)
+                bridge.start()
+                pasteboardBridge = bridge
+                fputs("HVMHost(qemu): clipboard sharing 已切到 ON (IPC)\n", stderr)
+            } else {
+                pasteboardBridge?.setEnabled(true)
+            }
+        } else {
+            pasteboardBridge?.stop()
+            pasteboardBridge = nil
+            fputs("HVMHost(qemu): clipboard sharing 已切到 OFF (IPC)\n", stderr)
+        }
+        return .success(id: req.id)
+    }
+
     /// dbg.display.resize — 模拟 GUI 拖窗口触发 host → guest resize.
     /// 双通路并发: HDP RESIZE_REQUEST + vdagent MONITORS_CONFIG.
     /// **要求**: GUI 没在 attach (iosurface / vdagent chardev 都是 single-client).
@@ -944,22 +1019,17 @@ final class QemuHostState {
         }
 
         // ---- B. vdagent MONITORS_CONFIG (适用 Win spice-vdagent → SetDisplayConfig) ----
+        // VMHost 持有持久 vdagent (启动时已 connect), dbg 不再临时 connect/disconnect 抢 socket.
         var vdagentResult = "skipped"
-        let vdagentPath = HVMPaths.vdagentSocketPath(for: configID).path
-        if FileManager.default.fileExists(atPath: vdagentPath) {
-            let vdagent = VdagentClient(socketPath: vdagentPath)
-            fputs("HVMHost(qemu): dbg.display.resize → vdagent connect \(vdagentPath)\n", stderr)
-            vdagent.connect()
-            // 等 connect 完成 (异步 dispatch queue) 再发 monitors config
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            fputs("HVMHost(qemu): dbg.display.resize → vdagent sendMonitorsConfig(\(w)x\(h))\n", stderr)
+        if let vdagent = self.vdagent {
+            fputs("HVMHost(qemu): dbg.display.resize → vdagent.sendMonitorsConfig(\(w)x\(h))\n", stderr)
             vdagent.sendMonitorsConfig(width: w, height: h)
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            vdagent.disconnect()
+            try? await Task.sleep(nanoseconds: 100_000_000)
             vdagentResult = "sent"
         } else {
-            vdagentResult = "skipped: vdagent socket 不存在"
+            vdagentResult = "skipped: vdagent client 未初始化"
         }
+        _ = configID
 
         let payload = IPCDbgDisplayResizePayload(
             widthPx: w, heightPx: h,
@@ -1059,6 +1129,10 @@ final class QemuHostState {
     func tearDown(exitCode: Int32) -> Never {
         thumbnailTimer?.invalidate()
         thumbnailTimer = nil
+        pasteboardBridge?.stop()
+        pasteboardBridge = nil
+        vdagent?.disconnect()
+        vdagent = nil
         ipcServer?.stop()
         qmpClient?.close()
         runner?.waitUntilExit()

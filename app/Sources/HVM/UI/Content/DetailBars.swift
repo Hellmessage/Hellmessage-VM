@@ -65,6 +65,7 @@ struct StatusBadge: View {
 
 struct DetailTopBar: View {
     @Bindable var model: AppModel
+    @Bindable var errors: ErrorPresenter
     let item: AppModel.VMListItem
 
     var body: some View {
@@ -81,6 +82,27 @@ struct DetailTopBar: View {
                 StatusBadge(state: displayState)
             }
             Spacer()
+            // 剪贴板共享 toggle: 仅 QEMU 后端 (VZ macOS guest 自带剪贴板).
+            // 即时生效 (IPC clipboard.setEnabled), 失败回退由 toggleClipboardSharing 内处理.
+            // 读 model.list 实时拿当前状态 — item 是 init 时 captured 的 immutable
+            // snapshot, toggle 后 image 不会自动切.
+            if item.config.engine == .qemu {
+                let liveOn = (model.list.first(where: { $0.id == item.id })?.config.clipboardSharingEnabled) ?? item.config.clipboardSharingEnabled
+                Button {
+                    do {
+                        try model.toggleClipboardSharing(item: item, enabled: !liveOn)
+                    } catch {
+                        errors.present(error)
+                    }
+                } label: {
+                    Image(systemName: liveOn
+                          ? "doc.on.clipboard.fill"
+                          : "doc.on.clipboard")
+                        .foregroundStyle(liveOn ? HVMColor.accent : HVMColor.textSecondary)
+                }
+                .buttonStyle(IconButtonStyle())
+                .help(liveOn ? "剪贴板共享: 开 (点击关闭)" : "剪贴板共享: 关 (点击开启)")
+            }
             // QEMU 后端独立窗口 toggle: 仅 .qemu engine + running 时显示.
             // 共存式 (CLAUDE.md / 设计决策): 主窗口嵌入 + detached 独立窗口可同时存在.
             if item.config.engine == .qemu, displayState == .running {
@@ -180,6 +202,9 @@ struct StoppedContentView: View {
                 titleBlock
                 resourcesSection
                 metadataSection
+                if item.config.engine == .qemu {
+                    sharingSection
+                }
                 disksSection
                 snapshotsSection
                 actionRow
@@ -311,6 +336,34 @@ struct StoppedContentView: View {
                 kvRow("Boot",   bootModeLabel)
                 kvRow("Bundle", item.bundleURL.path, truncating: true, mono: true, last: true)
             }
+            .background(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).fill(HVMColor.bgCard))
+            .overlay(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).stroke(HVMColor.border, lineWidth: 1))
+        }
+    }
+
+    // MARK: sharing (剪贴板)
+
+    private var sharingSection: some View {
+        TerminalSection("Sharing") {
+            VStack(alignment: .leading, spacing: HVMSpace.md) {
+                let on = item.config.clipboardSharingEnabled
+                HVMToggle(
+                    "剪贴板共享 (host ↔ guest)",
+                    isOn: Binding(
+                        get: { on },
+                        set: { newValue in
+                            do {
+                                try model.toggleClipboardSharing(item: item, enabled: newValue)
+                            } catch {
+                                errors.present(error)
+                            }
+                        }
+                    ),
+                    help: "UTF-8 文本双向同步, 走 vdagent virtio-serial. 运行中可即时切换"
+                )
+            }
+            .padding(HVMSpace.md)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).fill(HVMColor.bgCard))
             .overlay(RoundedRectangle(cornerRadius: HVMRadius.md, style: .continuous).stroke(HVMColor.border, lineWidth: 1))
         }
