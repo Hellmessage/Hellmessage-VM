@@ -35,7 +35,7 @@ struct EditConfigDialog: View {
             width: 560,
             closeAction: { close() }
         ) {
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: HVMSpace.lg) {
                     Text("修改 \(item.displayName) 的资源配置. 必须 VM 停止. Engine (\(item.config.engine.rawValue)) 不可改.")
                         .font(HVMFont.caption)

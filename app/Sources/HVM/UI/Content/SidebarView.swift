@@ -43,7 +43,7 @@ struct SidebarView: View {
         if model.list.isEmpty {
             emptyState
         } else {
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 4) {
                     ForEach(model.list) { item in
                         Row(item: item,

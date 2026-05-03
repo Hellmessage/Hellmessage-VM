@@ -89,7 +89,7 @@ public struct ErrorDialogOverlay: View {
 
                     if let d = model.details, !d.isEmpty {
                         DisclosureGroup(isExpanded: $detailsExpanded) {
-                            ScrollView {
+                            ScrollView(showsIndicators: false) {
                                 Text(d)
                                     .font(HVMFont.monoSmall)
                                     .foregroundStyle(HVMColor.textSecondary)

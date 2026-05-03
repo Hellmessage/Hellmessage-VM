@@ -59,7 +59,7 @@ struct SnapshotCreateDialog: View {
                     .foregroundStyle(HVMColor.textTertiary)
                     .padding(.vertical, HVMSpace.xs)
             } else {
-                ScrollView {
+                ScrollView(showsIndicators: false) {
                     VStack(spacing: 0) {
                         ForEach(Array(existing.enumerated()), id: \.element.name) { idx, info in
                             if idx != 0 {

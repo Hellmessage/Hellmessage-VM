@@ -65,7 +65,7 @@ struct IpswCatalogPicker: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(entries.enumerated()), id: \.element.buildVersion) { idx, entry in
                         if idx > 0 { Rectangle().fill(HVMColor.border).frame(height: 1) }

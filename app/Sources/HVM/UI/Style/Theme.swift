@@ -317,7 +317,7 @@ public struct HVMFormSelect: View {
     @ViewBuilder
     private var popupBody: some View {
         let chosen = selection
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(spacing: 1) {
                 ForEach(options, id: \.value) { opt in
                     PopupRow(

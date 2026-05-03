@@ -94,7 +94,7 @@ struct CreateVMDialog: View {
             width: 540,
             closeAction: { model.showCreateWizard = false }
         ) {
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 form
             }
             .frame(maxHeight: 560)

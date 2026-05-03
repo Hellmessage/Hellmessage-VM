@@ -197,7 +197,7 @@ struct StoppedContentView: View {
     @State private var snapshots: [SnapshotManager.Info] = []
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: HVMSpace.xl) {
                 titleBlock
                 resourcesSection

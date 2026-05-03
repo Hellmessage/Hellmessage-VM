@@ -56,7 +56,7 @@ struct OSImagePickerDialog: View {
             }
             if isLinux && !entries.isEmpty {
                 LabelText("Distributions (arm64)")
-                ScrollView {
+                ScrollView(showsIndicators: false) {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(entries.enumerated()), id: \.element.id) { idx, entry in
                             if idx > 0 { Rectangle().fill(HVMColor.border).frame(height: 1) }
