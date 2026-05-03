@@ -122,6 +122,11 @@ public enum EncryptionError: Error, Sendable {
     case randomGenerationFailed(status: Int32)
     /// PBKDF2 派生失败 (CommonCrypto / CryptoKit 报错)
     case kdfFailed(reason: String)
+    /// qemu-img 子命令失败 (create / amend / resize / info 等)
+    case qemuImgFailed(verb: String, exitCode: Int32, stderr: String)
+    /// LUKS 改密 step 1 (add new keyslot) 成功但 step 2 (remove old) 失败 — 此时 qcow2 处于"老 + 新都激活"中间态
+    /// 用户可重跑 rekey 或手工销毁老 keyslot. 数据不丢, 但需修复.
+    case luksRekeyHalfDone(reason: String)
 }
 
 // MARK: - Config (手动编辑 config.json 产生的语义错)
@@ -467,6 +472,16 @@ public extension EncryptionError {
             return .init(code: HVMErrorCode.encryptionKdfFailed.rawValue,
                          message: "密钥派生 (PBKDF2) 失败",
                          details: ["reason": reason])
+        case .qemuImgFailed(let verb, let code, let stderr):
+            return .init(code: HVMErrorCode.encryptionQemuImgFailed.rawValue,
+                         message: "qemu-img \(verb) 失败",
+                         details: ["verb": verb, "exitCode": "\(code)",
+                                   "stderr": stderr.prefix(400).trimmingCharacters(in: .whitespacesAndNewlines)])
+        case .luksRekeyHalfDone(let reason):
+            return .init(code: HVMErrorCode.encryptionLuksRekeyHalfDone.rawValue,
+                         message: "LUKS 改密未完成 (老 keyslot 仍激活)",
+                         details: ["reason": reason],
+                         hint: "重跑 rekey 即可销毁老 keyslot; 数据未损失")
         }
     }
 }

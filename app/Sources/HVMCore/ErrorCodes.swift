@@ -79,4 +79,6 @@ public enum HVMErrorCode: String, Sendable {
     case encryptionInvalidKeyLength           = "encryption.invalid_key_length"
     case encryptionRandomGenerationFailed     = "encryption.random_generation_failed"
     case encryptionKdfFailed                  = "encryption.kdf_failed"
+    case encryptionQemuImgFailed              = "encryption.qemu_img_failed"
+    case encryptionLuksRekeyHalfDone          = "encryption.luks_rekey_half_done"
 }
