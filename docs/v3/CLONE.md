@@ -1,6 +1,12 @@
 # VM 克隆 (`HVMStorage/CloneManager`)
 
-> 状态: **设计稿 (2026-05-04)**, 未进入实现。本稿目标是把"基于 APFS clonefile 的整 VM 全量克隆 + 身份字段重生"在 HVM 上落成方案,等评审通过再拆 PR。
+> 状态: **代码已合入 (2026-05-04)**, 真机验证 (C1 / C3) 待跑。
+>
+> - PR-1 / PR-2 / PR-3 已合入: CloneManager + 12 测 + `hvm-cli clone` + GUI `CloneVMDialog`
+> - PR-4 真机验证 (macOS guest 启动 / Win11 BitLocker) 待跑; 若不通过本文"未决事项"会更新
+> - 现状描述已回写 [docs/v1/STORAGE.md "Clone"](../v1/STORAGE.md), [docs/v1/VM_BUNDLE.md](../v1/VM_BUNDLE.md) 字段表, [docs/v1/CLI.md](../v1/CLI.md), [docs/v1/GUI.md](../v1/GUI.md) 业务弹窗清单
+> - 约束已回写 [CLAUDE.md "克隆约束"](../../CLAUDE.md)
+> - 本稿留底作决策溯源, 不再修订设计内容; 真机验证发现的偏差只在 v1 / CLAUDE.md 修正
 
 ## 目标
 

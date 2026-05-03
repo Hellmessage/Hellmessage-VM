@@ -95,6 +95,7 @@ App 级合规 modal 栈容器, 同一时刻只渲染一个 modal, 队列排队:
 | `ConfirmDialog` | 二次确认 (Kill / 删除 / 还原 snapshot 等) |
 | `DiskAddDialog` / `DiskResizeDialog` | 数据盘加 / 主盘扩容 |
 | `SnapshotCreateDialog` | 创建 snapshot |
+| `CloneVMDialog` | 整 VM 克隆 (form / running / done 三态; 详情页 actionRow "Clone" 触发) |
 | `OSImagePickerDialog` | Linux 创建向导选 OSImageCatalog 内置发行版或自定 URL |
 | `OSImageFetchDialog` | OSImage 下载进度 modal |
 | `IPSWFetchDialog` (`HVM/UI/IPSW/`) | macOS IPSW 下载进度, `IpswCatalogPicker` 选具体 build |

@@ -52,26 +52,28 @@ foo.hvmz/
 
 ### 顶层字段
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `schemaVersion` | Int | 当前 `2`。> 当前抛 `.invalidSchema`; < 当前走 `ConfigMigrator` |
-| `id` | UUID | bundle 创建时生成, 跟随一生 |
-| `createdAt` | ISO8601 Date | 创建时间, 仅展示 |
-| `displayName` | String | 展示名, 允许中文, 可与目录名不一致 |
-| `guestOS` | `macOS` \| `linux` \| `windows` | 其他值拒绝 |
-| `engine` | `vz` \| `qemu` | 缺省 `.vz`(老 v1 兼容兜底), `validate()` 校验合法组合 |
-| `cpuCount` | Int | VZ 后端范围由 VZ API 限定 |
-| `memoryMiB` | UInt64 | MiB |
-| `disks` | [DiskSpec] | 至少一项, 第一项 `role=main` |
-| `networks` | [NetworkSpec] | 可空 |
-| `installerISO` | String? | 绝对路径, **不复制进 bundle** |
-| `bootFromDiskOnly` | Bool | 装机完成后置 true |
-| `windowsDriversInstalled` | Bool | Windows 三态切换(false=ramfb / true=hvm-gpu-ramfb-pci) |
-| `clipboardSharingEnabled` | Bool | 默认 true; 仅 QEMU 走 vdagent, VZ macOS guest 自带忽略此字段 |
-| `macStyleShortcuts` | Bool | 默认 true; 仅 QEMU 生效, host cmd→guest ctrl |
-| `macOS` | MacOSSpec? | 仅 `guestOS=macOS` |
-| `linux` | LinuxSpec? | 仅 `guestOS=linux` |
-| `windows` | WindowsSpec? | 仅 `guestOS=windows` |
+| 字段 | 类型 | 说明 | 克隆 |
+|---|---|---|---|
+| `schemaVersion` | Int | 当前 `2`。> 当前抛 `.invalidSchema`; < 当前走 `ConfigMigrator` | 保留 |
+| `id` | UUID | bundle 创建时生成, 跟随一生 | **重生** |
+| `createdAt` | ISO8601 Date | 创建时间, 仅展示 | **重生** |
+| `displayName` | String | 展示名, 允许中文, 可与目录名不一致 | **重生** (用户输入) |
+| `guestOS` | `macOS` \| `linux` \| `windows` | 其他值拒绝 | 保留 |
+| `engine` | `vz` \| `qemu` | 缺省 `.vz`(老 v1 兼容兜底), `validate()` 校验合法组合 | 保留 |
+| `cpuCount` | Int | VZ 后端范围由 VZ API 限定 | 保留 |
+| `memoryMiB` | UInt64 | MiB | 保留 |
+| `disks` | [DiskSpec] | 至少一项, 第一项 `role=main` | 内容 cloneFile; 数据盘 `data-<uuid8>.*` 文件名重生 + `path` 同步 |
+| `networks` | [NetworkSpec] | 可空 | `macAddress` 默认重生 (`--keep-mac` 保留) |
+| `installerISO` | String? | 绝对路径, **不复制进 bundle** | 保留 (绝对路径, 跨 VM 共用 ISO) |
+| `bootFromDiskOnly` | Bool | 装机完成后置 true | 保留 |
+| `windowsDriversInstalled` | Bool | Windows 三态切换(false=ramfb / true=hvm-gpu-ramfb-pci) | 保留 |
+| `clipboardSharingEnabled` | Bool | 默认 true; 仅 QEMU 走 vdagent, VZ macOS guest 自带忽略此字段 | 保留 |
+| `macStyleShortcuts` | Bool | 默认 true; 仅 QEMU 生效, host cmd→guest ctrl | 保留 |
+| `macOS` | MacOSSpec? | 仅 `guestOS=macOS` | 保留 |
+| `linux` | LinuxSpec? | 仅 `guestOS=linux` | 保留 |
+| `windows` | WindowsSpec? | 仅 `guestOS=windows` | 保留 |
+
+> 克隆细节见 [STORAGE.md "Clone: 整 VM 克隆"](STORAGE.md). `auxiliary/machine-identifier` (macOS) 重生; `auxiliary/hardware-model` / `aux-storage` / `nvram/efi-vars.fd` / `tpm/*` 全保留.
 
 `VMConfig.validate()` 强制:
 
