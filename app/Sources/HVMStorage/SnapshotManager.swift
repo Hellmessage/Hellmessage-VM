@@ -1,12 +1,19 @@
 // HVMStorage/SnapshotManager.swift
-// 基于 APFS clonefile(2) 的 VM 整体快照: disks/* + config.yaml.
+// 基于 APFS clonefile(2) 的 VM 整体快照: disks/* + config.yaml(.enc).
 // clonefile 是 APFS copy-on-write, 几乎零空间 + 瞬间完成 (10GB 主盘也是 ms 级).
 //
 // 布局:
-//   <bundle>/snapshots/<name>/disks/os.{img,qcow2}  (clone of bundle/disks/os.*)
-//   <bundle>/snapshots/<name>/disks/data-*.{img,qcow2}  (clone 所有数据盘)
-//   <bundle>/snapshots/<name>/config.yaml          (config 副本, 普通 copy)
-//   <bundle>/snapshots/<name>/meta.json            ({createdAt, name})
+//   <bundle>/snapshots/<name>/disks/os.{img,qcow2}            (clone of bundle/disks/os.*)
+//   <bundle>/snapshots/<name>/disks/data-*.{img,qcow2}        (clone 所有数据盘)
+//   <bundle>/snapshots/<name>/config.yaml | config.yaml.enc   (按 bundle 加密形态择一)
+//   <bundle>/snapshots/<name>/meta.json                       ({createdAt, name})
+//
+// 加密 VM:
+//   APFS clonefile 是字节级 COW, 对 LUKS qcow2 / config.yaml.enc / swtpm state
+//   字节复制不解密 (snapshot 不需 prompt 密码). master KEK / sub keys 全程未变,
+//   restore 后用源密码可继续解.
+//   注: snapshot 创建后用户跑 rekey, restore 后 LUKS keyslot 是 snapshot 时点的老密码,
+//   必须用老密码启动 — 是预期行为, 设计稿 docs/v3/CLONE_SNAPSHOT_ENCRYPTED.md R3.
 //
 // 限制:
 //   - VM 必须 stopped (running 时 disk 在写, snapshot 不一致)
@@ -50,17 +57,17 @@ public enum SnapshotManager {
         let snapDisks = snapDir.appendingPathComponent(BundleLayout.disksDirName)
         try FileManager.default.createDirectory(at: snapDisks, withIntermediateDirectories: true)
 
-        // clone 所有 .img 磁盘 (包含 main + data-*)
+        // clone 所有磁盘 (.img + .qcow2; 加密 LUKS qcow2 字节复制透明)
         let bundleDisks = BundleLayout.disksDir(bundleURL)
         let imgs = (try? FileManager.default.contentsOfDirectory(atPath: bundleDisks.path)) ?? []
-        for n in imgs where n.hasSuffix(".img") {
+        for n in imgs where Self.isDiskFile(n) {
             try cloneFile(from: bundleDisks.appendingPathComponent(n),
                           to: snapDisks.appendingPathComponent(n))
         }
 
-        // config.json 普通 copy (文件小)
-        let cfgSrc = BundleLayout.configURL(bundleURL)
-        let cfgDst = snapDir.appendingPathComponent(BundleLayout.configFileName)
+        // config 按加密形态择一 copy: config.yaml 或 config.yaml.enc
+        let (cfgSrc, cfgName) = try locateBundleConfig(bundleURL: bundleURL)
+        let cfgDst = snapDir.appendingPathComponent(cfgName)
         try FileManager.default.copyItem(at: cfgSrc, to: cfgDst)
 
         // meta
@@ -96,14 +103,14 @@ public enum SnapshotManager {
         let snapDisks = snapDir.appendingPathComponent(BundleLayout.disksDirName)
         let bundleDisks = BundleLayout.disksDir(bundleURL)
 
-        // 1. 把 snapshot 里的 .img 先 clone 到 bundle 内的 .restore-tmp/ (跨步骤可见性 + 失败可清理)
+        // 1. 把 snapshot 里的磁盘先 clone 到 bundle 内的 .restore-tmp/ (跨步骤可见性 + 失败可清理)
         let tmpName = ".restore-tmp-\(UUID().uuidString.prefix(8))"
         let tmpDir = bundleURL.appendingPathComponent(tmpName, isDirectory: true)
         try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: false)
         let snapNames = (try? FileManager.default.contentsOfDirectory(atPath: snapDisks.path)) ?? []
-        let snapImgs = snapNames.filter { $0.hasSuffix(".img") }
+        let snapDisksList = snapNames.filter { Self.isDiskFile($0) }
         do {
-            for n in snapImgs {
+            for n in snapDisksList {
                 try cloneFile(from: snapDisks.appendingPathComponent(n),
                               to: tmpDir.appendingPathComponent(n))
             }
@@ -112,25 +119,73 @@ public enum SnapshotManager {
             throw error
         }
 
-        // 2. 删 bundle/disks/ 下现有 .img (snapshot 是 ground truth)
+        // 2. 删 bundle/disks/ 下现有磁盘 (snapshot 是 ground truth)
         let curNames = (try? FileManager.default.contentsOfDirectory(atPath: bundleDisks.path)) ?? []
-        for n in curNames where n.hasSuffix(".img") {
+        for n in curNames where Self.isDiskFile(n) {
             try? FileManager.default.removeItem(at: bundleDisks.appendingPathComponent(n))
         }
 
-        // 3. 把 tmp 里的 .img 移到 bundle/disks/
-        for n in snapImgs {
+        // 3. 把 tmp 里的磁盘移到 bundle/disks/
+        for n in snapDisksList {
             try FileManager.default.moveItem(at: tmpDir.appendingPathComponent(n),
                                               to: bundleDisks.appendingPathComponent(n))
         }
         try? FileManager.default.removeItem(at: tmpDir)
 
-        // 4. config.json atomic replace (replaceItemAt 走 rename, 同卷上原子)
-        let cfgSrc = snapDir.appendingPathComponent(BundleLayout.configFileName)
-        let cfgDst = BundleLayout.configURL(bundleURL)
-        let cfgTmp = bundleURL.appendingPathComponent(".config-restore-\(UUID().uuidString.prefix(8)).json")
-        try FileManager.default.copyItem(at: cfgSrc, to: cfgTmp)
-        _ = try FileManager.default.replaceItemAt(cfgDst, withItemAt: cfgTmp)
+        // 4. config atomic replace. snapshot 内可能是 config.yaml 或 config.yaml.enc.
+        // bundle 内同样两种之一 (互斥). 先把 bundle 现有的两种都清, 再 mv snapshot 的过来.
+        try restoreConfig(snapDir: snapDir, bundleURL: bundleURL)
+    }
+
+    // MARK: - 加密-aware config helpers
+
+    /// 找 bundle 现存的 config 文件 (明文 config.yaml 或加密 config.yaml.enc).
+    /// 两种都不存在 → throw .bundle(.notFound). 两种同存 (异常态) → 走加密优先.
+    private static func locateBundleConfig(bundleURL: URL) throws -> (URL, String) {
+        let plain = bundleURL.appendingPathComponent(BundleLayout.configFileName)
+        let enc   = bundleURL.appendingPathComponent("config.yaml.enc")
+        let fm = FileManager.default
+        if fm.fileExists(atPath: enc.path) {
+            return (enc, "config.yaml.enc")
+        }
+        if fm.fileExists(atPath: plain.path) {
+            return (plain, BundleLayout.configFileName)
+        }
+        throw HVMError.bundle(.notFound(path: plain.path))
+    }
+
+    /// snapshot restore 期 config 替换: 把 bundle 现有的 config.yaml + config.yaml.enc 都清,
+    /// 把 snapshot 里有的那个 mv 过来 (atomic via tmp + replaceItemAt).
+    private static func restoreConfig(snapDir: URL, bundleURL: URL) throws {
+        let snapPlain = snapDir.appendingPathComponent(BundleLayout.configFileName)
+        let snapEnc   = snapDir.appendingPathComponent("config.yaml.enc")
+        let fm = FileManager.default
+
+        let (snapCfgSrc, cfgName): (URL, String)
+        if fm.fileExists(atPath: snapEnc.path) {
+            (snapCfgSrc, cfgName) = (snapEnc, "config.yaml.enc")
+        } else if fm.fileExists(atPath: snapPlain.path) {
+            (snapCfgSrc, cfgName) = (snapPlain, BundleLayout.configFileName)
+        } else {
+            throw HVMError.bundle(.notFound(path: snapPlain.path))
+        }
+
+        let cfgTmp = bundleURL.appendingPathComponent(".config-restore-\(UUID().uuidString.prefix(8)).tmp")
+        try fm.copyItem(at: snapCfgSrc, to: cfgTmp)
+
+        // 清 bundle 现有 config (两种都清, snapshot 决定恢复后是哪一种)
+        let bundlePlain = bundleURL.appendingPathComponent(BundleLayout.configFileName)
+        let bundleEnc   = bundleURL.appendingPathComponent("config.yaml.enc")
+        try? fm.removeItem(at: bundlePlain)
+        try? fm.removeItem(at: bundleEnc)
+
+        // mv tmp → bundle/<cfgName>
+        try fm.moveItem(at: cfgTmp, to: bundleURL.appendingPathComponent(cfgName))
+    }
+
+    /// 磁盘文件名识别: .img (raw) 或 .qcow2 (含 LUKS 加密).
+    private static func isDiskFile(_ name: String) -> Bool {
+        name.hasSuffix(".img") || name.hasSuffix(".qcow2")
     }
 
     public static func delete(bundleURL: URL, name: String) throws {
