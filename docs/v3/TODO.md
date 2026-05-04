@@ -115,12 +115,12 @@ PR-1 ~ PR-10b 全部合入. 覆盖:
 | 11 | delete secure-erase | Pending | 🟡 |
 | 12 | rekey 原子性 (staging + journal) | Pending | 🟡 |
 | 13 | encrypt 流程临时目录策略对齐 decrypt | Pending | 🟡 |
-| 14 | 加密 VM clone | Postponed | 🟢, D9 未决 |
-| 15 | 加密 VM snapshot | Pending | 🟢, 真机验证 |
+| 14 | 加密 VM clone | Done | 🟢→🔴 升级, D9=方案 A 同密码 + 整字节复制. CloneManager 加密分支 + GUI 暂未接入 (PR-11) |
+| 15 | 加密 VM snapshot | Done | 🟢, 顺带修 SnapshotManager qcow2 老 bug (PR-1 起所有 QEMU VM snapshot 都是空) |
 | 16 | create --import-disk --encrypt | Postponed | 🟢, 等用户需求 |
 | 17 | macOS / VZ 加密 | Postponed | 🟢, 等 VZ PR |
 | 18 | swtpm rewrap | Postponed | 🟢, 等上游 |
-| 19 | Ctrl-C 中断清理 | Pending | 🟢 |
+| 19 | Ctrl-C 中断清理 | Done | 🟢, HVMCore/SignalGuard.swift 第一次警告不退 + 5s 内二次 _exit(130) + atexit cleanup 兜底 |
 | 20 | v1 文档回写 (含 SECURITY.md 新建) | Pending | 📚, 合 PR-12 |
 | 21 | CLAUDE.md 加密约束节 | Pending | 📚, 合 PR-12 |
 | 22 | README.md 提及加密 | Pending | 📚, 合 PR-12 |
