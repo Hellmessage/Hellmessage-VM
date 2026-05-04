@@ -341,7 +341,8 @@ final class DetailContainerView: NSView {
     ///   - 其他 (例如 hvm-cli 起的 VZ VM, 主 GUI 后绑定): RemoteRunningContentView 占位
     private func buildRemoteRunning(id: UUID) {
         guard let item = model.list.first(where: { $0.id == id }) else { buildEmpty(); return }
-        if item.config.engine == .qemu {
+        // 加密 VM engine 默认 .qemu (VZ 加密推后)
+        if item.isEncrypted || item.config?.engine == .qemu {
             buildQemuEmbedded(id: id, item: item)
         } else {
             buildRemoteHosting(id: id, item: item)
@@ -383,7 +384,8 @@ final class DetailContainerView: NSView {
         let bottomDivider = makeHorizontalDivider()
 
         let fbView = FramebufferHostView(frame: .zero)
-        fbView.macStyleShortcuts = item.config.macStyleShortcuts
+        // 加密 VM 解锁前 config nil; macStyleShortcuts 默认 false (Win VM 不需要)
+        fbView.macStyleShortcuts = item.config?.macStyleShortcuts ?? false
         fbView.translatesAutoresizingMaskIntoConstraints = false
         fbView.setContentHuggingPriority(.defaultLow, for: .vertical)
         fbView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)

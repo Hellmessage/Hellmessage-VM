@@ -6,6 +6,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import HVMBundle
 import HVMCore
+import HVMEncryption
 import HVMInstall
 import HVMNet
 import HVMQemu
@@ -34,6 +35,10 @@ struct CreateVMDialog: View {
     @State private var bridgedInterface: String = ""
     @State private var availableInterfaces: [HostNetworkInterface] = []
     @State private var daemonReady: Bool = false
+    /// 加密 toggle (PR-11c). 仅 QEMU engine 可加密 (VZ 推后, 设计稿 ENCRYPTION.md v2.4).
+    @State private var enableEncryption: Bool = false
+    @State private var encryptPassword: String = ""
+    @State private var encryptPasswordConfirm: String = ""
 
     private enum NetworkChoice: String, CaseIterable, Hashable {
         case nat, bridged, shared
@@ -246,6 +251,12 @@ struct CreateVMDialog: View {
 
             networkSection
 
+            // 加密区: 仅 QEMU 后端可加密 (macOS 必走 VZ; VZ 加密推后).
+            // Linux + linuxEngine == .qemu, 或 windows guest 时显示
+            if encryptionAvailable {
+                encryptionSection
+            }
+
             switch guestOS {
             case .linux where creationSource == .importDisk:
                 field("Disk image") {
@@ -314,6 +325,58 @@ struct CreateVMDialog: View {
             LabelText(title)
             content()
         }
+    }
+
+    /// 加密 toggle 是否暴露给当前 guestOS / engine.
+    /// macOS guest 必走 VZ, VZ 加密推后 → 不暴露. Linux/Windows 走 QEMU → 暴露.
+    private var encryptionAvailable: Bool {
+        guestOS != .macOS && effectiveEngine == .qemu && creationSource != .importDisk
+    }
+
+    /// 加密区: toggle + 双密码框 (PR-11c).
+    /// 校验在 createAction → proceedWithBundleCreation 处做 (避免 binding 频繁 recompute).
+    @ViewBuilder
+    private var encryptionSection: some View {
+        VStack(alignment: .leading, spacing: HVMSpace.sm) {
+            HVMToggle(
+                "加密 VM (LUKS qcow2 + AES-GCM config)",
+                isOn: $enableEncryption,
+                help: "启用后磁盘 / OVMF VARS / config 全部加密. 启动期需输密码. 跨机器 portable: cp 整 .hvmz 到另一台 Mac, 同密码可启动. 想换密码用 hvm-cli rekey"
+            )
+
+            if enableEncryption {
+                VStack(alignment: .leading, spacing: HVMSpace.sm) {
+                    field("Password") {
+                        HVMTextField("≥ 4 字符",
+                                      text: $encryptPassword,
+                                      variant: .secure)
+                    }
+                    field("Confirm") {
+                        HVMTextField("再次输入",
+                                      text: $encryptPasswordConfirm,
+                                      variant: .secure,
+                                      error: passwordError)
+                    }
+                    Text("⚠ 忘密不可恢复. 没有 backdoor / Keychain 缓存. 请妥善保存.")
+                        .font(HVMFont.small)
+                        .foregroundStyle(HVMColor.danger)
+                }
+                .padding(.top, HVMSpace.xs)
+            }
+        }
+    }
+
+    /// 双密码框校验. 走 inline error 显示, 不阻断 form 其他字段输入.
+    private var passwordError: String? {
+        guard enableEncryption else { return nil }
+        if encryptPasswordConfirm.isEmpty { return nil }
+        if encryptPassword != encryptPasswordConfirm {
+            return "两次输入不一致"
+        }
+        if encryptPassword.count < 4 {
+            return "密码至少 4 字符"
+        }
+        return nil
     }
 
     @ViewBuilder
@@ -755,6 +818,37 @@ struct CreateVMDialog: View {
                 at: HVMPaths.vmsRoot.path,
                 requiredBytes: UInt64(diskGiB) * (1 << 30)
             )
+
+            // 加密分支 (PR-11c): EncryptedBundleIO.create + QcowLuksFactory + OVMFVarsLuksFactory
+            // 走完跟现有 model.refreshList / selectedID 收尾. 加密 VM 不走装机自动启动 (Win 用户
+            // 必须装机, 但 macOS 加密推后, 这里 enableEncryption 时只可能是 Linux/Win, Linux 不需
+            // 装机, Win 后续启动期靠 ISO 跑 unattend).
+            if enableEncryption {
+                guard !encryptPassword.isEmpty,
+                      encryptPassword == encryptPasswordConfirm,
+                      encryptPassword.count >= 4 else {
+                    throw HVMError.config(.missingField(name: "加密密码无效 (≥ 4 字符且两次一致)"))
+                }
+                guard engineValue == .qemu else {
+                    throw HVMError.config(.invalidEnum(
+                        field: "engine", raw: engineValue.rawValue,
+                        allowed: ["qemu (VZ 加密推后)"]
+                    ))
+                }
+                try createEncryptedQEMU(
+                    parentDir: HVMPaths.vmsRoot,
+                    bundleURL: bundleURL,
+                    password: encryptPassword,
+                    config: config,
+                    sizeGiB: UInt64(diskGiB)
+                )
+                model.showCreateWizard = false
+                model.refreshList()
+                model.selectedID = config.id
+                creating = false
+                return
+            }
+
             try BundleIO.create(at: bundleURL, config: config)
             let qemuImg = mainFormat == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
             let mainDiskAbs = bundleURL.appendingPathComponent(mainDiskFile)
@@ -809,5 +903,81 @@ struct CreateVMDialog: View {
             errors.present(error)
         }
         creating = false
+    }
+
+    /// 创建加密 QEMU VM (PR-11c). 跟 CLI hvm-cli create --encrypt 同款流程.
+    /// 设计稿 docs/v3/GUI_ENCRYPTION.md PR-11c.
+    private func createEncryptedQEMU(parentDir: URL,
+                                       bundleURL: URL,
+                                       password: String,
+                                       config: VMConfig,
+                                       sizeGiB: UInt64) throws {
+        // 1. EncryptedBundleIO.create 建加密外壳 (config.yaml.enc + meta/encryption.json)
+        let handle = try EncryptedBundleIO.create(
+            parentDir: parentDir,
+            displayName: config.displayName,
+            password: password,
+            baseConfig: config,
+            scheme: .qemuPerfile
+        )
+        guard let subKeys = handle.qemuSubKeys else {
+            try? handle.close()
+            try? FileManager.default.removeItem(at: bundleURL)
+            throw HVMError.encryption(.parseFailed(reason: "EncryptedBundleIO.create 未返子 keys"))
+        }
+
+        // 2. 主盘 LUKS qcow2
+        let qemuImg: URL
+        do {
+            qemuImg = try QemuPaths.qemuImgBinary()
+        } catch {
+            try? handle.close()
+            try? FileManager.default.removeItem(at: bundleURL)
+            throw error
+        }
+        let mainDiskAbs = bundleURL.appendingPathComponent(
+            "\(BundleLayout.disksDirName)/\(BundleLayout.mainDiskFileName(for: .qemu))"
+        )
+        do {
+            try QcowLuksFactory.create(
+                at: mainDiskAbs,
+                sizeBytes: sizeGiB * (1 << 30),
+                key: subKeys.qcow2Disk,
+                qemuImg: qemuImg
+            )
+        } catch {
+            try? handle.close()
+            try? FileManager.default.removeItem(at: bundleURL)
+            throw error
+        }
+
+        // 3. OVMF VARS LUKS (Win)
+        if config.guestOS == .windows {
+            let qemuRoot: URL
+            do { qemuRoot = try QemuPaths.resolveRoot() } catch {
+                try? handle.close()
+                try? FileManager.default.removeItem(at: bundleURL)
+                throw error
+            }
+            let template = qemuRoot.appendingPathComponent("share/qemu/edk2-aarch64-vars.fd")
+            let nvramAbs = BundleLayout.nvramDir(bundleURL)
+                .appendingPathComponent(BundleLayout.nvramLuksFileName)
+            try? FileManager.default.createDirectory(at: BundleLayout.nvramDir(bundleURL),
+                                                       withIntermediateDirectories: true)
+            do {
+                try OVMFVarsLuksFactory.create(
+                    at: nvramAbs,
+                    fromTemplate: template,
+                    key: subKeys.qcow2Nvram,
+                    qemuImg: qemuImg
+                )
+            } catch {
+                try? handle.close()
+                try? FileManager.default.removeItem(at: bundleURL)
+                throw error
+            }
+        }
+
+        try handle.close()
     }
 }

@@ -56,6 +56,13 @@
 - 所有错误对话框走统一 ErrorDialog, 禁止用 `NSAlert`
 - 主窗口默认深色, 不跟随系统主题
 - VM 创建向导中 Windows 选项必须标注「**实验性 (QEMU 后端)**」, 与 macOS / Linux 视觉区分
+- **加密 VM 在 GUI** (PR-11 已落):
+  - 列表 sidebar 显示 `lock.fill` 锁图标 + "Encrypted" 标签
+  - `VMListItem.config: VMConfig?` 可选 — 加密 VM 解锁前 nil, 走 routing JSON 拿 displayName/id; 详情页 view 必须 `if let cfg = item.config` 兜底
+  - 启动加密 VM 走 `requestStartWithPasswordIfNeeded` 自动弹 `EncryptionPasswordDialog`; 不要直接调 `start(item)` 不传 password
+  - 创建 / clone / encrypt / decrypt / rekey 全部走 dialog (CreateVMDialog 的加密 toggle / CloneVMDialog 加密源 prompt / Encrypt+Decrypt+RekeyVMDialog 三独立 dialog), 加密事务进行中 `closeAction = nil` 不可关
+  - 加密事务后台 `Task.detached` 跑, 完成回主线程刷 list — 不阻 UI
+  - VZ-sparsebundle 加密 GUI 暂未接入 (推后跟 ENCRYPTION.md v2.4 一致)
 
 ## UI 控件使用约束 **必须遵守**
 

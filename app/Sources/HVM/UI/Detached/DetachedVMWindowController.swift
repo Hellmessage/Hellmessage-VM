@@ -192,7 +192,7 @@ final class DetachedVMWindowController: NSWindowController, NSWindowDelegate {
         self.toolbarHost = toolbar
 
         let fb = FramebufferHostView(frame: .zero)
-        fb.macStyleShortcuts = item.config.macStyleShortcuts
+        fb.macStyleShortcuts = item.config?.macStyleShortcuts ?? false
         fb.translatesAutoresizingMaskIntoConstraints = false
         fb.setContentHuggingPriority(.defaultLow, for: .vertical)
         fb.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
@@ -293,7 +293,8 @@ private struct DetachedVMToolbar: View {
 
     /// 实时查 model.list 拿当前 config — clipboard toggle 等 in-place 改动后, item
     /// 这个 let snapshot 不会更新, 必须读 model 才能触发 SwiftUI 重 render.
-    private var liveConfig: VMConfig {
+    /// 加密 VM (item.config nil) 解锁前不显示 detached 窗口工具栏 toggle, 故 nil 安全.
+    private var liveConfig: VMConfig? {
         model.list.first(where: { $0.id == item.id })?.config ?? item.config
     }
 
@@ -324,10 +325,16 @@ private struct DetachedVMToolbar: View {
 
             Spacer(minLength: HVMSpace.md)
 
-            Text("\(item.config.cpuCount) cores · \(item.config.memoryMiB / 1024) GB · \(networkMode(item.config))")
-                .font(HVMFont.small)
-                .foregroundStyle(HVMColor.textTertiary)
-                .lineLimit(1)
+            if let cfg = item.config {
+                Text("\(cfg.cpuCount) cores · \(cfg.memoryMiB / 1024) GB · \(networkMode(cfg))")
+                    .font(HVMFont.small)
+                    .foregroundStyle(HVMColor.textTertiary)
+                    .lineLimit(1)
+            } else {
+                Text("加密 VM")
+                    .font(HVMFont.small)
+                    .foregroundStyle(HVMColor.textTertiary)
+            }
 
             Spacer(minLength: HVMSpace.sm)
 
@@ -370,8 +377,8 @@ private struct DetachedVMToolbar: View {
             // 填充态 (.fill) 区分开/关, 不再用蓝色 accent 在黑底上抢眼.
             // **读 liveConfig 不读 item.config**: toggle 后 model.list 更新, view 重 render
             // 才能切图标 (item 是 init 时 captured 的 immutable snapshot).
-            if item.config.engine == .qemu {
-                let on = liveConfig.clipboardSharingEnabled
+            if (item.config?.engine ?? .qemu) == .qemu, let liveCfg = liveConfig {
+                let on = liveCfg.clipboardSharingEnabled
                 Button {
                     do {
                         try model.toggleClipboardSharing(item: item, enabled: !on)

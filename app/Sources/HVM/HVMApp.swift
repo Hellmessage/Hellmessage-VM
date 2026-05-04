@@ -258,7 +258,7 @@ final class HVMAppDelegate: NSObject, NSApplicationDelegate {
 
     /// 取 VM 第一张网卡的 MAC, 查 host ARP 表
     private func ipForVM(_ item: AppModel.VMListItem) -> String? {
-        guard let mac = item.config.networks.first?.macAddress else { return nil }
+        guard let mac = item.config?.networks.first?.macAddress else { return nil }
         return IPResolver.ipForMAC(mac)
     }
 

@@ -30,6 +30,8 @@ struct CloneVMDialog: View {
     @State private var keepMac: Bool = false
     // D15 (2026-05-04): 永不带 snapshots/. 加密 / 明文一致, 移除 toggle
     @State private var inlineError: String? = nil
+    /// 加密源 VM clone 时输入的密码 (PR-11d). 明文 VM 忽略此字段.
+    @State private var clonePassword: String = ""
 
     var body: some View {
         HVMModal(
@@ -102,6 +104,20 @@ struct CloneVMDialog: View {
                     isOn: $keepMac,
                     help: "默认重生 MAC. 保留时同 LAN 上同时跑两台会冲突, 用户自负"
                 )
+            }
+
+            // 加密源 VM (PR-11d): 必须输源密码. clone 出来的 VM 跟源同密码 (D9).
+            if item.isEncrypted {
+                VStack(alignment: .leading, spacing: HVMSpace.xs) {
+                    LabelText("源 VM 密码")
+                    HVMTextField("已加密, 输源密码继续",
+                                  text: $clonePassword,
+                                  variant: .secure)
+                    Text("⚠ 加密 VM clone: 字节级 COW 复制 (LUKS / config.yaml.enc / swtpm). 新 VM 跟源同密码; 想换密码自跑 hvm-cli rekey.")
+                        .font(HVMFont.small)
+                        .foregroundStyle(HVMColor.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             if let inlineError {
@@ -226,13 +242,16 @@ struct CloneVMDialog: View {
 
     private func startClone() {
         let trimmed = nameText.trimmingCharacters(in: .whitespaces)
-        // 加密 VM 暂未在 GUI 接入 (PR-11 GUI 加密范围). 这里走 password=nil,
-        // 加密源 VM 会被 CloneManager 拒. CLI 路径已支持加密 clone.
+        // 加密源 VM (PR-11d): 必须输密码. CloneManager 走加密分支 → 字节级 COW + 同 sub.config 重新加密
+        if item.isEncrypted, clonePassword.isEmpty {
+            inlineError = "加密 VM 需要输入源密码"
+            return
+        }
         let opts = CloneManager.Options(
             newDisplayName: trimmed,
             targetParentDir: nil,             // 默认 = 源父目录
             keepMACAddresses: keepMac,
-            password: nil
+            password: item.isEncrypted ? clonePassword : nil
         )
         let source = item.bundleURL
         inlineError = nil

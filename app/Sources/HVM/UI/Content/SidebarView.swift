@@ -93,11 +93,19 @@ private struct Row: View {
             GuestBadge(os: item.guestOS, size: 30)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.displayName)
-                    .font(HVMFont.bodyBold)
-                    .foregroundStyle(HVMColor.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                HStack(spacing: 4) {
+                    Text(item.displayName)
+                        .font(HVMFont.bodyBold)
+                        .foregroundStyle(HVMColor.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    if item.isEncrypted {
+                        Image(systemName: "lock.fill")
+                            .font(HVMFont.small)
+                            .foregroundStyle(HVMColor.textSecondary)
+                            .help("加密 VM (\(item.encryptionScheme?.rawValue ?? "—"))")
+                    }
+                }
                 HStack(spacing: 5) {
                     if isRunning {
                         Circle()
@@ -117,9 +125,15 @@ private struct Row: View {
                     Text("·")
                         .font(HVMFont.small)
                         .foregroundStyle(HVMColor.textTertiary)
-                    Text(GuestVisual.style(for: item.guestOS).label)
-                        .font(HVMFont.small)
-                        .foregroundStyle(HVMColor.textTertiary)
+                    if item.isEncrypted {
+                        Text("Encrypted")
+                            .font(HVMFont.small)
+                            .foregroundStyle(HVMColor.textTertiary)
+                    } else {
+                        Text(GuestVisual.style(for: item.guestOS).label)
+                            .font(HVMFont.small)
+                            .foregroundStyle(HVMColor.textTertiary)
+                    }
                 }
             }
 

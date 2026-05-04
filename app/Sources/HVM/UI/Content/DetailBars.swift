@@ -13,6 +13,7 @@ import UniformTypeIdentifiers
 import HVMBackend
 import HVMBundle
 import HVMCore
+import HVMEncryption
 import HVMStorage
 
 // MARK: - 状态徽章
@@ -86,8 +87,10 @@ struct DetailTopBar: View {
             // 即时生效 (IPC clipboard.setEnabled), 失败回退由 toggleClipboardSharing 内处理.
             // 读 model.list 实时拿当前状态 — item 是 init 时 captured 的 immutable
             // snapshot, toggle 后 image 不会自动切.
-            if item.config.engine == .qemu {
-                let liveOn = (model.list.first(where: { $0.id == item.id })?.config.clipboardSharingEnabled) ?? item.config.clipboardSharingEnabled
+            // 加密 VM 解锁前 config nil; engine 默认按 .qemu (VZ 加密推后)
+            let engineIsQemu = item.config?.engine == .qemu || item.isEncrypted
+            if engineIsQemu, let cfg = item.config {
+                let liveOn = (model.list.first(where: { $0.id == item.id })?.config?.clipboardSharingEnabled) ?? cfg.clipboardSharingEnabled
                 Button {
                     do {
                         try model.toggleClipboardSharing(item: item, enabled: !liveOn)
@@ -105,7 +108,7 @@ struct DetailTopBar: View {
             }
             // QEMU 后端独立窗口 toggle: 仅 .qemu engine + running 时显示.
             // 共存式 (CLAUDE.md / 设计决策): 主窗口嵌入 + detached 独立窗口可同时存在.
-            if item.config.engine == .qemu, displayState == .running {
+            if engineIsQemu, displayState == .running {
                 let detached = model.detachedQemuVMs.contains(item.id)
                 Button {
                     model.toggleDetachedQemu(id: item.id)
@@ -140,9 +143,15 @@ struct DetailBottomBar: View {
 
     var body: some View {
         HStack(spacing: HVMSpace.md) {
-            Text("\(item.config.cpuCount) cores · \(item.config.memoryMiB / 1024) GB · \(networkMode(item.config))")
-                .font(HVMFont.small)
-                .foregroundStyle(HVMColor.textTertiary)
+            if let cfg = item.config {
+                Text("\(cfg.cpuCount) cores · \(cfg.memoryMiB / 1024) GB · \(networkMode(cfg))")
+                    .font(HVMFont.small)
+                    .foregroundStyle(HVMColor.textTertiary)
+            } else {
+                Text("加密 VM · 启动后查看运行时信息")
+                    .font(HVMFont.small)
+                    .foregroundStyle(HVMColor.textTertiary)
+            }
             Spacer()
 
             if case .paused = sessionState {
@@ -202,8 +211,13 @@ struct StoppedContentView: View {
                 titleBlock
                 resourcesSection
                 metadataSection
-                if item.config.engine == .qemu {
+                if (item.config?.engine ?? .qemu) == .qemu, item.config != nil {
                     sharingSection
+                }
+                // 加密区 (PR-11e). 加密 VM 显示 KDF + decrypt/rekey 按钮; 明文 VM 显示 encrypt 按钮.
+                // VZ engine 加密推后 (设计稿 ENCRYPTION.md v2.4) → 仅 QEMU 显示 encrypt 入口.
+                if item.isEncrypted || (item.config?.engine == .qemu && item.guestOS != .macOS) {
+                    encryptionSection
                 }
                 disksSection
                 snapshotsSection
@@ -257,7 +271,7 @@ struct StoppedContentView: View {
                     }
                 }
                 .buttonStyle(PrimaryButtonStyle())
-                .disabled(item.config.macOS?.ipsw == nil)
+                .disabled(item.config?.macOS?.ipsw == nil)
                 .keyboardShortcut(.return, modifiers: [.command])
                 .help("跑 VZMacOSInstaller 装 macOS 到主盘. 装完此按钮变为 Start")
             } else {
@@ -279,20 +293,30 @@ struct StoppedContentView: View {
     private var resourcesSection: some View {
         TerminalSection("Resources") {
             HStack(spacing: HVMSpace.md) {
-                Button { model.editConfigItem = item } label: {
-                    statCard(label: "CPU", value: "\(item.config.cpuCount)", unit: "cores", tint: HVMColor.statCPU)
-                }
-                .buttonStyle(.plain)
-                .help("点击编辑 CPU 核数")
+                if let cfg = item.config {
+                    Button { model.editConfigItem = item } label: {
+                        statCard(label: "CPU", value: "\(cfg.cpuCount)", unit: "cores", tint: HVMColor.statCPU)
+                    }
+                    .buttonStyle(.plain)
+                    .help("点击编辑 CPU 核数")
 
-                Button { model.editConfigItem = item } label: {
-                    statCard(label: "Memory", value: "\(item.config.memoryMiB / 1024)", unit: "GB", tint: HVMColor.statMemory)
-                }
-                .buttonStyle(.plain)
-                .help("点击编辑内存")
+                    Button { model.editConfigItem = item } label: {
+                        statCard(label: "Memory", value: "\(cfg.memoryMiB / 1024)", unit: "GB", tint: HVMColor.statMemory)
+                    }
+                    .buttonStyle(.plain)
+                    .help("点击编辑内存")
 
-                statCard(label: "Disk", value: "\(item.config.disks.first?.sizeGiB ?? 0)", unit: "GB", tint: HVMColor.statDisk)
-                statCard(label: "Network", value: networkMode(item.config), unit: nil, tint: HVMColor.statNetwork)
+                    statCard(label: "Disk", value: "\(cfg.disks.first?.sizeGiB ?? 0)", unit: "GB", tint: HVMColor.statDisk)
+                    statCard(label: "Network", value: networkMode(cfg), unit: nil, tint: HVMColor.statNetwork)
+                } else {
+                    // 加密 VM 解锁前不显示运行时数值. PR-11e 替换成加密信息卡
+                    Text("加密 VM — 解锁后显示")
+                        .font(HVMFont.small)
+                        .foregroundStyle(HVMColor.textTertiary)
+                        .padding(HVMSpace.md)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .hvmCard()
+                }
             }
         }
     }
@@ -324,15 +348,20 @@ struct StoppedContentView: View {
     private var metadataSection: some View {
         TerminalSection("General") {
             VStack(spacing: 0) {
-                kvRow("ID",     item.config.id.uuidString.lowercased(), truncating: true, mono: true, first: true)
-                kvRow("MAC",    item.config.networks.first?.macAddress ?? "—", mono: true)
-                if item.guestOS == .macOS {
-                    kvRow("IPSW",      item.config.macOS?.ipsw ?? "—", truncating: true, mono: true)
-                    kvRow("Installed", item.config.macOS?.autoInstalled == true ? "Yes (auto)" : "No — run install")
+                kvRow("ID", item.id.uuidString.lowercased(), truncating: true, mono: true, first: true)
+                if let cfg = item.config {
+                    kvRow("MAC", cfg.networks.first?.macAddress ?? "—", mono: true)
+                    if item.guestOS == .macOS {
+                        kvRow("IPSW",      cfg.macOS?.ipsw ?? "—", truncating: true, mono: true)
+                        kvRow("Installed", cfg.macOS?.autoInstalled == true ? "Yes (auto)" : "No — run install")
+                    } else {
+                        kvRow("ISO", cfg.installerISO ?? "—", truncating: true, mono: true)
+                    }
+                    kvRow("Boot", bootModeLabel)
                 } else {
-                    kvRow("ISO", item.config.installerISO ?? "—", truncating: true, mono: true)
+                    // 加密 VM: 走 routing JSON 拿不到 MAC / ISO 等. PR-11e 加加密区显示 KDF 信息
+                    kvRow("Encrypted", "yes (\(item.encryptionScheme?.rawValue ?? "—"))")
                 }
-                kvRow("Boot",   bootModeLabel)
                 kvRow("Bundle", item.bundleURL.path, truncating: true, mono: true, last: true)
             }
             .hvmCard()
@@ -344,7 +373,7 @@ struct StoppedContentView: View {
     private var sharingSection: some View {
         TerminalSection("Sharing") {
             VStack(alignment: .leading, spacing: HVMSpace.md) {
-                let on = item.config.clipboardSharingEnabled
+                let on = item.config?.clipboardSharingEnabled ?? false
                 HVMToggle(
                     "剪贴板共享 (host ↔ guest)",
                     isOn: Binding(
@@ -366,6 +395,81 @@ struct StoppedContentView: View {
         }
     }
 
+    // MARK: encryption (PR-11e)
+
+    private var encryptionSection: some View {
+        TerminalSection("Encryption") {
+            VStack(alignment: .leading, spacing: HVMSpace.md) {
+                if item.isEncrypted {
+                    encryptionInfoRows
+                    HStack(spacing: HVMSpace.sm) {
+                        Button("改密 (Rekey)…") { model.rekeyItem = item }
+                            .buttonStyle(GhostButtonStyle())
+                            .help("重写所有 LUKS keyslot + 重密 config + 写新 routing salt. Win 会重置 TPM")
+                        Button("转明文…") { model.decryptItem = item }
+                            .buttonStyle(GhostButtonStyle())
+                            .help("解密所有 disks / OVMF VARS / config. 操作不可逆 (除非再 encrypt)")
+                        Spacer()
+                    }
+                } else {
+                    Text("当前 VM 是明文状态")
+                        .font(HVMFont.small)
+                        .foregroundStyle(HVMColor.textSecondary)
+                    HStack(spacing: HVMSpace.sm) {
+                        Button("加密这台 VM…") { model.encryptItem = item }
+                            .buttonStyle(GhostButtonStyle())
+                            .help("把 disks / OVMF VARS / config 全部加密 (LUKS + AES-GCM). 启动需密码")
+                        Spacer()
+                    }
+                }
+            }
+            .padding(HVMSpace.md)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .hvmCard()
+        }
+    }
+
+    @ViewBuilder
+    private var encryptionInfoRows: some View {
+        // 加密信息从 routing JSON 读. 实时读, 不缓存 (refreshList 已 mtime cache).
+        if let scheme = item.encryptionScheme {
+            HStack(spacing: HVMSpace.sm) {
+                Image(systemName: "lock.fill")
+                    .foregroundStyle(HVMColor.accent)
+                Text("已加密 (\(scheme.rawValue))")
+                    .font(HVMFont.body)
+                    .foregroundStyle(HVMColor.textPrimary)
+                Spacer()
+            }
+            if let routing = readRoutingMetadata() {
+                Text("KDF: \(routing.kdfAlgo) iter=\(routing.kdfIterations) keylen=\(routing.kdfKeylen) bytes")
+                    .font(HVMFont.small)
+                    .foregroundStyle(HVMColor.textTertiary)
+                if let paths = routing.encryptedPaths, !paths.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("加密路径:").font(HVMFont.small).foregroundStyle(HVMColor.textTertiary)
+                        ForEach(paths, id: \.self) { p in
+                            Text("• \(p)")
+                                .font(HVMFont.monoSmall)
+                                .foregroundStyle(HVMColor.textSecondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 同步读 routing JSON (本进程内只读, 文件 < 1KB).
+    private func readRoutingMetadata() -> RoutingMetadata? {
+        guard let scheme = item.encryptionScheme else { return nil }
+        let url: URL
+        switch scheme {
+        case .qemuPerfile:    url = RoutingJSON.locationForQemuBundle(item.bundleURL)
+        case .vzSparsebundle: url = RoutingJSON.locationForSparsebundle(item.bundleURL)
+        }
+        return try? RoutingJSON.read(from: url)
+    }
+
     // MARK: disks
 
     private var disksSection: some View {
@@ -380,7 +484,7 @@ struct StoppedContentView: View {
 
     private var disksHeader: some View {
         HStack(spacing: HVMSpace.md) {
-            Text("\(item.config.disks.count) attached")
+            Text("\(item.config?.disks.count ?? 0) attached")
                 .font(HVMFont.caption)
                 .foregroundStyle(HVMColor.textTertiary)
             Spacer()
@@ -402,7 +506,7 @@ struct StoppedContentView: View {
 
     private var disksRows: some View {
         VStack(spacing: 0) {
-            ForEach(Array(item.config.disks.enumerated()), id: \.offset) { _, disk in
+            ForEach(Array((item.config?.disks ?? []).enumerated()), id: \.offset) { _, disk in
                 Rectangle().fill(HVMColor.border).frame(height: 1)
                 diskRow(disk)
             }
@@ -624,7 +728,7 @@ struct StoppedContentView: View {
     }
 
     private var bootModeLabel: String {
-        if item.config.bootFromDiskOnly { return "From disk" }
+        if item.config?.bootFromDiskOnly == true { return "From disk" }
         switch item.guestOS {
         case .linux, .windows: return "From ISO (installer mode)"
         case .macOS:           return "From IPSW (installer mode)"
@@ -673,37 +777,37 @@ struct StoppedContentView: View {
         HStack(spacing: HVMSpace.md) {
             Spacer()
             // ISO 切换 (仅 Linux). 等价 hvm-cli iso select / eject
-            if item.guestOS == .linux {
-                Button(item.config.installerISO != nil ? "Change ISO" : "Select ISO") {
+            if item.guestOS == .linux, let cfg = item.config {
+                Button(cfg.installerISO != nil ? "Change ISO" : "Select ISO") {
                     selectIsoAction()
                 }
                 .buttonStyle(GhostButtonStyle())
                 .help("挂载 / 替换安装 ISO (会自动取消 bootFromDiskOnly)")
 
-                if item.config.installerISO != nil {
+                if cfg.installerISO != nil {
                     Button("Eject ISO") { ejectIsoAction() }
                         .buttonStyle(GhostButtonStyle())
                         .help("弹出 ISO 并切到仅硬盘启动")
                 }
             }
 
-            if item.guestOS == .windows {
+            if item.guestOS == .windows, let cfg = item.config {
                 // Windows 三态切换: 装机 → 安装完成 (仅硬盘 ramfb) → 驱动安装完成 (hvm-gpu-ramfb-pci)
-                if !item.config.bootFromDiskOnly, item.config.installerISO != nil {
+                if !cfg.bootFromDiskOnly, cfg.installerISO != nil {
                     Button(action: installCompletedAction) {
                         Text("安装完成")
                     }
                     .buttonStyle(GhostButtonStyle())
                     .help("Win Setup 已装完 OS, 切到仅硬盘启动 (仍走 ramfb, 等装驱动)")
                 }
-                if item.config.bootFromDiskOnly, !item.config.windowsDriversInstalled {
+                if cfg.bootFromDiskOnly, !cfg.windowsDriversInstalled {
                     Button(action: driversInstalledAction) {
                         Text("驱动安装完成")
                     }
                     .buttonStyle(GhostButtonStyle())
                     .help("guest 内已装完 viogpudo 等驱动, 切到 hvm-gpu-ramfb-pci 走 virtio-gpu 通路")
                 }
-            } else if !needsInstall, item.config.installerISO != nil, !item.config.bootFromDiskOnly {
+            } else if !needsInstall, let cfg = item.config, cfg.installerISO != nil, !cfg.bootFromDiskOnly {
                 // Linux (VZ / QEMU 后端通用): 装完 OS 切仅硬盘启动.
                 // QEMU 后端: argv 同步去掉 -no-reboot, guest reboot 走 system_reset 不退出.
                 // VZ 后端:   仅切配置, 下次 boot 不挂 ISO.
@@ -731,23 +835,25 @@ struct StoppedContentView: View {
     }
 
     private var needsInstall: Bool {
-        item.guestOS == .macOS && item.config.macOS?.autoInstalled != true
+        // 加密 VM 不会是 macOS guest (VZ 加密推后), 直接 false
+        guard let cfg = item.config else { return false }
+        return item.guestOS == .macOS && cfg.macOS?.autoInstalled != true
     }
 
     private func startAction() {
-        Task {
-            do { try await model.start(item) } catch { errors.present(error) }
-        }
+        // 加密 VM 走 prompt 密码 modal (PR-11b); 明文 VM 直接异步 start
+        model.requestStartWithPasswordIfNeeded(item, errors: errors)
     }
 
     private func installAction() {
-        guard let ipsw = item.config.macOS?.ipsw else {
+        // macOS guest 不支持加密 (VZ 加密推后), 这里强解 config
+        guard let cfg = item.config, let ipsw = cfg.macOS?.ipsw else {
             errors.present(HVMError.config(.missingField(name: "macOS.ipsw")))
             return
         }
         model.startInstall(
             bundleURL: item.bundleURL,
-            config: item.config,
+            config: cfg,
             ipswURL: URL(fileURLWithPath: ipsw),
             errors: errors
         )

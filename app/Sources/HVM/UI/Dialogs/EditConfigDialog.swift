@@ -20,12 +20,16 @@ struct EditConfigDialog: View {
     @State private var draft: VMConfig
 
     init(model: AppModel, errors: ErrorPresenter, item: AppModel.VMListItem) {
+        // 调用方 (DialogOverlay) 已保证 config != nil (加密 VM 不进此 dialog)
+        guard let cfg = item.config else {
+            preconditionFailure("EditConfigDialog 不支持加密 VM (config nil)")
+        }
         self._model = Bindable(model)
         self._errors = Bindable(errors)
         self.item = item
-        self._cpuText = State(initialValue: String(item.config.cpuCount))
-        self._memGiBText = State(initialValue: String(item.config.memoryMiB / 1024))
-        self._draft = State(initialValue: item.config)
+        self._cpuText = State(initialValue: String(cfg.cpuCount))
+        self._memGiBText = State(initialValue: String(cfg.memoryMiB / 1024))
+        self._draft = State(initialValue: cfg)
     }
 
     var body: some View {
@@ -37,7 +41,7 @@ struct EditConfigDialog: View {
         ) {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: HVMSpace.lg) {
-                    Text("修改 \(item.displayName) 的资源配置. 必须 VM 停止. Engine (\(item.config.engine.rawValue)) 不可改.")
+                    Text("修改 \(item.displayName) 的资源配置. 必须 VM 停止. Engine (\(item.config?.engine.rawValue ?? "—")) 不可改.")
                         .font(HVMFont.caption)
                         .foregroundStyle(HVMColor.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -54,7 +58,7 @@ struct EditConfigDialog: View {
                     }
 
                     // 剪贴板共享 — 仅 QEMU 后端 (VZ macOS guest 自带剪贴板)
-                    if item.config.engine == .qemu {
+                    if item.config?.engine == .qemu {
                         HVMToggle(
                             "剪贴板共享",
                             isOn: $draft.clipboardSharingEnabled,

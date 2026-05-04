@@ -111,7 +111,7 @@ PR-1 ~ PR-10b 全部合入. 覆盖:
 | 7 | master/sub key mlock | Pending | 🟡 |
 | 8 | 多盘 encrypt/decrypt/rekey 真机 | Pending | 🟡 |
 | 9 | 装机 → reboot → 桌面完整生命周期 | Pending | 🟡 |
-| 10 | GUI 加密 (PR-11) | Pending | 🟡, 时间盒 3 天 |
+| 10 | GUI 加密 (PR-11) | Done (待自动化测) | 🟡, PR-11a-e 已落: VMListItem 重构 / 启动密码 modal / CreateVMDialog 加密 toggle / CloneVMDialog 加密源 / 详情页加密区 + Encrypt/Decrypt/Rekey 三 dialog. 真机 e2e (PR-11f) 走 PR-G GUI 协议自动化测 |
 | 11 | delete secure-erase | Pending | 🟡 |
 | 12 | rekey 原子性 (staging + journal) | Pending | 🟡 |
 | 13 | encrypt 流程临时目录策略对齐 decrypt | Pending | 🟡 |
@@ -124,6 +124,12 @@ PR-1 ~ PR-10b 全部合入. 覆盖:
 | 20 | v1 文档回写 (含 SECURITY.md 新建) | Pending | 📚, 合 PR-12 |
 | 21 | CLAUDE.md 加密约束节 | Pending | 📚, 合 PR-12 |
 | 22 | README.md 提及加密 | Pending | 📚, 合 PR-12 |
+
+## 🛠 工具链 / 测试基建 (新增类别)
+
+| # | 项 | 状态 | 备注 |
+|---|---|---|---|
+| **G1** | hvm-dbg GUI 测试协议 (HDP-GUI) | Pending | 🛠, 用户主动提议 2026-05-04. Unix socket + JSON-RPC 让 hvm-dbg 能 click/type/screenshot HVM 主进程 GUI. 设计稿 docs/v3/HVM_DBG_GUI_PROTOCOL.md. **主张先行** — PR-11f 真机 e2e 依赖此通道. PR-G1~G6 共 ~2.5 天 |
 
 ## 不在本清单内 (明确划走)
 

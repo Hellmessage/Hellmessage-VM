@@ -7,6 +7,7 @@ import SwiftUI
 import HVMBackend
 import HVMBundle
 import HVMCore
+import HVMEncryption
 import HVMInstall
 import HVMIPC
 import HVMDisplayQemu
@@ -19,15 +20,36 @@ public final class AppModel {
         public let bundleURL: URL
         public let displayName: String
         public let guestOS: GuestOSType
-        public let config: VMConfig
+        /// 明文 VM 持有完整 VMConfig; 加密 VM 解锁前 nil (走 routing JSON 拿基础字段)
+        public let config: VMConfig?
+        /// 加密形态. nil = 明文 VM
+        public let encryptionScheme: EncryptionSpec.EncryptionScheme?
         public var runState: String   // "stopped" / "running" (推断, GUI 内实时用 session)
 
+        public var isEncrypted: Bool { encryptionScheme != nil }
+
+        /// 明文 VM 构造
         public init(bundleURL: URL, config: VMConfig, runState: String) {
             self.id = config.id
             self.bundleURL = bundleURL
             self.displayName = config.displayName
             self.guestOS = config.guestOS
             self.config = config
+            self.encryptionScheme = nil
+            self.runState = runState
+        }
+
+        /// 加密 VM 构造 (从 routing JSON 派生; config 不解密 = nil; guestOS 占位)
+        public init(bundleURL: URL,
+                    routing: RoutingMetadata,
+                    runState: String,
+                    placeholderGuestOS: GuestOSType = .linux) {
+            self.id = routing.vmId
+            self.bundleURL = bundleURL
+            self.displayName = routing.displayName
+            self.guestOS = placeholderGuestOS
+            self.config = nil
+            self.encryptionScheme = routing.scheme
             self.runState = runState
         }
     }
@@ -126,6 +148,27 @@ public final class AppModel {
     /// 扩容磁盘弹窗的请求 (item + diskID + 当前大小). 非 nil → DialogOverlay 显示 DiskResizeDialog 模态
     public var diskResizeRequest: DiskResizeRequest? = nil
 
+    /// 启动加密 VM 时弹密码 modal 的请求. 非 nil → DialogOverlay 显示 EncryptionPasswordDialog.
+    /// 设计稿 docs/v3/GUI_ENCRYPTION.md PR-11b.
+    public var startPasswordRequest: StartPasswordRequest? = nil
+
+    /// 启动密码请求. 用户输入后 → 调用 onSubmit (异步走 startInternal).
+    public struct StartPasswordRequest: Identifiable {
+        public let id: UUID
+        public let item: VMListItem
+        public var errorMessage: String? = nil   // 错密码后 inline 显示
+        public init(item: VMListItem) {
+            self.id = item.id
+            self.item = item
+        }
+    }
+
+    /// 加密相关 dialog (PR-11e): encrypt / decrypt / rekey.
+    /// 一次只能开一个 (互斥 — 都修改 bundle).
+    public var encryptItem: VMListItem? = nil       // 明文 → 加密 VM
+    public var decryptItem: VMListItem? = nil       // 加密 → 明文 VM
+    public var rekeyItem: VMListItem? = nil         // 改密
+
     /// 扩容请求载体: VM 引用 + 磁盘 id (主盘 "main" / 数据盘 uuid8) + 当前 GiB
     public struct DiskResizeRequest: Identifiable, Sendable {
         public let id: UUID
@@ -157,6 +200,10 @@ public final class AppModel {
             || cloneItem != nil
             || diskAddItem != nil
             || diskResizeRequest != nil
+            || startPasswordRequest != nil
+            || encryptItem != nil
+            || decryptItem != nil
+            || rekeyItem != nil
             || errors.current != nil
             || confirms.current != nil
     }
@@ -235,12 +282,36 @@ public final class AppModel {
         var newCache: [String: (mtime: Date, item: VMListItem)] = [:]
 
         for u in urls {
-            let configURL = BundleLayout.configURL(u)
-            let mtime = (try? FileManager.default.attributesOfItem(atPath: configURL.path)[.modificationDate] as? Date) ?? Date.distantPast
             let busy = BundleLock.isBusy(bundleURL: u)
             let runState = busy ? "running" : "stopped"
 
-            // 命中: mtime 一致 → 复用 config + bundleURL, 仅刷新 runState
+            // 加密形态分流 (PR-11a): 加密 VM 走 routing JSON, 不解密 config
+            if let scheme = EncryptedBundleIO.detectScheme(at: u) {
+                let routingURL: URL
+                switch scheme {
+                case .qemuPerfile:    routingURL = RoutingJSON.locationForQemuBundle(u)
+                case .vzSparsebundle: routingURL = RoutingJSON.locationForSparsebundle(u)
+                }
+                // routing JSON mtime 当 cache key
+                let mtime = (try? FileManager.default.attributesOfItem(atPath: routingURL.path)[.modificationDate] as? Date) ?? Date.distantPast
+                if let cached = refreshCache[u.path], cached.mtime == mtime {
+                    var item = cached.item
+                    item.runState = runState
+                    items.append(item)
+                    newCache[u.path] = (mtime, item)
+                    continue
+                }
+                guard let routing = try? RoutingJSON.read(from: routingURL) else { continue }
+                let item = VMListItem(bundleURL: u, routing: routing, runState: runState)
+                items.append(item)
+                newCache[u.path] = (mtime, item)
+                continue
+            }
+
+            // 明文路径
+            let configURL = BundleLayout.configURL(u)
+            let mtime = (try? FileManager.default.attributesOfItem(atPath: configURL.path)[.modificationDate] as? Date) ?? Date.distantPast
+
             if let cached = refreshCache[u.path], cached.mtime == mtime {
                 var item = cached.item
                 item.runState = runState
@@ -249,7 +320,6 @@ public final class AppModel {
                 continue
             }
 
-            // 未命中: load config 重建
             guard let cfg = try? BundleIO.load(from: u) else { continue }
             let item = VMListItem(bundleURL: u, config: cfg, runState: runState)
             items.append(item)
@@ -288,16 +358,60 @@ public final class AppModel {
 
     // MARK: - VM 控制
 
+    /// GUI 入口: 启动 VM. 加密 VM 自动弹密码 modal; 明文 VM 直接走 start.
+    /// 设计稿 docs/v3/GUI_ENCRYPTION.md PR-11b.
+    public func requestStartWithPasswordIfNeeded(_ item: VMListItem,
+                                                  errors: ErrorPresenter) {
+        if item.isEncrypted {
+            // 弹密码 modal. 用户输入 → onSubmit 在 EncryptionPasswordDialog 内被调用,
+            // 进 startWithEncryptedPassword 异步跑 start() + 错密码 inline 显示.
+            startPasswordRequest = StartPasswordRequest(item: item)
+        } else {
+            Task {
+                do { try await start(item) } catch { errors.present(error) }
+            }
+        }
+    }
+
+    /// EncryptionPasswordDialog onSubmit 回调入口. 跑 start; 失败 (含错密码 → host
+    /// 进程读 stdin unlock 抛 wrongPassword 退出, 主进程轮询 BundleLock 失败抛
+    /// qemuHostStartupTimeout) 走 ErrorDialog. 真"错密码 inline 重试" UX 需要从 host log
+    /// 解析或建 IPC, 不在 PR-11b 范围 — 暂走通用错误路径.
+    public func startWithEncryptedPassword(_ item: VMListItem,
+                                            password: String,
+                                            errors: ErrorPresenter) {
+        Task { @MainActor in
+            do {
+                try await start(item, password: password)
+                self.startPasswordRequest = nil
+            } catch {
+                self.startPasswordRequest = nil
+                errors.present(error)
+            }
+        }
+    }
+
+    /// 启动 VM. 加密 VM 必须先 prompt 密码 — 调用方走 requestStartWithPasswordIfNeeded,
+    /// 不要直接调 start() 不传 password. start() 直接调用方 (例如 hvm-cli) 已 prompt 才走这里.
     public func start(_ item: VMListItem, password: String? = nil) async throws {
         if sessions[item.id] != nil { return }
+        // 加密 VM 必须有 password (调用方应已 prompt)
+        if item.isEncrypted, password == nil {
+            throw HVMError.encryption(.parseFailed(reason: "加密 VM start 必须传 password"))
+        }
         // QEMU 后端: 派生 HVM 自身二进制走 --host-mode-bundle 入 QemuHostEntry; QEMU 自带 cocoa 窗口,
         // GUI 主窗口不嵌入 (与 VZ 路径区分). stop / kill 走 IPC fallback (见 stop/kill 方法).
-        // 加密 VM (config.encryption.enabled = true) 时调用方应已 prompt password 走 password 参数;
+        // 加密 VM (PR-11a item.isEncrypted) 必须传 password; 调用方 (start dialog) 负责 prompt.
         // password nil + 加密 VM 启动会因子进程 stdin 读到空而 exit 40.
-        if item.config.engine == .qemu {
+        // 加密 VM engine 永远是 qemu (VZ 加密推后, 设计稿 ENCRYPTION.md v2.4).
+        let isQemu = item.isEncrypted || item.config?.engine == .qemu
+        if isQemu {
             // 与子进程 argv 使用同一套路径, 避免 symlink / 简写 导致 .lock 与 isBusy 判在不同 inode 上
             let bundleURL = item.bundleURL.resolvingSymlinksInPath().standardizedFileURL
-            try spawnExternalHost(bundleURL: bundleURL, config: item.config, password: password)
+            try spawnExternalHost(bundleURL: bundleURL,
+                                   displayName: item.displayName,
+                                   id: item.id,
+                                   password: password)
             // 轮询子进程是否成功拿到 BundleLock (子进程在 HVMHostEntry 入口即抢锁; 冷启动 dyld/首次签名偶发 >5s)
             // 与 QMP 超时同一量级, 留足 bridged + socket_vmnet 起 sidecar 前的余量 (HVMTimeout.hostStartupLockPoll)
             let waitSeconds = HVMTimeout.hostStartupLockPoll
@@ -309,12 +423,16 @@ public final class AppModel {
             }
             refreshList()
             if !locked {
-                let logDir = HVMPaths.vmLogsDir(displayName: item.config.displayName, id: item.config.id).path
+                let logDir = HVMPaths.vmLogsDir(displayName: item.displayName, id: item.id).path
                 throw HVMError.backend(.qemuHostStartupTimeout(waitedSeconds: waitSeconds, logPath: logDir))
             }
             return
         }
-        let session = VMSession(bundleURL: item.bundleURL, config: item.config)
+        // VZ 路径必须有 config (VZ 加密暂未支持, 走不到这里)
+        guard let cfg = item.config else {
+            throw HVMError.encryption(.parseFailed(reason: "VZ 路径需明文 config; 加密 VM VZ 启动暂未实现"))
+        }
+        let session = VMSession(bundleURL: item.bundleURL, config: cfg)
         // 自然结束(.stopped / .error) 通知 AppModel 清理列表 + 切回 stopped 卡片
         session.onEnded = { [weak self] id in
             self?.sessionDidEnd(id)
@@ -336,11 +454,14 @@ public final class AppModel {
     /// 子进程进 main.swift if 分支 → HVMHostEntry.run → QemuHostEntry.run.
     /// stdout/stderr 落全局 ~/Library/Application Support/HVM/logs/<displayName>-<uuid8>/host-<date>.log
     /// (与 hvm-cli StartCommand 一致).
-    private func spawnExternalHost(bundleURL: URL, config: VMConfig, password: String? = nil) throws {
+    private func spawnExternalHost(bundleURL: URL,
+                                    displayName: String,
+                                    id: UUID,
+                                    password: String? = nil) throws {
         guard let exec = Bundle.main.executableURL else {
             throw HVMError.backend(.vzInternal(description: "无法定位 HVM.app 二进制"))
         }
-        let logURL = try makeHostLogURL(displayName: config.displayName, id: config.id)
+        let logURL = try makeHostLogURL(displayName: displayName, id: id)
         let handle = try FileHandle(forWritingTo: logURL)
         try handle.seekToEnd()
         let proc = Process()

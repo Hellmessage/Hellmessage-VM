@@ -36,7 +36,9 @@ struct DialogOverlay: View {
             if let osFetch = model.osImageFetchState {
                 OSImageFetchDialog(state: osFetch)
             }
-            if let editItem = model.editConfigItem {
+            // 加密 VM 不走 EditConfigDialog (没明文 config). 入口 (DetailBars CPU/Memory 按钮)
+            // 已经在加密 VM 上隐藏; 这里防御兜底跳过.
+            if let editItem = model.editConfigItem, editItem.config != nil {
                 EditConfigDialog(model: model, errors: errors, item: editItem)
             }
             if let snapItem = model.snapshotCreateItem {
@@ -50,6 +52,32 @@ struct DialogOverlay: View {
             }
             if let resize = model.diskResizeRequest {
                 DiskResizeDialog(model: model, errors: errors, request: resize)
+            }
+            // 加密 VM lifecycle dialog (PR-11e): encrypt / decrypt / rekey 三选一
+            if let item = model.encryptItem {
+                EncryptVMDialog(model: model, errors: errors, item: item)
+            }
+            if let item = model.decryptItem {
+                DecryptVMDialog(model: model, errors: errors, item: item)
+            }
+            if let item = model.rekeyItem {
+                RekeyVMDialog(model: model, errors: errors, item: item)
+            }
+            // 加密 VM 启动期密码 modal (PR-11b)
+            if let req = model.startPasswordRequest {
+                EncryptionPasswordDialog(
+                    displayName: req.item.displayName,
+                    prompt: "解锁加密 VM",
+                    body: "VM \"\(req.item.displayName)\" 已加密 (\(req.item.encryptionScheme?.rawValue ?? "—")). 输入密码继续启动.",
+                    errorMessage: req.errorMessage,
+                    submitLabel: "启动",
+                    onSubmit: { pw in
+                        model.startWithEncryptedPassword(req.item, password: pw, errors: errors)
+                    },
+                    onCancel: {
+                        model.startPasswordRequest = nil
+                    }
+                )
             }
             ErrorDialogOverlay(presenter: errors)
             ConfirmDialogOverlay(presenter: confirms)
