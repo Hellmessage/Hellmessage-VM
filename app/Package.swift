@@ -43,7 +43,9 @@ let package = Package(
         ),
         // HVMStorage 依赖 HVMNet 仅用于 CloneManager 重生 NIC MAC (走 MACAddressGenerator),
         // 与 BundleIO/DiskFactory 平行. 拒绝在 CloneManager 里复制一份 MAC 生成逻辑.
-        .target(name: "HVMStorage", dependencies: ["HVMCore", "HVMBundle", "HVMNet"]),
+        // 引 HVMEncryption: CloneManager 加密 VM 分支用 EncryptedBundleIO/EncryptedConfigIO/
+        // RoutingJSON. 不循环 (HVMEncryption 不引 HVMStorage).
+        .target(name: "HVMStorage", dependencies: ["HVMCore", "HVMBundle", "HVMNet", "HVMEncryption"]),
         .target(name: "HVMNet",     dependencies: ["HVMCore", "HVMBundle"]),
         .target(name: "HVMDisplay", dependencies: ["HVMCore", "HVMBundle", "HVMUtils"]),
         .target(

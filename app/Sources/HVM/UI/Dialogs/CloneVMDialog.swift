@@ -28,7 +28,7 @@ struct CloneVMDialog: View {
     @State private var phase: Phase = .form
     @State private var nameText: String = ""
     @State private var keepMac: Bool = false
-    @State private var includeSnapshots: Bool = false
+    // D15 (2026-05-04): 永不带 snapshots/. 加密 / 明文一致, 移除 toggle
     @State private var inlineError: String? = nil
 
     var body: some View {
@@ -101,11 +101,6 @@ struct CloneVMDialog: View {
                     "保留所有 NIC MAC",
                     isOn: $keepMac,
                     help: "默认重生 MAC. 保留时同 LAN 上同时跑两台会冲突, 用户自负"
-                )
-                HVMToggle(
-                    "包含快照",
-                    isOn: $includeSnapshots,
-                    help: "默认不带 snapshots/, 克隆是另起新 VM. 勾选后整目录复制 (仍走 COW)"
                 )
             }
 
@@ -231,11 +226,13 @@ struct CloneVMDialog: View {
 
     private func startClone() {
         let trimmed = nameText.trimmingCharacters(in: .whitespaces)
+        // 加密 VM 暂未在 GUI 接入 (PR-11 GUI 加密范围). 这里走 password=nil,
+        // 加密源 VM 会被 CloneManager 拒. CLI 路径已支持加密 clone.
         let opts = CloneManager.Options(
             newDisplayName: trimmed,
             targetParentDir: nil,             // 默认 = 源父目录
             keepMACAddresses: keepMac,
-            includeSnapshots: includeSnapshots
+            password: nil
         )
         let source = item.bundleURL
         inlineError = nil

@@ -1,6 +1,6 @@
 // HVMStorage/CloneManager.swift
 // 整 VM 克隆: APFS clonefile(2) 复制磁盘 + nvram/tpm/auxiliary/meta + 重生身份字段.
-// 设计稿见 docs/v3/CLONE.md.
+// 设计稿见 docs/v3/CLONE.md + docs/v3/CLONE_SNAPSHOT_ENCRYPTED.md (加密分支).
 //
 // 重生策略:
 //   - config.id            → UUID()
@@ -14,19 +14,29 @@
 //   - 主盘 os.{img,qcow2} 文件名 (主盘命名按 engine 是固定值, 不带 uuid)
 //   - 磁盘内容 (APFS clonefile, COW 直到首次写)
 //   - auxiliary/aux-storage + auxiliary/hardware-model (macOS, 与 IPSW 装机配对, 不可改)
-//   - nvram/efi-vars.fd (EFI BootOrder; 重置 = guest 进 EFI Shell)
+//   - nvram/efi-vars.{fd,qcow2} (EFI BootOrder; 重置 = guest 进 EFI Shell)
 //   - tpm/* (Win11 swtpm state; 重置 = BitLocker 永久失效)
+//
+// 加密 VM 分支 (D9 = 等价复制 + 同密码):
+//   - APFS clonefile 字节级 COW 复制 LUKS qcow2 / config.yaml.enc / swtpm state, 不解密
+//   - master KEK 由 PBKDF2(password, salt) 派生; clone 后 salt + 密码不变 → 同 KEK
+//     → 同 LUKS keyslot 能解 / 同 swtpm-key 能开 tpm/permall
+//   - config.yaml.enc 必须解密 → 改 vmId/displayName/disks paths → 用源 sub.config 重新加密
+//     (master KEK 不变, 目标用源密码可解)
+//   - meta/encryption.json (routing JSON): 仅改 vmId, 其他 (salt/iter/scheme) 不动
+//   - clone 出来 = 跟源同密码. 想换密码用户自跑 hvm-cli rekey
 //
 // 不带:
 //   - .lock (目标首次启动自然创建)
 //   - logs/ (新 VM 一身轻; logs/ 子目录预创建空目录, ConsoleBridge 启动时直接写)
 //   - .unattend-stage/, unattend.iso (Windows 装机产物, 启动时按需重新生成)
-//   - snapshots/ (默认; --include-snapshots 可选)
+//   - **snapshots/** (D15 永不带 — 加密 / 明文 一致, 移除 --include-snapshots flag)
 //
 // 前置约束:
 //   - 源 VM 必须 stopped — 函数内部抢 .edit lock 排他, 已被 .runtime 持有时抛 .busy
 //   - 源 + 目标父目录必须同 APFS 卷 — clonefile(2) 跨卷 EXDEV. 提前 stat st_dev 探测
 //   - 目标 bundle 路径不能存在
+//   - 加密源 VM 调用方必须传 options.password (CLI 层 prompt)
 //   - 失败时清理目标残留 (CloneManager 不留 partial bundle)
 
 import Foundation
@@ -34,6 +44,7 @@ import Darwin
 @preconcurrency import Virtualization
 import HVMCore
 import HVMBundle
+import HVMEncryption
 import HVMNet
 
 public enum CloneManager {
@@ -46,17 +57,18 @@ public enum CloneManager {
         public var targetParentDir: URL?
         /// true = 保留所有 NIC MAC (用户自负: 同 LAN 双开会冲突)
         public var keepMACAddresses: Bool
-        /// true = 复制 snapshots/ 整目录到目标
-        public var includeSnapshots: Bool
+        /// 加密源 VM 时调用方 prompt 后传入 (跨机器 portable 唯一来源).
+        /// 明文源 VM 必须 nil (传了也 ignore).
+        public var password: String?
 
         public init(newDisplayName: String,
                     targetParentDir: URL? = nil,
                     keepMACAddresses: Bool = false,
-                    includeSnapshots: Bool = false) {
+                    password: String? = nil) {
             self.newDisplayName = newDisplayName
             self.targetParentDir = targetParentDir
             self.keepMACAddresses = keepMACAddresses
-            self.includeSnapshots = includeSnapshots
+            self.password = password
         }
     }
 
@@ -69,6 +81,7 @@ public enum CloneManager {
     }
 
     /// 执行整 VM 克隆. 成功 = 完整可用的新 bundle; 失败 = 没有 partial 残留.
+    /// 加密源 VM 必须传 options.password (CLI 层 prompt). 明文源 VM password 应为 nil.
     public static func clone(sourceBundle: URL, options: Options) throws -> Result {
         try validateName(options.newDisplayName)
 
@@ -96,10 +109,28 @@ public enum CloneManager {
         let srcLock = try BundleLock(bundleURL: sourceBundle, mode: .edit)
         defer { srcLock.release() }
 
+        // 加密形态分流 (D9 = 等价复制 + 同密码)
+        if let scheme = EncryptedBundleIO.detectScheme(at: sourceBundle) {
+            switch scheme {
+            case .vzSparsebundle:
+                throw HVMError.encryption(.parseFailed(
+                    reason: "VZ-sparsebundle 加密 VM clone 暂未实现 (ENCRYPTION.md v2.4 QEMU 优先)"
+                ))
+            case .qemuPerfile:
+                guard let password = options.password else {
+                    throw HVMError.config(.missingField(name: "password (加密 VM clone 必须传 password)"))
+                }
+                return try cloneEncryptedQEMU(sourceBundle: sourceBundle,
+                                                targetBundle: targetBundle,
+                                                options: options,
+                                                password: password)
+            }
+        }
+
         // 加载源 config (走 schema 升级链 + 校验)
         var config = try BundleIO.load(from: sourceBundle)
 
-        Self.log.info("clone start: \(sourceBundle.lastPathComponent, privacy: .public) → \(targetBundle.lastPathComponent, privacy: .public)")
+        Self.log.info("clone start (plaintext): \(sourceBundle.lastPathComponent, privacy: .public) → \(targetBundle.lastPathComponent, privacy: .public)")
 
         var renamed: [String: String] = [:]
         let newID = UUID()
@@ -156,12 +187,6 @@ public enum CloneManager {
                     throw HVMError.bundle(.writeFailed(reason: "machine-identifier 写入失败: \(error)",
                                                        path: machineIDURL.path))
                 }
-            }
-
-            // 可选 snapshots
-            if options.includeSnapshots {
-                try cloneIfExists(name: BundleLayout.snapshotsDirName,
-                                  from: sourceBundle, to: targetBundle)
             }
 
             // logs/ 空目录: ConsoleBridge / QemuConsoleBridge 启动时写
@@ -256,5 +281,115 @@ public enum CloneManager {
         guard candidate.count == 8 else { return nil }
         guard candidate.allSatisfy({ $0.isHexDigit }) else { return nil }
         return candidate
+    }
+
+    // MARK: - 加密 QEMU clone (D9 = 等价复制 + 同密码)
+
+    /// 加密 QEMU VM clone. 设计稿 docs/v3/CLONE_SNAPSHOT_ENCRYPTED.md PR-B.
+    ///
+    /// 关键不变量:
+    ///   - 源密码 → 目标密码 (一字不差; clone 不改密码)
+    ///   - master KEK / sub keys 全程不变 (salt + 密码不变 → 同 PBKDF2 结果)
+    ///   - LUKS qcow2 字节复制 (header + ciphertext): 字节级 COW, header 仍是源 keyslot
+    ///   - swtpm tpm/permall 字节复制: 用源 swtpm-key 仍能开 (key 由 master HKDF 派生不变)
+    ///   - config.yaml.enc: 解密 → 改 vmId/displayName/disks paths → 用源 sub.config 重新加密
+    ///   - meta/encryption.json (routing JSON): vmId 改, salt/iter/scheme 不变
+    private static func cloneEncryptedQEMU(sourceBundle: URL,
+                                            targetBundle: URL,
+                                            options: Options,
+                                            password: String) throws -> Result {
+        let fm = FileManager.default
+
+        Self.log.info("clone start (encrypted qemu): \(sourceBundle.lastPathComponent, privacy: .public) → \(targetBundle.lastPathComponent, privacy: .public)")
+
+        // 1. unlock 源 → 拿 sub keys + config (handle 持有 master KEK 派生子 keys 在内存)
+        let handle = try EncryptedBundleIO.unlock(bundlePath: sourceBundle, password: password)
+        defer { try? handle.close() }
+        guard let subKeys = handle.qemuSubKeys else {
+            throw HVMError.encryption(.parseFailed(reason: "unlock 未返子 keys"))
+        }
+        var config = handle.config
+
+        var renamed: [String: String] = [:]
+        let newID = UUID()
+
+        do {
+            // 2. 目标 bundle 骨架
+            try fm.createDirectory(at: targetBundle, withIntermediateDirectories: true,
+                                   attributes: [.posixPermissions: 0o755])
+            try fm.createDirectory(at: BundleLayout.disksDir(targetBundle),
+                                   withIntermediateDirectories: true,
+                                   attributes: [.posixPermissions: 0o755])
+
+            // 3. 主盘: 文件名不变, 字节复制 (LUKS header + ciphertext 一起)
+            guard let mainDisk = config.disks.first(where: { $0.role == .main }) else {
+                throw HVMError.config(.missingField(name: "disks 中无 role=main 的盘"))
+            }
+            try cloneFile(from: sourceBundle.appendingPathComponent(mainDisk.path),
+                          to: targetBundle.appendingPathComponent(mainDisk.path))
+
+            // 4. 数据盘: uuid8 重生 + 改 DiskSpec.path (LUKS header 不依赖文件名 → 字节复制即可解)
+            for i in config.disks.indices where config.disks[i].role == .data {
+                let oldDisk = config.disks[i]
+                let oldName = (oldDisk.path as NSString).lastPathComponent
+                let oldUUID8 = extractDataDiskUUID8(oldName)
+                let newUUID8 = DiskFactory.newDataDiskUUID8()
+                let newName = BundleLayout.dataDiskFileName(uuid8: newUUID8, engine: config.engine)
+                let newRel = "\(BundleLayout.disksDirName)/\(newName)"
+                try cloneFile(from: sourceBundle.appendingPathComponent(oldDisk.path),
+                              to: targetBundle.appendingPathComponent(newRel))
+                config.disks[i].path = newRel
+                if let old = oldUUID8 {
+                    renamed[old] = newUUID8
+                }
+            }
+
+            // 5. nvram (LUKS qcow2 efi-vars) / tpm (swtpm-key 加密 permall) / auxiliary
+            //    全部字节复制. master KEK 不变 → 同 sub keys 能解.
+            try cloneIfExists(name: BundleLayout.nvramDirName, from: sourceBundle, to: targetBundle)
+            try cloneIfExists(name: "tpm", from: sourceBundle, to: targetBundle)
+            try cloneIfExists(name: BundleLayout.auxiliaryDirName, from: sourceBundle, to: targetBundle)
+
+            // 6. 重生身份字段 (跟明文路径一致)
+            config.id = newID
+            config.displayName = options.newDisplayName
+            config.createdAt = Date()
+            if !options.keepMACAddresses {
+                for i in config.networks.indices {
+                    config.networks[i].macAddress = MACAddressGenerator.random()
+                }
+            }
+
+            // 7. logs/ 空目录
+            try fm.createDirectory(at: BundleLayout.logsDir(targetBundle),
+                                   withIntermediateDirectories: true,
+                                   attributes: [.posixPermissions: 0o755])
+
+            // 8. config.yaml.enc: 用源 sub.config 重新加密写入目标 bundle
+            //    (master KEK 不变 → 用户用源密码可解目标 .enc)
+            try EncryptedConfigIO.save(config: config,
+                                        to: targetBundle,
+                                        key: subKeys.config)
+
+            // 9. routing JSON: 读源 → 改 vmId + displayName → 写目标. salt/iter/scheme 不动
+            //    (跨机器派生 master KEK 仍正确, 因为 salt 不变)
+            let srcRouting = RoutingJSON.locationForQemuBundle(sourceBundle)
+            var routing = try RoutingJSON.read(from: srcRouting)
+            routing.vmId = newID
+            routing.displayName = options.newDisplayName
+            let dstRouting = RoutingJSON.locationForQemuBundle(targetBundle)
+            try RoutingJSON.write(routing, to: dstRouting)
+        } catch {
+            // 任意一步失败 → 清掉目标残留
+            try? fm.removeItem(at: targetBundle)
+            throw error
+        }
+
+        Self.log.info("clone done (encrypted qemu): \(sourceBundle.lastPathComponent, privacy: .public) → \(targetBundle.lastPathComponent, privacy: .public) newID=\(newID.uuidString, privacy: .public) renamedDataDisks=\(renamed.count)")
+
+        return Result(sourceBundle: sourceBundle,
+                      targetBundle: targetBundle,
+                      newID: newID,
+                      renamedDataDiskUUID8s: renamed)
     }
 }
