@@ -7,7 +7,8 @@
 | 文档 | 主题 | 状态 |
 |---|---|---|
 | [CLONE.md](CLONE.md) | VM 克隆(APFS clonefile + 身份字段重生) | **代码已合入**, 真机验证 (C1/C3) 待跑 |
-| [ENCRYPTION.md](ENCRYPTION.md) | VM 整盘加密(混合 + 强制密码 + 跨机器 portable) | **设计稿 v2.3 + PR-1~8 已落** |
+| [ENCRYPTION.md](ENCRYPTION.md) | VM 整盘加密(混合 + 强制密码 + 跨机器 portable) | **设计稿 v2.4 + PR-1~10b 已落** (QEMU 路径全闭环, VZ 推后) |
+| [TODO.md](TODO.md) | QEMU 加密 BUG / 遗漏清单 (PR-10b 后) | **TODO 清单 v1**, 22 项分 🔴 / 🟡 / 🟢 / 📚 四档 |
 
 ## 与 v1 / v2 的关系
 
