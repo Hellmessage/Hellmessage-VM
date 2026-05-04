@@ -52,7 +52,7 @@ public final class SecureBytes: @unchecked Sendable {
     /// 从现成 Data 拷贝建 SecureBytes (源 Data 仍在 GC 中, 不能保 secure).
     public convenience init(copying data: Data) throws {
         try self.init(count: data.count)
-        try self.withMutableBytes { dst in
+        self.withMutableBytes { dst in
             data.withUnsafeBytes { src in
                 if let s = src.baseAddress, let d = dst.baseAddress {
                     memcpy(d, s, data.count)

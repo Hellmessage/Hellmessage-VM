@@ -123,7 +123,7 @@ struct GuiListCommand: AsyncParsableCommand {
                 for e in entries {
                     let id = e.identifier.padding(toLength: 56, withPad: " ", startingAt: 0)
                     let role = e.role.padding(toLength: 18, withPad: " ", startingAt: 0)
-                    let lab = e.label ?? "—"
+                    let lab = e.label.isEmpty ? "—" : e.label
                     print("\(id)\(role)\(lab)")
                 }
             }

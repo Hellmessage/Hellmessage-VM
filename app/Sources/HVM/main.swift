@@ -20,14 +20,14 @@ if args.count >= 3, args[1] == "--host-mode-bundle" {
     let password: String? = {
         let stdin = FileHandle.standardInput
         // 给父进程 1s 写完 + close. 大多数情况是 ms 级 (本地 pipe).
-        let deadline = Date().addingTimeInterval(1.0)
-        var buf = Data()
-        // 走非阻塞 read: poll fd 走 select, 这里简化 — 用 readToEnd 阻塞读, 但靠
-        // 父进程已 close 而立即返回. 兜底 1s 后强 break (DispatchQueue 异步).
+        // 走 NSLock 包 buf 避 Sendable 警告 (closure 跑独立线程, buf 主线程读)
+        let lock = NSLock()
+        nonisolated(unsafe) var buf = Data()
         let group = DispatchGroup()
         group.enter()
         DispatchQueue.global().async {
-            buf = (try? stdin.readToEnd()) ?? Data()
+            let read = (try? stdin.readToEnd()) ?? Data()
+            lock.lock(); buf = read; lock.unlock()
             group.leave()
         }
         let timeout: DispatchTime = .now() + .milliseconds(1000)
@@ -35,10 +35,10 @@ if args.count >= 3, args[1] == "--host-mode-bundle" {
             // 父进程没及时 close write 端 — 当作明文 VM 处理 (容错)
             return nil
         }
-        let trimmed = String(data: buf, encoding: .utf8)?
+        lock.lock(); let snapshot = buf; lock.unlock()
+        let trimmed = String(data: snapshot, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
-        _ = deadline    // suppress warning
     }()
 
     HVMHostEntry.run(bundlePath: args[2], password: password, embeddedInGUI: embeddedInGUI)
