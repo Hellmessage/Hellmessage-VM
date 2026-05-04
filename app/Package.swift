@@ -82,10 +82,17 @@ let package = Package(
             dependencies: ["HVMCore", "HVMBundle", "HVMQemu", "HVMScmRecv"]
         ),
 
+        // hvm-dbg ↔ HVM GUI 测试协议 (HDP-GUI). 设计稿 docs/v3/HVM_DBG_GUI_PROTOCOL.md.
+        // 仅 HVM_GUI_PROBE=1 env 启用 server, release 默认 link 但不启 (体积 +几十 KB).
+        .target(
+            name: "HVMGuiProbe",
+            dependencies: ["HVMCore", "HVMIPC"]
+        ),
+
         // 可执行 target
         .executableTarget(
             name: "HVM",
-            dependencies: ["HVMBackend", "HVMInstall", "HVMIPC", "HVMDisplay", "HVMStorage", "HVMQemu", "HVMDisplayQemu", "HVMUtils", "HVMEncryption"]
+            dependencies: ["HVMBackend", "HVMInstall", "HVMIPC", "HVMDisplay", "HVMStorage", "HVMQemu", "HVMDisplayQemu", "HVMUtils", "HVMEncryption", "HVMGuiProbe"]
         ),
         .executableTarget(
             name: "hvm-cli",

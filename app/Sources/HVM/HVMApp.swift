@@ -11,6 +11,7 @@ import AppKit
 import SwiftUI
 import HVMBundle
 import HVMCore
+import HVMGuiProbe
 import HVMNet
 
 @MainActor
@@ -54,6 +55,10 @@ final class HVMAppDelegate: NSObject, NSApplicationDelegate {
         mainController = wc
         wc.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
+
+        // GUI 测试探针 (HDP-GUI). HVM_GUI_PROBE=1 时启 unix socket server,
+        // 让 hvm-dbg gui xxx 自动化点击 / 截图 / 输入. 设计稿 docs/v3/HVM_DBG_GUI_PROTOCOL.md.
+        ProbeServer.start()
     }
 
     /// 不让 macOS 在最后一个 window 关闭时自动退出 (我们窗口"关闭"实际是 hide)
