@@ -7,6 +7,7 @@ import ArgumentParser
 import Foundation
 import HVMBundle
 import HVMCore
+import HVMEncryption
 
 struct IsoCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -37,7 +38,9 @@ struct IsoSelectCommand: AsyncParsableCommand {
             if BundleLock.isBusy(bundleURL: bundleURL) {
                 throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
             }
-            var config = try BundleIO.load(from: bundleURL)
+            let (loaded, session) = try EncryptedConfigEditor.load(bundleURL: bundleURL)
+            defer { try? session.close() }
+            var config = loaded
             guard config.guestOS == .linux else {
                 throw HVMError.config(.invalidEnum(field: "iso.guestOS",
                                                     raw: "\(config.guestOS)",
@@ -49,7 +52,7 @@ struct IsoSelectCommand: AsyncParsableCommand {
             }
             config.installerISO = absPath
             config.bootFromDiskOnly = false
-            try BundleIO.save(config: config, to: bundleURL)
+            try EncryptedConfigEditor.save(config, session: session)
             switch format {
             case .human: print("✔ ISO 已设为 \(absPath); bootFromDiskOnly=false")
             case .json:  printJSON(["ok": "true", "installerISO": absPath])
@@ -78,7 +81,9 @@ struct IsoEjectCommand: AsyncParsableCommand {
             if BundleLock.isBusy(bundleURL: bundleURL) {
                 throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
             }
-            var config = try BundleIO.load(from: bundleURL)
+            let (loaded, session) = try EncryptedConfigEditor.load(bundleURL: bundleURL)
+            defer { try? session.close() }
+            var config = loaded
             guard config.guestOS == .linux else {
                 throw HVMError.config(.invalidEnum(field: "iso.guestOS",
                                                     raw: "\(config.guestOS)",
@@ -86,7 +91,7 @@ struct IsoEjectCommand: AsyncParsableCommand {
             }
             config.installerISO = nil
             config.bootFromDiskOnly = true
-            try BundleIO.save(config: config, to: bundleURL)
+            try EncryptedConfigEditor.save(config, session: session)
             switch format {
             case .human: print("✔ ISO 已弹出; bootFromDiskOnly=true")
             case .json:  printJSON(["ok": "true"])

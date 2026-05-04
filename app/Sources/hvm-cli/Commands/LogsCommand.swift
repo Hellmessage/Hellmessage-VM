@@ -10,6 +10,7 @@ import ArgumentParser
 import Foundation
 import HVMBundle
 import HVMCore
+import HVMEncryption
 
 struct LogsCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -29,8 +30,24 @@ struct LogsCommand: AsyncParsableCommand {
     func run() async throws {
         do {
             let bundleURL = try BundleResolve.resolve(vm)
-            let config = try BundleIO.load(from: bundleURL)
-            let logsDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id)
+            // 加密 VM 走 routing JSON 拿 displayName + id, 不解密 (查日志不需要密码)
+            let displayName: String
+            let vmId: UUID
+            if let scheme = EncryptedBundleIO.detectScheme(at: bundleURL) {
+                let routingURL: URL
+                switch scheme {
+                case .qemuPerfile:    routingURL = RoutingJSON.locationForQemuBundle(bundleURL)
+                case .vzSparsebundle: routingURL = RoutingJSON.locationForSparsebundle(bundleURL)
+                }
+                let routing = try RoutingJSON.read(from: routingURL)
+                displayName = routing.displayName
+                vmId = routing.vmId
+            } else {
+                let config = try BundleIO.load(from: bundleURL)
+                displayName = config.displayName
+                vmId = config.id
+            }
+            let logsDir = HVMPaths.vmLogsDir(displayName: displayName, id: vmId)
             guard FileManager.default.fileExists(atPath: logsDir.path) else {
                 print("(无日志: \(logsDir.path))")
                 return

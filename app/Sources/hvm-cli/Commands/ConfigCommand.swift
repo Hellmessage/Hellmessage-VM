@@ -6,6 +6,7 @@ import ArgumentParser
 import Foundation
 import HVMBundle
 import HVMCore
+import HVMEncryption
 
 struct ConfigCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -30,7 +31,8 @@ struct ConfigGetCommand: AsyncParsableCommand {
     func run() async throws {
         do {
             let bundleURL = try BundleResolve.resolve(vm)
-            let config = try BundleIO.load(from: bundleURL)
+            let (config, session) = try EncryptedConfigEditor.load(bundleURL: bundleURL)
+            defer { try? session.close() }
             switch format {
             case .json:
                 printJSON([
@@ -39,12 +41,16 @@ struct ConfigGetCommand: AsyncParsableCommand {
                     "cpuCount":    String(config.cpuCount),
                     "memoryMiB":   String(config.memoryMiB),
                     "memoryGiB":   String(config.memoryMiB / 1024),
+                    "encrypted":   session.isEncrypted ? "true" : "false",
                 ])
             case .human:
                 print("displayName: \(config.displayName)")
                 print("guestOS:     \(config.guestOS.rawValue)")
                 print("cpu:         \(config.cpuCount)")
                 print("memory:      \(config.memoryMiB / 1024) GiB (\(config.memoryMiB) MiB)")
+                if session.isEncrypted {
+                    print("encrypted:   true (\(session.scheme!.rawValue))")
+                }
             }
         } catch {
             format == .json ? bailJSON(error) : bail(error)
@@ -79,7 +85,9 @@ struct ConfigSetCommand: AsyncParsableCommand {
             if BundleLock.isBusy(bundleURL: bundleURL) {
                 throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
             }
-            var config = try BundleIO.load(from: bundleURL)
+            let (loaded, session) = try EncryptedConfigEditor.load(bundleURL: bundleURL)
+            defer { try? session.close() }
+            var config = loaded
             if let c = cpu {
                 guard c >= 1 else {
                     throw HVMError.config(.missingField(name: "cpu 必须 >=1"))
@@ -93,7 +101,7 @@ struct ConfigSetCommand: AsyncParsableCommand {
                 config.memoryMiB = m * 1024
             }
             // VZ 范围由 ConfigBuilder 在下次 start 时校验, 这里不强 import Virtualization
-            try BundleIO.save(config: config, to: bundleURL)
+            try EncryptedConfigEditor.save(config, session: session)
             switch format {
             case .human:
                 print("✔ 已更新 cpu=\(config.cpuCount) memory=\(config.memoryMiB / 1024)gb")

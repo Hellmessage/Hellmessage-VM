@@ -5,6 +5,7 @@ import ArgumentParser
 import Foundation
 import HVMBundle
 import HVMCore
+import HVMEncryption
 
 struct BootFromDiskCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -24,9 +25,11 @@ struct BootFromDiskCommand: AsyncParsableCommand {
             if BundleLock.isBusy(bundleURL: bundleURL) {
                 throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
             }
-            var config = try BundleIO.load(from: bundleURL)
+            let (loaded, session) = try EncryptedConfigEditor.load(bundleURL: bundleURL)
+            defer { try? session.close() }
+            var config = loaded
             config.bootFromDiskOnly = true
-            try BundleIO.save(config: config, to: bundleURL)
+            try EncryptedConfigEditor.save(config, session: session)
 
             switch format {
             case .human: print("✔ 已切换为仅从硬盘启动")

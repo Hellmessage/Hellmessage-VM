@@ -102,11 +102,11 @@ PR-1 ~ PR-10b 全部合入. 覆盖:
 
 | # | 项 | 状态 | 备注 |
 |---|---|---|---|
-| 1 | hvm-cli config 加密适配 | Pending | 🔴 |
-| 2 | hvm-cli disk resize 加密适配 | Pending | 🔴 |
-| 3 | hvm-cli iso 加密适配 | Pending | 🔴 |
-| 4 | hvm-cli boot-from-disk 加密适配 | Pending | 🔴 |
-| 5 | logs/kill/pause/resume 加密 VM 验证 | Pending | 🔴 |
+| 1 | hvm-cli config 加密适配 | Done | 🔴, 走 EncryptedConfigEditor |
+| 2 | hvm-cli disk list/add/resize/delete 加密适配 | Done | 🔴, add/resize 走 QcowLuksFactory |
+| 3 | hvm-cli iso 加密适配 | Done | 🔴, 走 EncryptedConfigEditor |
+| 4 | hvm-cli boot-from-disk 加密适配 | Done | 🔴, 走 EncryptedConfigEditor |
+| 5 | logs/kill/pause/resume 加密 VM 验证 | Done | 🔴, kill/pause/resume 仅 IPC 不读 config; logs 走 routing JSON 不需密码; 真机 e2e 已跑 |
 | 6 | LUKS secret fifo / 缩 unlink 窗口 | Pending | 🟡 |
 | 7 | master/sub key mlock | Pending | 🟡 |
 | 8 | 多盘 encrypt/decrypt/rekey 真机 | Pending | 🟡 |

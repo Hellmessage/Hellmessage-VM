@@ -10,6 +10,7 @@ import ArgumentParser
 import Foundation
 import HVMBundle
 import HVMCore
+import HVMEncryption
 import HVMQemu
 import HVMStorage
 
@@ -68,7 +69,8 @@ struct DiskListCommand: AsyncParsableCommand {
     func run() async throws {
         do {
             let bundleURL = try BundleResolve.resolve(vm)
-            let config = try BundleIO.load(from: bundleURL)
+            let (config, session) = try EncryptedConfigEditor.load(bundleURL: bundleURL)
+            defer { try? session.close() }
             let rows = config.disks.map { d -> [String: String] in
                 let absURL = bundleURL.appendingPathComponent(d.path)
                 let logical = (try? DiskFactory.logicalBytes(at: absURL)) ?? 0
@@ -90,7 +92,7 @@ struct DiskListCommand: AsyncParsableCommand {
                 print("ID         ROLE   SIZE     ACTUAL    PATH")
                 for r in rows {
                     let actualMB = (Double(r["actualBytes"] ?? "0") ?? 0) / 1024 / 1024
-                    let sz = String(format: "%-8s", "\(r["sizeGiB"] ?? "?")gb")
+                    let sz = "\(r["sizeGiB"] ?? "?")gb".padding(toLength: 8, withPad: " ", startingAt: 0)
                     let ac = String(format: "%6.1fmb", actualMB)
                     print("\(r["id"]!.padding(toLength: 11, withPad: " ", startingAt: 0))\(r["role"]!.padding(toLength: 7, withPad: " ", startingAt: 0))\(sz) \(ac)  \(r["path"]!)")
                 }
@@ -127,19 +129,42 @@ struct DiskAddCommand: AsyncParsableCommand {
             guard size >= 1 else {
                 throw HVMError.config(.missingField(name: "disk size 必须 >=1 GiB"))
             }
-            var config = try BundleIO.load(from: bundleURL)
+            let (loaded, session) = try EncryptedConfigEditor.load(bundleURL: bundleURL)
+            defer { try? session.close() }
+            var config = loaded
             let uuid8 = DiskFactory.newDataDiskUUID8()
             let diskFormat: DiskFormat = config.engine == .qemu ? .qcow2 : .raw
             let fileName = BundleLayout.dataDiskFileName(uuid8: uuid8, engine: config.engine)
             let relPath = "\(BundleLayout.disksDirName)/\(fileName)"
             let absURL = bundleURL.appendingPathComponent(relPath)
-            let qemuImg = diskFormat == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
-            try DiskFactory.create(at: absURL, sizeGiB: size, format: diskFormat, qemuImg: qemuImg)
+
+            if let subKeys = session.qemuSubKeys {
+                // 加密 VM: 新数据盘走 LUKS qcow2 (与现有主盘 / 数据盘同样加密)
+                guard diskFormat == .qcow2 else {
+                    throw HVMError.config(.invalidEnum(
+                        field: "engine", raw: config.engine.rawValue,
+                        allowed: ["qemu (加密 VM 数据盘必须 qcow2)"]
+                    ))
+                }
+                let qemuImg = try QemuPaths.qemuImgBinary()
+                let sizeBytes = size * 1024 * 1024 * 1024
+                try QcowLuksFactory.create(at: absURL,
+                                            sizeBytes: sizeBytes,
+                                            key: subKeys.qcow2Disk,
+                                            qemuImg: qemuImg)
+            } else {
+                // 明文 VM: 原 DiskFactory 路径
+                let qemuImg = diskFormat == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
+                try DiskFactory.create(at: absURL, sizeGiB: size, format: diskFormat, qemuImg: qemuImg)
+            }
             config.disks.append(DiskSpec(role: .data, path: relPath, sizeGiB: size, format: diskFormat))
-            try BundleIO.save(config: config, to: bundleURL)
+            try EncryptedConfigEditor.save(config, session: session)
             switch format {
-            case .human: print("✔ 已加数据盘 id=\(uuid8) size=\(size)gb path=\(relPath)")
-            case .json:  printJSON(["ok": "true", "id": uuid8, "path": relPath, "sizeGiB": String(size)])
+            case .human:
+                let suffix = session.isEncrypted ? " (LUKS 加密)" : ""
+                print("✔ 已加数据盘 id=\(uuid8) size=\(size)gb path=\(relPath)\(suffix)")
+            case .json:  printJSON(["ok": "true", "id": uuid8, "path": relPath, "sizeGiB": String(size),
+                                     "encrypted": session.isEncrypted ? "true" : "false"])
             }
         } catch {
             format == .json ? bailJSON(error) : bail(error)
@@ -173,19 +198,39 @@ struct DiskResizeCommand: AsyncParsableCommand {
             if BundleLock.isBusy(bundleURL: bundleURL) {
                 throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
             }
-            var config = try BundleIO.load(from: bundleURL)
+            let (loaded, session) = try EncryptedConfigEditor.load(bundleURL: bundleURL)
+            defer { try? session.close() }
+            var config = loaded
             guard let idx = DiskHelpers.findDiskIndex(id: id, in: config) else {
                 throw HVMError.config(.missingField(name: "disk id=\(id) 未找到"))
             }
             let absURL = bundleURL.appendingPathComponent(config.disks[idx].path)
             let diskFormat = config.disks[idx].format
-            let qemuImg = diskFormat == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
-            try DiskFactory.grow(at: absURL, toGiB: to, format: diskFormat, qemuImg: qemuImg)
+
+            if let subKeys = session.qemuSubKeys {
+                // 加密 VM: LUKS qcow2 走 QcowLuksFactory.grow (传 key + qemu-img)
+                guard diskFormat == .qcow2 else {
+                    throw HVMError.config(.invalidEnum(
+                        field: "disk.format", raw: diskFormat.rawValue,
+                        allowed: ["qcow2 (加密 VM 主/数据盘必须 LUKS qcow2)"]
+                    ))
+                }
+                let qemuImg = try QemuPaths.qemuImgBinary()
+                let toBytes = to * 1024 * 1024 * 1024
+                try QcowLuksFactory.grow(at: absURL,
+                                          toBytes: toBytes,
+                                          key: subKeys.qcow2Disk,
+                                          qemuImg: qemuImg)
+            } else {
+                let qemuImg = diskFormat == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
+                try DiskFactory.grow(at: absURL, toGiB: to, format: diskFormat, qemuImg: qemuImg)
+            }
             config.disks[idx].sizeGiB = to
-            try BundleIO.save(config: config, to: bundleURL)
+            try EncryptedConfigEditor.save(config, session: session)
             switch format {
             case .human: print("✔ disk id=\(id) 已扩容到 \(to)gb (host 侧). guest 内需 resize2fs / 分区工具")
-            case .json:  printJSON(["ok": "true", "id": id, "sizeGiB": String(to)])
+            case .json:  printJSON(["ok": "true", "id": id, "sizeGiB": String(to),
+                                     "encrypted": session.isEncrypted ? "true" : "false"])
             }
         } catch {
             format == .json ? bailJSON(error) : bail(error)
@@ -220,14 +265,16 @@ struct DiskDeleteCommand: AsyncParsableCommand {
                 throw HVMError.config(.invalidEnum(field: "disk.id", raw: "main",
                                                     allowed: ["数据盘 uuid8"]))
             }
-            var config = try BundleIO.load(from: bundleURL)
+            let (loaded, session) = try EncryptedConfigEditor.load(bundleURL: bundleURL)
+            defer { try? session.close() }
+            var config = loaded
             guard let idx = DiskHelpers.findDiskIndex(id: id, in: config) else {
                 throw HVMError.config(.missingField(name: "data disk id=\(id) 未找到"))
             }
             let absURL = bundleURL.appendingPathComponent(config.disks[idx].path)
             try DiskFactory.delete(at: absURL)
             config.disks.remove(at: idx)
-            try BundleIO.save(config: config, to: bundleURL)
+            try EncryptedConfigEditor.save(config, session: session)
             switch format {
             case .human: print("✔ 已删除数据盘 id=\(id)")
             case .json:  printJSON(["ok": "true", "id": id])
