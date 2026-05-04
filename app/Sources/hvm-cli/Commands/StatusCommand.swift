@@ -5,6 +5,7 @@ import ArgumentParser
 import Foundation
 import HVMBundle
 import HVMCore
+import HVMEncryption
 import HVMIPC
 import HVMStorage
 
@@ -23,6 +24,13 @@ struct StatusCommand: AsyncParsableCommand {
     func run() async throws {
         do {
             let bundleURL = try BundleResolve.resolve(vm)
+
+            // 加密 VM 走 routing JSON 拿基础信息 (不解密)
+            if let scheme = EncryptedBundleIO.detectScheme(at: bundleURL) {
+                try printEncryptedStatus(bundleURL: bundleURL, scheme: scheme)
+                return
+            }
+
             let config = try BundleIO.load(from: bundleURL)
 
             let busy = BundleLock.isBusy(bundleURL: bundleURL)
@@ -97,6 +105,71 @@ struct StatusCommand: AsyncParsableCommand {
             }
         } catch {
             format == .json ? bailJSON(error) : bail(error)
+        }
+    }
+
+    // MARK: - 加密 VM (不解密) status
+
+    /// 加密 VM 走 routing JSON + IPC (running 时拿运行态), 不依赖 BundleIO.load.
+    private func printEncryptedStatus(bundleURL: URL,
+                                       scheme: EncryptionSpec.EncryptionScheme) throws {
+        let routingURL: URL
+        switch scheme {
+        case .vzSparsebundle: routingURL = RoutingJSON.locationForSparsebundle(bundleURL)
+        case .qemuPerfile:    routingURL = RoutingJSON.locationForQemuBundle(bundleURL)
+        }
+        let routing = try RoutingJSON.read(from: routingURL)
+
+        let busy = BundleLock.isBusy(bundleURL: bundleURL)
+        var runtimePayload: IPCStatusPayload?
+        if busy, let holder = BundleLock.inspect(bundleURL: bundleURL),
+           !holder.socketPath.isEmpty {
+            let req = IPCRequest(op: IPCOp.status.rawValue)
+            if let resp = try? SocketClient.request(socketPath: holder.socketPath, request: req),
+               resp.ok,
+               let jsonStr = resp.data?["payload"],
+               let jsonData = jsonStr.data(using: .utf8) {
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                runtimePayload = try? decoder.decode(IPCStatusPayload.self, from: jsonData)
+            }
+        }
+
+        switch format {
+        case .json:
+            let obj: [String: Any] = [
+                "name": bundleURL.deletingPathExtension().lastPathComponent,
+                "id": routing.vmId.uuidString,
+                "encrypted": true,
+                "scheme": routing.scheme.rawValue,
+                "guestOS": runtimePayload?.guestOS ?? "unknown (encrypted)",
+                "state": runtimePayload?.state ?? (busy ? "running" : "stopped"),
+                "cpuCount": runtimePayload?.cpuCount as Any,
+                "memoryMiB": runtimePayload?.memoryMiB as Any,
+                "bundlePath": bundleURL.path,
+                "pid": runtimePayload?.pid as Any,
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted]),
+               let s = String(data: data, encoding: .utf8) {
+                print(s)
+            }
+        case .human:
+            print("\(routing.displayName) (encrypted, \(routing.scheme.rawValue))")
+            print("  id:         \(routing.vmId.uuidString)")
+            print("  state:      \(runtimePayload?.state ?? (busy ? "running" : "stopped"))")
+            if let pid = runtimePayload?.pid {
+                print("  host pid:   \(pid)")
+            }
+            if let cpu = runtimePayload?.cpuCount {
+                print("  cpu:        \(cpu) 核")
+            }
+            if let mem = runtimePayload?.memoryMiB {
+                print("  memory:     \(mem / 1024) GiB")
+            }
+            print("  guestOS:    \(runtimePayload?.guestOS ?? "(unknown — VM 未运行, encrypted config 不解密)")")
+            print("  KDF:        \(routing.kdfAlgo) iter=\(routing.kdfIterations)")
+            print("  bundle:     \(bundleURL.path)")
+            print("  详细加密信息: hvm-cli encrypt-status \(bundleURL.deletingPathExtension().lastPathComponent)")
         }
     }
 }

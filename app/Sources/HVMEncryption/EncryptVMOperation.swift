@@ -190,11 +190,11 @@ public enum EncryptVMOperation {
         rollbackTmpDir = false
         log("✔ 转换完成, 替换原文件 ...")
 
-        // 8. 删旧明文 disks (替换前先清)
+        // 8. 删旧明文 disks (best-effort secure-erase 单 pass random + unlink)
         let disksDir = BundleLayout.disksDir(bundleURL)
         if let entries = try? FileManager.default.contentsOfDirectory(atPath: disksDir.path) {
             for n in entries {
-                try? FileManager.default.removeItem(atPath: "\(disksDir.path)/\(n)")
+                SecureErase.eraseFile(at: disksDir.appendingPathComponent(n))
             }
         }
         // mv 临时 disks → 主 disks
@@ -207,21 +207,21 @@ public enum EncryptVMOperation {
             }
         }
 
-        // 9. NVRAM (Win)
+        // 9. NVRAM (Win) — secure-erase 旧明文 efi-vars.fd
         if nvramReplaced {
             let oldVars = BundleLayout.nvramURL(bundleURL)
-            try? FileManager.default.removeItem(at: oldVars)
+            SecureErase.eraseFile(at: oldVars)
             let from = tmpDir.appendingPathComponent("nvram/\(BundleLayout.nvramLuksFileName)")
             let to = BundleLayout.nvramDir(bundleURL).appendingPathComponent(BundleLayout.nvramLuksFileName)
             try FileManager.default.moveItem(at: from, to: to)
         }
 
-        // 10. config.yaml.enc + 删旧 config.yaml
+        // 10. config.yaml.enc + secure-erase 旧 config.yaml (含 MAC / 设备信息等)
         let oldConfigYaml = BundleLayout.configURL(bundleURL)
         let newConfigEnc = bundleURL.appendingPathComponent(EncryptedConfigIO.configEncFileName)
         try? FileManager.default.removeItem(at: newConfigEnc)
         try FileManager.default.moveItem(at: tmpConfigEnc, to: newConfigEnc)
-        try? FileManager.default.removeItem(at: oldConfigYaml)
+        SecureErase.eraseFile(at: oldConfigYaml)
 
         // 11. routing JSON 写到 meta/encryption.json
         let metaDir = BundleLayout.metaDir(bundleURL)
@@ -230,14 +230,15 @@ public enum EncryptVMOperation {
         try? FileManager.default.removeItem(at: routingFinal)
         try FileManager.default.moveItem(at: tmpRoutingURL, to: routingFinal)
 
-        // 12. Windows: 重置 TPM (rm tpm/)
+        // 12. Windows: 重置 TPM. 走 SecureErase 而非裸 rm — tpm/permall 含 BitLocker
+        // recovery key / TPM-sealed secrets, 这些是高敏感.
         var tpmReset = false
         if config.guestOS == .windows {
             let tpmDir = BundleLayout.tpmStateDir(bundleURL)
             if FileManager.default.fileExists(atPath: tpmDir.path) {
-                try? FileManager.default.removeItem(at: tpmDir)
+                SecureErase.eraseDirectory(at: tpmDir)
                 tpmReset = true
-                log("⚠ 已重置 TPM 状态 (BitLocker / SecureBoot 信任根丢失, 首启后 Win 自动重新 attest)")
+                log("⚠ 已 secure-erase 旧 TPM 状态 (BitLocker recovery key 等已覆写); 新 swtpm-key 加密 state 首启自建")
             }
         }
 
