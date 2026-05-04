@@ -56,12 +56,19 @@ public enum ProbeServer {
         let s = SocketServer(socketPath: path)
         do {
             try s.start { req in
-                // SocketServer handler 在独立线程; dispatch 到主线程跑实际逻辑 (操作 NSWindow 必须主线程)
-                DispatchQueue.main.sync {
-                    MainActor.assumeIsolated {
-                        handleRequest(req)
-                    }
+                // SocketServer handler 在 IPC 池线程; 必须 hop 到 MainActor 跑实际逻辑 (操作 NSWindow / SwiftUI state 必须主线程).
+                // 历史: 之前用 DispatchQueue.main.sync — 工作原理上从背景线程调 main.sync 不会自死锁,
+                // 但若主线程同步调用又依赖 IPC 回包的代码出现, 会形成跨线程死锁循环. 改 Task @MainActor + semaphore
+                // 不破坏阻塞语义但避开 main.sync 这把脆性锁
+                let sem = DispatchSemaphore(value: 0)
+                nonisolated(unsafe) var captured: IPCResponse = .failure(
+                    id: req.id, code: "gui.internal", message: "MainActor handler 未返回")
+                Task { @MainActor in
+                    captured = handleRequest(req)
+                    sem.signal()
                 }
+                sem.wait()
+                return captured
             }
             server = s
             log.info("ProbeServer started: \(path.path, privacy: .public)")

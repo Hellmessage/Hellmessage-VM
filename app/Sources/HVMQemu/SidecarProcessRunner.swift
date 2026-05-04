@@ -126,14 +126,23 @@ public final class SidecarProcessRunner: @unchecked Sendable {
             process.standardInput = stdin
         }
 
-        // stderr 异步 read → 落盘
+        // stderr 异步 read → 落盘. write 与 terminationHandler 的 close 在同把 lock 下序列化:
+        // 不加锁时, readability 回调中途 write 与 termination 路径 close+nil 可能交错,
+        // 导致写关闭的 fd (理论上 EBADF) 或 stderrFileHandle 引用 nil 后再 deref.
         stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
                 return
             }
-            try? self?.stderrFileHandle?.write(contentsOf: data)
+            guard let self else { return }
+            self.lock.lock()
+            let fh = self.stderrFileHandle
+            self.lock.unlock()
+            // 拿快照后 write — 跟 close 同一锁保护下抢到的 fh 可能在 unlock 后被 close;
+            // 不致命 (write 抛 EBADF 我们也 try?), 但避免 nil deref. 完整原子需把 write
+            // 也包在 lock 里, 写 stderr 偶尔慢 (磁盘 fsync) 会卡住 termination — tradeoff 取后者
+            try? fh?.write(contentsOf: data)
         }
 
         process.terminationHandler = { [weak self] proc in
@@ -144,16 +153,17 @@ public final class SidecarProcessRunner: @unchecked Sendable {
             case .uncaughtSignal: newState = .crashed(signal: proc.terminationStatus)
             @unknown default:     newState = .exited(code: -1)
             }
+            // close + nil 进锁内, 跟 readability handler 拿 fh snapshot 同锁互斥
             self.lock.lock()
             self._state = newState
             let cbs = self.observers
-            self.lock.unlock()
             // 显式清 stderr readabilityHandler — 老逻辑只靠 availableData.isEmpty (EOF)
             // 触发 self-clear, 但 SIGKILL 路径 kernel 可能不送干净 EOF, 读线程会陷入轮询.
             // 进程 termination 是确定性信号, 在这里清最稳.
             self.stderrPipe.fileHandleForReading.readabilityHandler = nil
             try? self.stderrFileHandle?.close()
             self.stderrFileHandle = nil
+            self.lock.unlock()
             for cb in cbs { cb(newState) }
         }
 

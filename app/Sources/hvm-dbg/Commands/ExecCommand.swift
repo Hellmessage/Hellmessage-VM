@@ -18,7 +18,8 @@
 //   - 推荐 --password-from-stdin (避免命令行 history 泄露)
 //   - 出错时 message 里不带密码
 //
-// 退出码: 0 = guest 命令成功 (exit 0), 非 0 = guest 命令失败 (透传 guest exit code, 上限 255), 6 = 超时.
+// 退出码: 0 = guest 命令成功 (exit 0), 非 0 = guest 命令失败 (透传 guest exit code, 上限 255),
+//         6 = 超时, 7 = sentinel 解析失败 (host 侧没找到 BEGIN/END 标记, 通常 console buffer 被截断或命令未完整执行).
 
 import ArgumentParser
 import Foundation
@@ -110,10 +111,20 @@ struct ExecCommand: AsyncParsableCommand {
             }
         } catch let e as ExitCode {
             throw e
+        } catch ExecSentinelError.notFound {
+            // sentinel 没命中 — 显式映射 ExitCode(7), 跟 timeout(6) 区分; 走 stderr 留个简短提示
+            FileHandle.standardError.write(Data(
+                "exec: console buffer 缺 BEGIN/END sentinel (guest 命令未完整执行 / console 被截断)\n".utf8))
+            throw ExitCode(7)
         } catch {
             format == .json ? bailJSON(error) : bail(error)
         }
     }
+}
+
+/// console 自动登录路径的 sentinel 解析错误. 不当 guest exit code 透传, 单独 ExitCode(7).
+private enum ExecSentinelError: Error {
+    case notFound
 }
 
 // MARK: - 客户端会话状态机
@@ -211,11 +222,12 @@ private final class ConsoleSession {
         // waitForAny 用 256 字节尾窗判断, 这里 sentinel 不长能命中
         _ = try waitForAny([end + ":"])
 
-        // 提取 BEGIN..END 之间内容
+        // 提取 BEGIN..END 之间内容. 找不到 sentinel 直接抛 ExitCode(7), 不再返 -1
+        // — 老路径返 -1 让上层无法区分 "guest 命令真返 -1" 与 "host 解析失败".
         let bufStr = String(data: buffer, encoding: .utf8) ?? ""
         guard let beginRange = bufStr.range(of: begin),
               let endRange   = bufStr.range(of: end + ":", range: beginRange.upperBound..<bufStr.endIndex) else {
-            return (exitCode: -1, stdout: "")
+            throw ExecSentinelError.notFound
         }
         // BEGIN 行后跨过自身 echo 的换行
         var startIdx = beginRange.upperBound

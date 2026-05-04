@@ -147,6 +147,9 @@ struct QemuLaunchCommand: AsyncParsableCommand {
             runner.waitUntilExit()
             throw ExitCode(5)
         }
+        // QmpClient close 是幂等的, 走 defer 兜底任何抛出路径 (queryStatus / waiter / event task 都可能抛).
+        // 之前只在 line 203 显式 close, 中途 throw 漏关 socket fd
+        defer { client.close() }
 
         let status = try await client.queryStatus()
         print("✔ QMP 已连接 — vm status: \(status.status) (running=\(status.running))")
@@ -200,7 +203,7 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         await waiter.wait()
         eventTask.cancel()
         runner.waitUntilExit()
-        client.close()
+        // client.close() 走 defer (line 152), 此处不再显式调; close 幂等再调一次也安全
 
         // swtpm: --terminate 通常已让它自退; 保险再 SIGTERM
         if let s = swtpmRunner {

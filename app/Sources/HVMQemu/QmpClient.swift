@@ -266,6 +266,7 @@ public final class QmpClient: @unchecked Sendable {
     }
 
     /// 同步读到下一个 \r\n 之间的内容 (不含 CRLF). 阻塞直到收齐或超时.
+    /// EINTR (信号打断) 不当错误; SO_RCVTIMEO 触发的 EAGAIN 视作 timeout.
     private func readLineBlocking(timeoutSec: Int) throws -> Data {
         var buffer = Data()
         var byte: UInt8 = 0
@@ -273,11 +274,15 @@ public final class QmpClient: @unchecked Sendable {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSec))
         while Date() < deadline {
             let n = recv(f, &byte, 1, 0)
-            if n <= 0 {
+            if n < 0 {
+                if errno == EINTR { continue }
                 if errno == EAGAIN || errno == EWOULDBLOCK {
                     throw QmpError.timeout
                 }
                 throw QmpError.socketError(reason: "recv greeting", errno: errno)
+            }
+            if n == 0 {
+                throw QmpError.socketError(reason: "EOF during greeting", errno: 0)
             }
             buffer.append(byte)
             if buffer.count >= 2,
@@ -305,7 +310,14 @@ public final class QmpClient: @unchecked Sendable {
                 guard let base = ptr.baseAddress else { return -1 }
                 return recv(f, base, ptr.count, 0)
             }
-            if n <= 0 {
+            if n < 0 {
+                // EINTR: 信号中断, 重试. 历史 bug: 当成 EOF 触发 close, QMP 命令丢失
+                if errno == EINTR { continue }
+                handleEofOrError()
+                return
+            }
+            if n == 0 {
+                // peer EOF
                 handleEofOrError()
                 return
             }

@@ -7,6 +7,13 @@ import Darwin
 import HVMCore
 
 public enum Frame {
+    /// 单帧 payload 上限. 实际用例:
+    ///   - console.read: ringBuffer 256 KiB → base64 ≈ 340 KiB
+    ///   - gui.screenshot: 主窗口 PNG 通常 < 4 MiB → base64 ≈ 5.5 MiB (5K 显示器留余量)
+    ///   - 其他命令几 KiB
+    /// 收紧到 8 MiB 既覆盖 screenshot 上限又防异常请求撑大 parser 内存
+    public static let maxPayloadBytes: UInt32 = 8 * 1024 * 1024
+
     /// 读取单个帧. 返回 nil 表示 peer 正常关闭连接. 超时 / 错误抛 HVMError.ipc.*
     public static func read(fd: Int32) throws -> Data? {
         var lenBytes = [UInt8](repeating: 0, count: 4)
@@ -19,8 +26,8 @@ public enum Frame {
                   (UInt32(lenBytes[1]) << 16) |
                   (UInt32(lenBytes[2]) << 8)  |
                   (UInt32(lenBytes[3]))
-        guard len > 0, len < 16 * 1024 * 1024 else {
-            throw HVMError.ipc(.readFailed(reason: "invalid frame length: \(len)"))
+        guard len > 0, len <= maxPayloadBytes else {
+            throw HVMError.ipc(.readFailed(reason: "invalid frame length: \(len) (max \(maxPayloadBytes))"))
         }
         var payload = [UInt8](repeating: 0, count: Int(len))
         let n = try readExact(fd: fd, into: &payload, count: Int(len))

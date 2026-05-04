@@ -22,7 +22,7 @@ HVM_CLI_BIN     := $(SWIFT_BUILD_DIR)/hvm-cli
 HVM_DBG_BIN     := $(SWIFT_BUILD_DIR)/hvm-dbg
 BUNDLE_STAMP    := $(BUILD_DIR)/.bundle-stamp
 
-.PHONY: all build bundle compile dev test verify clean help icon register-types qemu qemu-clean edk2 edk2-clean build-all xed install uninstall run-app
+.PHONY: all build bundle compile dev verify clean help icon register-types qemu qemu-clean edk2 edk2-clean build-all xed install uninstall run-app
 
 # 默认: release 模式 + 完整 .app 签名
 all: build
@@ -33,7 +33,6 @@ help:
 	@echo "HVM 构建命令:"
 	@echo "  make build      — release 模式, 组装 .app + 签名 (默认; QEMU 缺则跳过嵌入)"
 	@echo "  make dev        — debug 模式, 组装 .app + 签名"
-	@echo "  make test       — 跑 swift test"
 	@echo "  make verify     — smoke test, 验证 .app 可启动"
 	@echo "  make icon       — 从 app/Resources/AppIcon-src.png 生成 AppIcon.icns"
 	@echo "  make xed        — Xcode 打开 SwiftPM 包 (开发期辅助, 非权威构建路径)"
@@ -85,9 +84,6 @@ bundle: $(BUNDLE_STAMP)
 # debug 变体
 dev:
 	@$(MAKE) build CONFIGURATION=debug
-
-test:
-	swift test --package-path $(PKG_DIR)
 
 verify:
 	@bash scripts/verify-build.sh

@@ -4,16 +4,30 @@
 
 import Foundation
 import Darwin
+import os.lock
 import HVMCore
 
 public final class SocketServer: @unchecked Sendable {
     public typealias Handler = @Sendable (IPCRequest) -> IPCResponse
+
+    /// 单 server 同时处理的连接上限. 超过则新连接立即 close.
+    /// CLI / GUI 探针正常并发 1-2; 32 给重试 + bug 留余量, 上限防失控线程
+    public static let maxConcurrentConnections = 32
 
     private let path: String
     private var listenFd: Int32 = -1
     private var acceptThread: Thread?
     private var handler: Handler?
     private var stopped = false
+
+    /// 跑连接 handler 的 dispatch 队列 (concurrent, 由 GCD 池管线程, 非 1:1 thread-per-conn).
+    /// 配合 activeConnections 计数硬上限, 不会无限制涨.
+    private let connectionQueue = DispatchQueue(
+        label: "hvm.ipc.server.connections",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
+    private let activeConnections = OSAllocatedUnfairLock<Int>(initialState: 0)
 
     private static let log = HVMLog.logger("ipc.server")
 
@@ -102,14 +116,31 @@ public final class SocketServer: @unchecked Sendable {
             if client < 0 {
                 if stopped || errno == EBADF { return }
                 if errno == EINTR { continue }
+                // 其他 errno 可能是临时资源 (EMFILE / ENFILE / ENOMEM) 或瞬时网络故障;
+                // 至少 sleep 10ms 防忙轮询打爆 CPU
+                Self.log.warning("accept failed errno=\(errno)")
+                usleep(10_000)
                 continue
             }
-            // 每连接一个线程 (M1 简化; 生产上限并发, 但 CLI 访问量很小)
+            // 上限保护: 超过 maxConcurrentConnections 立即拒绝. CLI/GUI 探针正常 1-2 连接,
+            // 真到 32 多半是 client 漏 close 或对端无限重连
+            let allowed = activeConnections.withLock { count -> Bool in
+                if count >= Self.maxConcurrentConnections { return false }
+                count += 1
+                return true
+            }
+            if !allowed {
+                Self.log.warning("ipc reject: active \(Self.maxConcurrentConnections) saturated")
+                close(client)
+                continue
+            }
             let conn = client
-            Thread { [weak self] in
-                self?.handleConnection(fd: conn)
+            connectionQueue.async { [weak self] in
+                guard let self else { close(conn); return }
+                self.handleConnection(fd: conn)
                 close(conn)
-            }.start()
+                self.activeConnections.withLock { $0 -= 1 }
+            }
         }
     }
 

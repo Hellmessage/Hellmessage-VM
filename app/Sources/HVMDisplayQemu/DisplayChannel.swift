@@ -293,9 +293,18 @@ public final class DisplayChannel: @unchecked Sendable {
 
     /// 把 length 字节读入 buf, 同时将首个 cmsg fd 写入 fdSink (若提供).
     /// fdSink 已有非负值时再来一个 fd 视为协议错误, 抛 multipleFDs.
+    /// **fd 生命周期约定**: 抛错时, 内部统一闭合 sink.pointee 已存的 fd 并归零;
+    /// 调用方拿到正常 return 才需要负责关 sink.pointee. 中途崩了不留泄漏 fd 给调用方追.
     private func recvIntoBuffer(_ buf: inout Data,
                                  length: Int,
                                  fdSink: UnsafeMutablePointer<Int32>?) throws {
+        // sink 已存 fd 时关闭并归零 (在 throw 之前调用)
+        let drainSink = {
+            if let sink = fdSink, sink.pointee >= 0 {
+                Darwin.close(sink.pointee)
+                sink.pointee = -1
+            }
+        }
         var got = 0
         try buf.withUnsafeMutableBytes { ptr -> Void in
             while got < length {
@@ -306,11 +315,13 @@ public final class DisplayChannel: @unchecked Sendable {
                                           &localFD)
                 if n == 0 {
                     if localFD >= 0 { Darwin.close(localFD) }
+                    drainSink()
                     throw RecvError.eof
                 }
                 if n < 0 {
                     let err = errno
                     if localFD >= 0 { Darwin.close(localFD) }
+                    drainSink()
                     throw RecvError.ioError(errno: err)
                 }
                 if localFD >= 0 {

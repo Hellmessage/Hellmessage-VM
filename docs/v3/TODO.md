@@ -131,6 +131,97 @@ PR-1 ~ PR-10b 全部合入. 覆盖:
 |---|---|---|---|
 | **G1** | hvm-dbg GUI 测试协议 (HDP-GUI) | Done | 🛠, 用户提议 2026-05-04. PR-G1 (probe server + screenshot) / PR-G2+G3 (ProbeRegistry + gui list/click/type/read) / PR-G5 (PR-11 dialog 补 .hvmProbe). **D-G2 决策变更**: 弃 NSAccessibility 路径, 走自家 closure 注册表 (SwiftUI a11y 不暴露给程序内查询; ProbeRegistry 直接 closure 调用更稳). PR-G4 (event subscribe) 推后 (YAGNI). 真机 e2e: hvm-dbg gui 自动化跑通 Win11 → encrypt → decrypt 全 GUI 链路 |
 
+## 🔍 代码审计 (2026-05-04) — 中/低/安全/约束/优化项
+
+> 来源: 全 `app/Sources/` (排除 Tests) 静态审计 (~36K 行 Swift/C). 高严重 BUG 已在 commit 中修复 (5 项落地, 3 项确认误报). 下表是非阻塞但应排日程清掉的项. 编号 A-* 是 audit, 跟主 TODO 数字号区分.
+
+### A. 中严重 BUG
+
+> 状态更新 (2026-05-04 第二轮): A 节 11 项中, 实修 5 项 + 误报 5 项 + 重复主 #12 1 项. 详见 status 列.
+
+| # | 项 | 文件 | 状态 | 备注 |
+|---|---|---|---|---|
+| A1 | IPC `Frame` 16MB 上限过宽 | [Frame.swift:9](app/Sources/HVMIPC/Frame.swift) | **Done** | 收紧到 8 MiB (`Frame.maxPayloadBytes`); 满足 console 256KB / screenshot 5K 显示器 ≈ 5.5MB / 普通命令几 KB |
+| A2 | `IPSWFetcher` 按 `postingDate` 去重 | [IPSWFetcher.swift:219](app/Sources/HVMInstall/IPSWFetcher.swift) | **误报** | 实际已用 `dedup[e.buildVersion]` 作主键, postingDate 仅作版本选择 |
+| A3 | `ConsoleBridge.appendChunk` 内 `logHandle == nil` 判断与 open 之间有窗口竞态 | [ConsoleBridge.swift:153](app/Sources/HVMBackend/ConsoleBridge.swift) | **误报** | 整个函数体在 `lock.lock(); defer { lock.unlock() }` 内, 检查+open+write 都原子 |
+| A4 | `MacInstaller` `defer { consoleBridge.close() }` 在装机过程中过早关 console | [MacInstaller.swift:99](app/Sources/HVMInstall/MacInstaller.swift) | **误报** | `defer` 在函数退出时触发, 此时 VZ 实例已释放; 后续若调 `VMHandle.start()`, 是另一个独立的 ConsoleBridge |
+| A5 | `BundleIO.load` 主盘路径未走 `isDiskPathInSandbox`, `../../../etc` 风险 | [BundleIO.swift:114](app/Sources/HVMBundle/BundleIO.swift) | **Done** | 重排顺序: sandbox 校验 → 主盘唯一 → 存在性. 防攻击者控制 path 触发 stat() 任意路径 |
+| A6 | `RekeyVMOperation` config.enc + routing JSON 改密非原子 | [RekeyVMOperation.swift](app/Sources/HVMEncryption/RekeyVMOperation.swift) | Done (#12) | — |
+| A7 | `EncryptionKDF.deriveAll` 重复 derive 4 次 + master 多次进普通堆 | [EncryptionKDF.swift](app/Sources/HVMEncryption/EncryptionKDF.swift) | **Done** | 单次进 `masterKey.withBytes` mlock buffer, 4 子 key 在同一 closure 内算完, 暴露面 4→1 |
+| A8 | `DetailContainerView.onChange` 重新 subscribe 形成订阅链 | [DetailContainerView.swift:142](app/Sources/HVM/UI/Content/DetailContainerView.swift) | **误报** | `withObservationTracking` 的 onChange 是单次回调, 触发后 tracker 失效再 subscribe 是 Observation 标准模式; refresh 改的是本地字段不在 AppModel 里, 不会触发新一轮 |
+| A9 | `AppModel.stateTickTimer` 单例 dealloc 时未 invalidate | [AppModel.swift:267](app/Sources/HVM/Services/AppModel.swift) | **Skipped** | 尝试加 deinit invalidate 与 @MainActor 隔离冲突, 卫生收益不抵 nonisolated(unsafe) 暴露面成本; AppModel 单例进程退出即销毁, 实际无影响. `[weak self]` 已防 stale closure |
+| A10 | `SidecarProcessRunner.stderrFileHandle.write` 在 readabilityHandler 回调与 termination 路径间无 lock | [SidecarProcessRunner.swift:130](app/Sources/HVMQemu/SidecarProcessRunner.swift) | **Done** | readability 回调拿 `fh = stderrFileHandle` snapshot 进锁, termination 路径 close + nil 进同把锁; tradeoff: 不把 write 整块包锁 (磁盘 fsync 慢会阻塞 termination) |
+| A11 | `QemuLaunchCommand` `c.close()` 无 defer, 抛错时 QmpClient 泄漏 | [QemuLaunchCommand.swift:152](app/Sources/hvm-dbg/Commands/QemuLaunchCommand.swift) | **Done** | guard let client 后立即 `defer { client.close() }`; close 幂等, 末尾显式调那行删除 |
+
+### B. 低严重 BUG
+
+| # | 项 | 文件 | 备注 |
+|---|---|---|---|
+| B1 | `LogSink.writeLine` `try? fh.write` 静默吞日志写错 | [LogSink.swift:142](app/Sources/HVMUtils/LogSink.swift) | 至少 `os_log` 一次 |
+| B2 | `BundleLock.write` JSON encode 失败无 log, 诊断难 | [BundleLock.swift:77](app/Sources/HVMBundle/BundleLock.swift) | 加 warning |
+| B3 | `ResumableDownloader` partial 文件 promote 与 size 检查间无锁 | [ResumableDownloader.swift:399](app/Sources/HVMInstall/ResumableDownloader.swift) | 包 lock |
+| B4 | `recv_fd.c` VLA `int fds[fd_count]` 实际 fd_count ≤ 1 安全, 理论可栈溢出 | [recv_fd.c:64](app/Sources/HVMScmRecv/recv_fd.c) | 改固定大小 (FD_MAX = 4) |
+| B5 | `LuksSecretFile.write` 不处理 EINTR, 短写重试可丢字节 | [LuksSecretFile.swift:51](app/Sources/HVMEncryption/LuksSecretFile.swift) | 加 EINTR 循环 |
+| B6 | `SecureErase.SecRandomCopyBytes` 返回码未检查 | [SecureErase.swift:56](app/Sources/HVMEncryption/SecureErase.swift) | 检查 errSecSuccess |
+
+### C. 安全问题
+
+| # | 项 | 严重 | 文件 | 备注 |
+|---|---|---|---|---|
+| C1 | `Paths.sanitizeForFilesystem` 未禁 `.` 开头, 允许 `.ssh-uuid8/` 隐藏目录 | 中 | [Paths.swift:56](app/Sources/HVMUtils/Paths.swift) | 显式禁 dot-leading |
+| C2 | `SocketServer` socket 父目录创建未指定权限, bind 前的 unlink 存在 symlink 攻击窗口 (低概率, 单用户场景) | 中 | [SocketServer.swift:28](app/Sources/HVMIPC/SocketServer.swift) | 父目录 0700 + bind 前 lstat 检查 |
+| C3 | `ExecCommand.readLine` 读密码后 String 未清零, core dump 可泄漏 | 中 | [ExecCommand.swift:75](app/Sources/hvm-dbg/Commands/ExecCommand.swift) | 改 SecureBytes (HVMEncryption 已有) |
+| C4 | `gui.type/read` 暴露全部 identifier, 无白名单 (release 默认未启 ProbeServer 已部分 mitigate) | 低 | [GuiCommand.swift:180](app/Sources/hvm-dbg/Commands/GuiCommand.swift) | 加 identifier 前缀白名单 |
+| C5 | `BundleLock` `.lock` 文件 0o644 应改 0o600 | 低 | [BundleLock.swift:47](app/Sources/HVMBundle/BundleLock.swift) | umask + chmod |
+
+### D. CLAUDE.md UI 约束违规
+
+| # | 项 | 严重 | 文件 | 备注 |
+|---|---|---|---|---|
+| D1 | `StatusBadge` 硬编码 `.padding(.horizontal, 10) .vertical, 4)` | 高 | [DetailBars.swift:42](app/Sources/HVM/UI/Content/DetailBars.swift) | 新增 `HVMSpace.statusBadgePadH/V` 或复用现有 token |
+| D2 | `MenuPopoverView` `Divider().padding(.leading, 70)` 硬编码 | 中 | [MenuPopoverView.swift:71](app/Sources/HVM/UI/Shell/MenuPopoverView.swift) | 改相对计算或 token |
+| D3 | `Theme.swift` HVMFont 内部多处 `.padding(.vertical, 8/7)` 硬编码 | 低 | [Theme.swift:183/215/281/333/367](app/Sources/HVM/UI/Style/Theme.swift) | 组件层豁免也应文档化原因 |
+| D4 | `CloneVMDialog` `.padding(.top, 2)` 硬编码 | 低 | [CloneVMDialog.swift:128](app/Sources/HVM/UI/Dialogs/CloneVMDialog.swift) | `HVMSpace.v2` |
+| D5 | `HVMToggle` `.padding(2)` 硬编码 | 低 | [HVMToggle.swift:68](app/Sources/HVM/UI/Style/HVMToggle.swift) | `HVMSpace.v2` |
+
+### E. 优化点 (非 bug, 排日程)
+
+| # | 项 | 严重 | 文件 |
+|---|---|---|---|
+| E1 | `LogSink` 每行 log 都 `synchronize()`, 改按天 rotate 时再 sync | 中 | [LogSink.swift:36](app/Sources/HVMUtils/LogSink.swift) |
+| E2 | `AppModel.startIpswFetch.onProgress` 每帧 spawn 新 Task, 改 debounce | 中 | [AppModel.swift:650](app/Sources/HVM/Services/AppModel.swift) |
+| E3 | `ExecCommand.waitForAny` `usleep(150_000)` 改事件驱动 (console.read 加 long-poll) | 中 | [ExecCommand.swift:170](app/Sources/hvm-dbg/Commands/ExecCommand.swift) |
+| E4 | `FramebufferRenderer` `MTLBuffer` deallocator 不处理 munmap 失败 | 中 | [FramebufferRenderer.swift:170](app/Sources/HVMDisplayQemu/FramebufferRenderer.swift) |
+| E5 | `Frame.readExact` 单字节循环, 改批量读 | 中 | [Frame.swift:49](app/Sources/HVMIPC/Frame.swift) |
+| E6 | screenshot/console payload 已 base64 又套 JSON 双层编码, 改 binary frame | 中 | [HVMIPC/Protocol.swift](app/Sources/HVMIPC) |
+| E7 | `DiskFactory.readToEnd()` 无 timeout, qemu-img 大输出会阻塞 | 低 | [DiskFactory.swift:129](app/Sources/HVMStorage/DiskFactory.swift) |
+| E8 | `ResumableDownloader` `Pipe()` 不读, 缓冲满后子进程阻塞, 改 `nullDevice` | 低 | [ResumableDownloader.swift:270](app/Sources/HVMInstall/ResumableDownloader.swift) |
+| E9 | `IPResolver` ARP 缓存 5s 过短, 改 30-60s | 低 | [IPResolver.swift:47](app/Sources/HVMNet/IPResolver.swift) |
+| E10 | `IPCCall` 每次 GUI 命令新建 socket, 加连接池 | 低 | [IPCCall.swift:25](app/Sources/HVMGuiProbe/IPCCall.swift) |
+| E11 | `DetailBars.list.first(where:)` 每帧 O(N), 加 dict cache | 低 | [DetailBars.swift:94](app/Sources/HVM/UI/Content/DetailBars.swift) |
+| E12 | `CreateVMDialog.onAppear` 同步 IO 阻塞主线程 | 低 | [CreateVMDialog.swift:123](app/Sources/HVM/UI/Dialogs/CreateVMDialog.swift) |
+| E13 | `SidebarView` VM > 100 时无 search filter | 低 | [SidebarView.swift:48](app/Sources/HVM/UI/Content/SidebarView.swift) |
+| E14 | `SignalGuard` signal context 用 `String.withCString`, 严格说应改纯 C 字串 | 低 | [SignalGuard.swift:131](app/Sources/HVMUtils/SignalGuard.swift) |
+
+### F. 高严重 BUG — 已修 (本审计 commit)
+
+| # | 项 | 文件 | 修法 |
+|---|---|---|---|
+| F1 | `SocketServer` 每条 IPC 连接 `Thread().start()` 无上限 | [SocketServer.swift:97-126](app/Sources/HVMIPC/SocketServer.swift) | 改 concurrent `DispatchQueue` + 32 路硬上限 (HVMIPC + ProbeServer 共享) |
+| F2 | `QmpClient.readLineBlocking` 单字节 `recv` 不处理 EINTR / 不区分 EOF | [QmpClient.swift:269](app/Sources/HVMQemu/QmpClient.swift) | EINTR continue + EOF 显式抛 |
+| F3 | `QmpClient.readLoop` recv 把 EINTR 当 EOF, QMP 命令丢 | [QmpClient.swift:303](app/Sources/HVMQemu/QmpClient.swift) | EINTR continue, n==0 才 EOF |
+| F4 | `DisplayChannel.recvIntoBuffer` throw 时 sink.pointee 已存的 fd 不被关闭, 调用方追不到 → fd 泄漏 | [DisplayChannel.swift:296](app/Sources/HVMDisplayQemu/DisplayChannel.swift) | 加 `drainSink()` 在所有 throw 前关 sink fd |
+| F5 | `ProbeServer` 用 `DispatchQueue.main.sync` 阻塞 IPC 线程, 主线程繁忙时长抖 | [ProbeServer.swift:60](app/Sources/HVMGuiProbe/ProbeServer.swift) | 改 Task @MainActor + DispatchSemaphore |
+| F6 | `ExecCommand` sentinel 解析失败返 `exit=-1`, 与 guest 真返 -1 无法区分 | [ExecCommand.swift:218](app/Sources/hvm-dbg/Commands/ExecCommand.swift) | 改抛 `ExecSentinelError.notFound` → ExitCode(7) |
+
+### G. 高严重 BUG — 误报 (审计回溯, 不修)
+
+| # | 项 | 误报原因 |
+|---|---|---|
+| G1 | `VMHandle.delegate` 强引用环 | VZ.delegate 是 weak; Delegate 闭包 `[weak self]`; 无环. 仅 `vm` / `delegate` 字段在 stop 后未清, 是次态遗留, 不是泄漏 (下次 start 会覆盖) |
+| G2 | `EncryptVMDialog.Task.detached` data race | progressLog 闭包内已用 `Task { @MainActor in ... }` hop 主线程; @State 跨 struct copy 通过 SwiftUI 共享存储, 不是真 race |
+| G3 | `AppModel.startIpswFetch [self]` retain | AppModel 是单例, 注释明确说明 (line 636); Task 短生命; URLSession 后台 queue 不持久持有 |
+
 ## 不在本清单内 (明确划走)
 
 - **VZ sparsebundle 加密接入** — 推后 (ENCRYPTION.md v2.4 决策), 等用户回头

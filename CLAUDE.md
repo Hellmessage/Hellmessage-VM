@@ -42,6 +42,14 @@
   - `swift-argument-parser` (CLI 参数解析)
   - `Yams` (YAML 1.1 解析, libyaml C 包装; BundleIO 读写 config.yaml 用)
 
+## 测试约束 **必须遵守**
+
+- **不写 XCTest** — `import XCTest` / `XCTestCase` / `XCTAssert*` 一律禁止
+- 原因: XCTest framework 仅 Xcode.app 自带, 用户机器 `xcode-select -p` 指向 `/Library/Developer/CommandLineTools` (CLT only) 时 swift test 直接 `no such module 'XCTest'` 跑不起. 历史 38 个测试在 CLT 设置下静默失效, 维护成本高反误判 "测试通过"
+- **不在 `app/Tests/` 下落任何 .swift 文件** — Tests/ 整个目录已清, 不重建. Package.swift 不再带 `.testTarget(...)`
+- **验证手段**: 走 `make build` (编译期保证) + 真机 e2e (`hvm-cli` / `hvm-dbg gui` 自动化). 不用单测框架
+- 例外: 若未来真要加测试, 先在 docs/v3/ 起设计稿讨论框架选型 (swift-testing / Quick-Nimble / 纯 Swift assertion 函数), 不得直接落 XCTest
+
 ## 签名与 Entitlement 约束
 
 - 必须的 entitlement: `com.apple.security.virtualization`(Apple Developer 账号自带, 不用申请)

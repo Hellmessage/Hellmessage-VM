@@ -110,24 +110,25 @@ public enum BundleIO {
             throw HVMError.bundle(.parseFailed(reason: "\(error)", path: configURL.path))
         }
 
-        // 主盘存在 + 路径走 config.disks (不再依赖 BundleLayout 常量推断)
-        guard let main = config.disks.first(where: { $0.role == .main }) else {
-            throw HVMError.config(.missingField(name: "disks 中无 role=main 的盘"))
-        }
-        let mainURL = bundleURL.appendingPathComponent(main.path)
-        guard fm.fileExists(atPath: mainURL.path) else {
-            throw HVMError.bundle(.primaryDiskMissing(path: mainURL.path))
-        }
-
-        // 所有 disk 路径必须落在 disks/ 下
+        // **sandbox 校验先于一切路径解析** — 防 main.path = "../../../etc/passwd"
+        // 之前先 appendingPathComponent + fileExists, 再 isDiskPathInSandbox, 顺序反了:
+        // 攻击者控制的 path 会先触发对任意路径的 stat(2) (信息泄漏面), 再被拦.
+        // 所有 disk (含主盘) 路径必须落在 disks/ 下, 不许 ".." 回跳
         for d in config.disks where !BundleLayout.isDiskPathInSandbox(d.path) {
             throw HVMError.bundle(.outsideSandbox(requestedPath: d.path))
         }
 
-        // 主盘唯一
-        let mainCount = config.disks.filter { $0.role == .main }.count
-        if mainCount != 1 {
+        // 主盘唯一 + 存在
+        let mains = config.disks.filter { $0.role == .main }
+        guard mains.count == 1, let main = mains.first else {
+            if mains.isEmpty {
+                throw HVMError.config(.missingField(name: "disks 中无 role=main 的盘"))
+            }
             throw HVMError.config(.duplicateRole(role: "main"))
+        }
+        let mainURL = bundleURL.appendingPathComponent(main.path)
+        guard fm.fileExists(atPath: mainURL.path) else {
+            throw HVMError.bundle(.primaryDiskMissing(path: mainURL.path))
         }
 
         return config

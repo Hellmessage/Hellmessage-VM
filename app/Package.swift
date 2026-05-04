@@ -111,50 +111,7 @@ let package = Package(
             ]
         ),
 
-        // 单元测试 (XCTest), 只覆盖纯逻辑模块, VZ 相关不测 (需要 macOS host + 资源)
-        .testTarget(
-            name: "HVMCoreTests",
-            dependencies: ["HVMCore"]
-        ),
-        .testTarget(
-            name: "HVMBundleTests",
-            dependencies: ["HVMBundle", "HVMCore"]
-        ),
-        .testTarget(
-            name: "HVMNetTests",
-            dependencies: ["HVMNet", "HVMCore"]
-        ),
-        .testTarget(
-            name: "HVMStorageTests",
-            dependencies: ["HVMStorage", "HVMBundle", "HVMCore"]
-        ),
-        .testTarget(
-            name: "HVMInstallTests",
-            dependencies: ["HVMInstall", "HVMCore"]
-        ),
-        .testTarget(
-            name: "HVMIPCTests",
-            dependencies: ["HVMIPC", "HVMCore"]
-        ),
-        .testTarget(
-            name: "HVMDisplayTests",
-            dependencies: ["HVMDisplay", "HVMBundle", "HVMCore"]
-        ),
-        .testTarget(
-            name: "HVMDisplayQemuTests",
-            dependencies: ["HVMDisplayQemu", "HVMCore"]
-        ),
-        .testTarget(
-            name: "HVMQemuTests",
-            dependencies: ["HVMQemu", "HVMBundle", "HVMCore"]
-        ),
-        .testTarget(
-            name: "HVMScmRecvTests",
-            dependencies: ["HVMScmRecv"]
-        ),
-        .testTarget(
-            name: "HVMEncryptionTests",
-            dependencies: ["HVMEncryption", "HVMBundle", "HVMCore"]
-        ),
+        // 测试 target 已全部移除. CLAUDE.md 约束: 不写 XCTest. 验证走 make build + 真机 e2e
+        // (hvm-cli / hvm-dbg / GUI), 不再维护 unit test 矩阵.
     ]
 )

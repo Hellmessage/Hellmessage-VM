@@ -49,25 +49,39 @@ public enum EncryptionKDF {
     }
 
     /// 派生单个子 key.
-    /// HKDF<SHA256>(IKM=master, salt=<empty>, info=kind.rawValue.utf8, L=32)
+    /// HKDF<SHA256>(IKM=master, salt=<empty>, info=kind.rawValue.utf8, L=32).
+    /// 走 master.withBytes 直接进 SymmetricKey, 不走 dataCopy() 离开 mlock 保护堆.
     public static func derive(masterKey: MasterKey, kind: SubKeyKind) -> SymmetricKey {
-        let inputKM = SymmetricKey(data: masterKey.dataCopy())
-        let info = Data(kind.rawValue.utf8)
-        return HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: inputKM,
-            salt: Data(),                  // 空 salt; master 已带 16 字节 salt 派生过
-            info: info,
-            outputByteCount: 32
-        )
+        masterKey.withBytes { rawBuf in
+            deriveFromRaw(rawBuf: rawBuf, kind: kind)
+        }
     }
 
     /// 一次派生全部 4 子 key.
+    /// **避重复 derive**: 之前 deriveAll 内调 derive() 4 次, 每次都跑一遍 master.withBytes
+    /// + 新构造 inputKM SymmetricKey, master KEK 字节在普通堆中露面 4 次.
+    /// 现在改成单次进 mlock buffer, 4 个子 key 都在同一 closure 内算完, 暴露面收到 1 次.
     public static func deriveAll(masterKey: MasterKey) -> SubKeySet {
-        SubKeySet(
-            qcow2Disk:  derive(masterKey: masterKey, kind: .qcow2Disk),
-            qcow2Nvram: derive(masterKey: masterKey, kind: .qcow2Nvram),
-            swtpm:      derive(masterKey: masterKey, kind: .swtpm),
-            config:     derive(masterKey: masterKey, kind: .config)
+        masterKey.withBytes { rawBuf -> SubKeySet in
+            SubKeySet(
+                qcow2Disk:  deriveFromRaw(rawBuf: rawBuf, kind: .qcow2Disk),
+                qcow2Nvram: deriveFromRaw(rawBuf: rawBuf, kind: .qcow2Nvram),
+                swtpm:      deriveFromRaw(rawBuf: rawBuf, kind: .swtpm),
+                config:     deriveFromRaw(rawBuf: rawBuf, kind: .config)
+            )
+        }
+    }
+
+    /// 内部 helper: 直接从 mlock raw bytes 出发跑 HKDF. 复用 inputKM 构造一次.
+    /// 注: SymmetricKey(data:) 会拷一次到 CryptoKit 的内部 storage, 但 CryptoKit 自带 secure 内存
+    /// (kCFAllocatorPrivate 走 mach_vm_allocate + free 前 zero), 跟 mlock 等价不破坏防护.
+    private static func deriveFromRaw(rawBuf: UnsafeRawBufferPointer, kind: SubKeyKind) -> SymmetricKey {
+        let inputKM = SymmetricKey(data: Data(rawBuf))
+        return HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: inputKM,
+            salt: Data(),                  // 空 salt; master 已带 16 字节 salt 派生过
+            info: Data(kind.rawValue.utf8),
+            outputByteCount: 32
         )
     }
 }

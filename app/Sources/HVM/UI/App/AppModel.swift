@@ -266,6 +266,8 @@ public final class AppModel {
 
     public init() {
         // AppModel 是 App 全生命周期单例, 不需要 deinit 清 timer (进程退出即销毁).
+        // [weak self] 已防 stale closure 反向持有; 想加 deinit invalidate 受 @MainActor 隔离阻断
+        // (deinit 不能访问 actor-isolated state), 不值得为单例加 nonisolated(unsafe) 暴露面
         stateTickTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshList() }
         }
