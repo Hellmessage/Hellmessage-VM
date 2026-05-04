@@ -5,6 +5,7 @@
 import SwiftUI
 import HVMBundle
 import HVMCore
+import HVMEncryption
 import HVMQemu
 import HVMStorage
 
@@ -51,9 +52,6 @@ struct DiskAddDialog: View {
 
     private func create() {
         do {
-            if BundleLock.isBusy(bundleURL: item.bundleURL) {
-                throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
-            }
             guard let sizeGiB = UInt64(sizeText), sizeGiB >= 1 else {
                 throw HVMError.config(.missingField(name: "disk size 必须 >=1 GiB"))
             }
@@ -61,18 +59,41 @@ struct DiskAddDialog: View {
                 at: item.bundleURL.path,
                 requiredBytes: sizeGiB * (1 << 30)
             )
-            var config = try BundleIO.load(from: item.bundleURL)
+            // 加密 VM: 走 QcowLuksFactory + sub.qcow2Disk; 明文 VM: 走 DiskFactory.
+            // 物理 disk 文件创建在 saveConfig 之前 — 万一 saveConfig 抛错再 cleanup 文件
+            // (避免文件已建但 config 没引用的孤儿; 跟 hvm-cli 同步).
             let uuid8 = DiskFactory.newDataDiskUUID8()
-            // 数据盘格式跟随 VM engine: VZ → raw .img, QEMU → qcow2 .qcow2
-            let format: DiskFormat = config.engine == .qemu ? .qcow2 : .raw
-            let fileName = BundleLayout.dataDiskFileName(uuid8: uuid8, engine: config.engine)
+            let isEncrypted = item.isEncrypted
+            // 加密 VM 必走 qemu engine (设计约束), 数据盘永远 qcow2 (LUKS); 明文跟 engine 走
+            let engine: Engine = item.config?.engine ?? (isEncrypted ? .qemu : .vz)
+            let format: DiskFormat = engine == .qemu ? .qcow2 : .raw
+            let fileName = BundleLayout.dataDiskFileName(uuid8: uuid8, engine: engine)
             let relPath = "\(BundleLayout.disksDirName)/\(fileName)"
             let absURL = item.bundleURL.appendingPathComponent(relPath)
-            let qemuImg = format == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
-            try DiskFactory.create(at: absURL, sizeGiB: sizeGiB, format: format, qemuImg: qemuImg)
-            config.disks.append(DiskSpec(role: .data, path: relPath, sizeGiB: sizeGiB, format: format))
-            try BundleIO.save(config: config, to: item.bundleURL)
-            model.refreshList()
+
+            if isEncrypted {
+                guard let diskKey = model.unlockedSubKeys[item.id]?.qcow2Disk else {
+                    throw HVMError.encryption(.wrongPassword)
+                }
+                let qemuImg = try QemuPaths.qemuImgBinary()
+                try QcowLuksFactory.create(at: absURL,
+                                            sizeBytes: sizeGiB * (1 << 30),
+                                            key: diskKey,
+                                            qemuImg: qemuImg)
+            } else {
+                let qemuImg = format == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
+                try DiskFactory.create(at: absURL, sizeGiB: sizeGiB, format: format, qemuImg: qemuImg)
+            }
+
+            do {
+                try model.saveConfig(item: item) { config in
+                    config.disks.append(DiskSpec(role: .data, path: relPath, sizeGiB: sizeGiB, format: format))
+                }
+            } catch {
+                // saveConfig 抛错回滚物理 disk 文件防孤儿
+                try? FileManager.default.removeItem(at: absURL)
+                throw error
+            }
             close()
         } catch {
             errors.present(error)

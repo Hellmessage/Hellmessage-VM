@@ -17,10 +17,10 @@ public enum HVMLog {
     /// 各模块以 category 区分日志来源.
     /// 第一次调用会触发 LogSink.shared.start() (幂等), 启用文件 mirror.
     public static func logger(_ category: String) -> Logger {
-        // LogSink 是 @MainActor, 我们不能在任意线程同步调 start;
-        // 但 LogSink.shared.start() 内部都是轻量赋值 + Task.detached, 跨 actor 触发即可.
-        Task { @MainActor in
-            LogSink.shared.start()
+        // LogSink 是 actor (非 MainActor), start 跑在 cooperative pool 不阻塞主线程.
+        // 任意线程都能 spawn 这个 Task, await 自动 hop 到 actor executor.
+        Task {
+            await LogSink.shared.start()
         }
         return Logger(subsystem: subsystem, category: category)
     }

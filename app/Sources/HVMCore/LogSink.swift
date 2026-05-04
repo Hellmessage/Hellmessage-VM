@@ -2,7 +2,7 @@
 // 把 os.Logger 的日志异步 mirror 到 ~/Library/Application Support/HVM/logs/<yyyy-MM-dd>.log,
 // 按天 rotate, 保留 14 天 (docs/ARCHITECTURE.md "日志").
 //
-// 实现路径: 用 OSLogStore.getEntries 周期性 (5s) 拉取本进程的 OSLogEntry, 过滤 subsystem,
+// 实现路径: 用 OSLogStore.getEntries 周期性拉取本进程的 OSLogEntry, 过滤 subsystem,
 // 写入当日文件. 优点:
 //   - 不改 HVMLog.logger API (依然返 os.Logger), 现有 call site 全部不动
 //   - Console.app 的体验保留 (subsystem == com.hellmessage.vm)
@@ -13,6 +13,11 @@
 //   - OSLogStore.scope: .currentProcessIdentifier — 跨进程 (例如 hvm-cli 短命进程) 不进文件
 //     这是对的: hvm-cli 自己的 stdout 已经够看, 长期落盘只需要 GUI 主进程 / VMHost 持续运行的
 //
+// 隔离: actor (非 MainActor) — getEntries 是同步阻塞 syscall (50-200ms 持 unified logging
+// 锁). 老实现 @MainActor 让 pollOnce 跑在主线程, 每 30s 撞 main → MTKView draw 被 starve →
+// framebuffer 周期卡顿 (用户实测每 30s 一次). 改 actor 后 getEntries 跑在 cooperative
+// thread pool, 主线程零阻塞, poll 可恢复 5s 不掉帧.
+//
 // 启动方式: HVMLog.logger 第一次调用时 lazy 启动 LogSink.shared (在 HVMLog 内部).
 // 进程退出时通过 atexit 拉一次最终 flush — 主流程崩溃可能丢最后 5s, 但崩溃路径下我们已经
 // 通过 os.Logger 把信息写到 OSLogStore 持久化了, 用户事后可用 `log show` 拉.
@@ -21,19 +26,17 @@ import Foundation
 import os
 import OSLog
 
-/// 日志文件 sink, MainActor 隔离 (rotateIfNeeded 写文件不应跨线程乱).
-@MainActor
-public final class LogSink {
+/// 日志文件 sink. actor 隔离串行化 fileHandle / lastPosition / currentDay 等可变状态;
+/// 跑在 cooperative thread pool, 不占主线程.
+public actor LogSink {
     public static let shared = LogSink()
 
     /// 日志保留天数, 超过的 .log 文件自动删
     public static let retentionDays: Int = 14
-    /// 轮询间隔. OSLogStore.getEntries 是同步阻塞 syscall, 持系统级 unified logging
-    /// 锁; 长跑进程 (GUI / VMHost) entries 多, 单次扫描 50-200ms, 期间 main thread
-    /// 上的 os.Logger 调用会短暂阻塞 → MTKView draw 调度被 starve → 用户看到 framebuffer
-    /// 周期卡顿. 调到 30s: 文件 .log 滞后 30s 用户接受 (紧急排查用 Console.app 看实时
-    /// OSLog), 卡顿频率从 12/min 降到 2/min, 单次 spike 被 ProMotion displayLink 平滑掉.
-    private static let pollIntervalSec: UInt64 = 30
+    /// 轮询间隔. 5s 是早期默认, 之前因 LogSink @MainActor 导致每次 poll 阻塞主线程 50-200ms,
+    /// 一度被改到 30s 减卡顿. 现 actor 化后 getEntries 跑在 cooperative pool, 主线程零阻塞,
+    /// 5s 恢复给用户更小日志延迟.
+    private static let pollIntervalSec: UInt64 = 5
 
     private var started = false
     private var pollTask: Task<Void, Never>?

@@ -112,11 +112,12 @@ public enum RekeyVMOperation {
         // 写新 config 到 staging (用 new sub.config)
         try EncryptedConfigIO.save(config: config, to: bundleURL, key: newSubKeys.config,
                                      overrideURL: stagedConfig)
-        // 写新 routing 到 staging
+        // 写新 routing 到 staging. guestOS 保持原 config (rekey 不改 guestOS).
         let newRouting = RoutingMetadata(
             vmId: config.id,
             scheme: .qemuPerfile,
             displayName: config.displayName,
+            guestOS: config.guestOS,
             kdfSalt: newSalt
         )
         try RoutingJSON.write(newRouting, to: stagedRouting)

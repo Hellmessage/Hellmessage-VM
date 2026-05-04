@@ -26,6 +26,7 @@ final class DetailContainerView: NSView {
     // 当前展示的 hosting view, 根据状态重建
     private var currentEmptyHost: NSHostingView<DetailEmptyState>?
     private var currentStoppedHost: NSHostingView<StoppedContentView>?
+    private var currentLockedHost: NSHostingView<UnlockPanel>?
     private var currentRemoteRunningHost: NSHostingView<RemoteRunningContentView>?
     private var currentTopBar: NSHostingView<DetailTopBar>?
     private var currentBottomBar: NSHostingView<DetailBottomBar>?
@@ -54,6 +55,9 @@ final class DetailContainerView: NSView {
 
     private enum ShowState: Equatable {
         case empty
+        /// 加密 VM 在 GUI 内未走过"配置查看解锁" — 详情区显示 UnlockPanel 让用户输密码.
+        /// 解锁后 (AppModel.unlockedConfigs[id] 有值) 自动切到 .stopped (item.config 非 nil).
+        case locked(UUID)
         case stopped(UUID)
         /// 本进程内有 session 的 running (VZ embedded display 路径)
         case running(UUID)
@@ -200,6 +204,11 @@ final class DetailContainerView: NSView {
             }
             return .runningRemote(sel)
         }
+        // 加密 VM 未在 GUI 内解过 config (item.config == nil 说明还是 routing-only) → UnlockPanel.
+        // 解锁后 AppModel.refreshList 会用 unlockedConfigs[id] 重建 item, config 非 nil → 直接 .stopped
+        if item.isEncrypted, item.config == nil {
+            return .locked(sel)
+        }
         return .stopped(sel)
     }
 
@@ -207,6 +216,7 @@ final class DetailContainerView: NSView {
         // 清掉旧
         currentEmptyHost?.removeFromSuperview(); currentEmptyHost = nil
         currentStoppedHost?.removeFromSuperview(); currentStoppedHost = nil
+        currentLockedHost?.removeFromSuperview(); currentLockedHost = nil
         currentRemoteRunningHost?.removeFromSuperview(); currentRemoteRunningHost = nil
         currentTopBar?.removeFromSuperview(); currentTopBar = nil
         currentBottomBar?.removeFromSuperview(); currentBottomBar = nil
@@ -226,6 +236,8 @@ final class DetailContainerView: NSView {
         switch state {
         case .empty:
             buildEmpty()
+        case .locked(let id):
+            buildLocked(id: id)
         case .stopped(let id):
             buildStopped(id: id)
         case .running(let id):
@@ -233,6 +245,21 @@ final class DetailContainerView: NSView {
         case .runningRemote(let id):
             buildRemoteRunning(id: id)
         }
+    }
+
+    private func buildLocked(id: UUID) {
+        guard let item = model.list.first(where: { $0.id == id }) else { buildEmpty(); return }
+        let host = NSHostingView(rootView: UnlockPanel(model: model, errors: errors, item: item))
+        host.translatesAutoresizingMaskIntoConstraints = false
+        host.sizingOptions = .minSize
+        addSubview(host)
+        NSLayoutConstraint.activate([
+            host.topAnchor.constraint(equalTo: runningTabsBar.bottomAnchor),
+            host.bottomAnchor.constraint(equalTo: bottomAnchor),
+            host.leadingAnchor.constraint(equalTo: leadingAnchor),
+            host.trailingAnchor.constraint(equalTo: trailingAnchor),
+        ])
+        currentLockedHost = host
     }
 
     // MARK: - 各态构造

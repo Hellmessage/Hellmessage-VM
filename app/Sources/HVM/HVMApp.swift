@@ -11,6 +11,7 @@ import AppKit
 import SwiftUI
 import HVMBundle
 import HVMCore
+import HVMEncryption
 import HVMGuiProbe
 import HVMNet
 
@@ -168,14 +169,22 @@ final class HVMAppDelegate: NSObject, NSApplicationDelegate {
         exitAccessoryMode()
         for url in urls {
             guard url.pathExtension == "hvmz" else { continue }
-            guard let config = try? BundleIO.load(from: url) else {
+            // 加密 VM 没 config.yaml, 走 routing JSON 拿 vmId; 明文 VM 走 BundleIO
+            let vmId: UUID?
+            if EncryptedBundleIO.detectScheme(at: url) != nil {
+                let routingURL = RoutingJSON.locationForQemuBundle(url)
+                vmId = (try? RoutingJSON.read(from: routingURL))?.vmId
+            } else {
+                vmId = (try? BundleIO.load(from: url))?.id
+            }
+            guard let id = vmId else {
                 errors.present(HVMError.bundle(.parseFailed(
                     reason: "无法解析 bundle", path: url.path
                 )))
                 continue
             }
             model.refreshList()
-            model.selectedID = config.id
+            model.selectedID = id
         }
     }
 

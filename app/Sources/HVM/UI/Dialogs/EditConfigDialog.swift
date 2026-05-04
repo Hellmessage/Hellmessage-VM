@@ -93,9 +93,6 @@ struct EditConfigDialog: View {
 
     private func save() {
         do {
-            if BundleLock.isBusy(bundleURL: item.bundleURL) {
-                throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
-            }
             guard let cpuInt = Int(cpuText), cpuInt >= 1 else {
                 throw HVMError.config(.missingField(name: "cpu 必须 >=1"))
             }
@@ -112,14 +109,15 @@ struct EditConfigDialog: View {
                     throw HVMError.config(.missingField(name: "networks[\(idx)] MAC 格式非法 (\(net.macAddress))"))
                 }
             }
-            var config = try BundleIO.load(from: item.bundleURL)
-            config.cpuCount = cpuInt
-            config.memoryMiB = memGiB * 1024
-            config.networks = draft.networks
-            config.clipboardSharingEnabled = draft.clipboardSharingEnabled
-            config.macStyleShortcuts = draft.macStyleShortcuts
-            try BundleIO.save(config: config, to: item.bundleURL)
-            model.refreshList()
+            // 走 saveConfig 走加密分流 (加密 VM 重密 .yaml.enc; 明文 VM BundleIO.save).
+            // BundleLock isBusy 校验已封装在 saveConfig 内 (requireStopped 默认 true)
+            try model.saveConfig(item: item) { config in
+                config.cpuCount = cpuInt
+                config.memoryMiB = memGiB * 1024
+                config.networks = draft.networks
+                config.clipboardSharingEnabled = draft.clipboardSharingEnabled
+                config.macStyleShortcuts = draft.macStyleShortcuts
+            }
             close()
         } catch {
             errors.present(error)

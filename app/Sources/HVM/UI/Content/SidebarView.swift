@@ -4,6 +4,7 @@
 import SwiftUI
 import HVMBundle
 import HVMCore
+import HVMGuiProbe
 
 struct SidebarView: View {
     @Bindable var model: AppModel
@@ -46,11 +47,15 @@ struct SidebarView: View {
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 4) {
                     ForEach(model.list) { item in
+                        let captured = item.id
                         Row(item: item,
                             isSelected: model.selectedID == item.id,
                             isRunning: item.runState == "running")
                             .contentShape(Rectangle())
-                            .onTapGesture { model.selectedID = item.id }
+                            .onTapGesture { model.selectedID = captured }
+                            .hvmProbe(id: "sidebar.vmRow.\(item.displayName)",
+                                       label: item.displayName,
+                                       action: .button { model.selectedID = captured })
                     }
                 }
                 .padding(.horizontal, HVMSpace.sm)

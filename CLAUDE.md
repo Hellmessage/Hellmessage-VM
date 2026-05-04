@@ -26,6 +26,20 @@
 - **QEMU 后端例外**(详见下「QEMU 后端约束」): 打包者机器允许 `scripts/qemu-build.sh` + `scripts/edk2-build.sh` 自动安装 Homebrew 与一组锁定 brew 包, 仅用于编译 QEMU + EDK2 源码; **最终用户机器**仍零依赖, 所有运行时产物随 `.app` 包内分发
 - `make build` 自身**不**编译 QEMU / EDK2; 缺 QEMU 产物时 `.app` 仍可构建但不嵌入 QEMU 后端; 完整发布走 `make build-all`(先 `make edk2` + `make qemu` 再 `make build`)
 
+## 修复验证约束 **必须遵守**
+
+任何 bug 修复 / 新功能落地后, 仅 `make build` 通过 **不算完成**, 必须做"完整测试":
+
+1. **`make build` + `make install`** — 编译 + 签名 + 同步 `/Applications/HVM.app`
+2. **同模式遗漏点扫查** — 用 `grep` 过一遍仓库, 找出所有"看起来一样的相关调用点", 全部修完才能交差. 例: 修 "加密 VM 改 config" 路径时必须 `grep BundleIO.save / BundleIO.load` 整树, 把 ISO 切换 / cpu/mem 编辑 / disk 加删 / 剪贴板共享等所有写 config 的地方一起修, 不能只修用户当前撞到的那一个
+3. **smoke 验证 binary 存活** — `hvm-cli list` / `hvm-dbg --help` / 其他 readonly CLI 命令, 至少跑一遍确认进程不崩
+4. **改动模块的 e2e 走一遍** — 加密 VM 改动走 hvm-cli 创建 → encrypt → 锁定 → 解锁 → 改 config → 启动验证; UI 改动走 `hvm-dbg gui` 自动化 (HVM_GUI_PROBE=1 启 server) 跑通主路径; 命令行改动直接 `build/hvm-cli <subcommand>` 跑实际命令
+5. **回归扫查** — 改动涉及共用 helper 时 (例如 `AppModel.saveConfig`), grep 所有调用方确认无遗漏
+6. **明确报告未测的项** — 若某些路径无法在本地复现 (例如多 VM 并发 / 跨 Mac portable), 在交付报告中显式列出 "**未实测**: ...", 不假装测过
+7. **真机操作受限时**: 若需要用户密码 (例如加密 VM 启动 / vmnet daemon 安装) 不能自动跑, 创建 throwaway 测试 VM 用 agent 自家密码跑通主路径; 实在跑不了的明确告知用户哪步要他配合
+
+反例 (历史教训): "加密 VM `安装完成` 按钮报 Bundle 未找到" 这条, 当时只修了 `installCompletedAction` 一处, 没扫 `BundleIO.save` 全树, 留下 ISO / cpu/mem / disk 等所有同模式调用点全有同 bug; 直到用户撞到才发现. 必须避免。
+
 ## 构建约束
 
 - 所有构建产物输出到根目录 `build/`(`build/HVM.app`, `build/hvm-cli`, `build/hvm-dbg`)

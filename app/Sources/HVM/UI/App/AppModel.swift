@@ -28,26 +28,30 @@ public final class AppModel {
 
         public var isEncrypted: Bool { encryptionScheme != nil }
 
-        /// 明文 VM 构造
-        public init(bundleURL: URL, config: VMConfig, runState: String) {
+        /// 明文 VM 构造. 加密 VM 解锁后查看配置走这条 (传 encryptionScheme 保留锁标识),
+        /// 启动仍要重新输密码 (GUI 内存只缓存 config 不留 KEK).
+        public init(bundleURL: URL, config: VMConfig, runState: String,
+                    encryptionScheme: EncryptionSpec.EncryptionScheme? = nil) {
             self.id = config.id
             self.bundleURL = bundleURL
             self.displayName = config.displayName
             self.guestOS = config.guestOS
             self.config = config
-            self.encryptionScheme = nil
+            self.encryptionScheme = encryptionScheme
             self.runState = runState
         }
 
-        /// 加密 VM 构造 (从 routing JSON 派生; config 不解密 = nil; guestOS 占位)
+        /// 加密 VM 构造 (从 routing JSON 派生; config 不解密 = nil).
+        /// guestOS 优先走 routing.guestOS (v3 起带), 老 v2 routing 没该字段 nil → fallback .linux.
+        /// 之前一律 placeholder=.linux 导致 Win VM 在解锁前 GUI 显示 Linux 且看不到 "安装完成"
+        /// 等 Win 分支按钮; v3 后 guest 类型可见, 状态字段 (bootFromDiskOnly 等) 仍需解锁.
         public init(bundleURL: URL,
                     routing: RoutingMetadata,
-                    runState: String,
-                    placeholderGuestOS: GuestOSType = .linux) {
+                    runState: String) {
             self.id = routing.vmId
             self.bundleURL = bundleURL
             self.displayName = routing.displayName
-            self.guestOS = placeholderGuestOS
+            self.guestOS = routing.guestOS ?? .linux
             self.config = nil
             self.encryptionScheme = routing.scheme
             self.runState = runState
@@ -169,6 +173,28 @@ public final class AppModel {
     public var decryptItem: VMListItem? = nil       // 加密 → 明文 VM
     public var rekeyItem: VMListItem? = nil         // 改密
 
+    /// 加密 VM 配置查看解锁缓存 — 仅 GUI 进程内存, 不落盘, 不含 master KEK / 密码.
+    /// 用户在 sidebar 选中加密 VM 后, 详情页走 UnlockPanel 弹密码框; 输完密码 →
+    /// PBKDF2 + 解 config.yaml.enc → 写本 dict[vmId] = config → list 刷新 →
+    /// VMListItem.config 非 nil → 详情页正常渲染 (含 "安装完成" 等按钮).
+    /// 启动 VM 仍走 startWithEncryptedPassword (重新输密码), 安全模型不变 (内存只缓存
+    /// 明文 config, 不留可派生 KEK 的物料).
+    /// 用户主动 "锁定" / 5 分钟无活动 / 进程退出时清空.
+    public private(set) var unlockedConfigs: [UUID: VMConfig] = [:]
+    /// 解锁时同步派生的子 key 集 — 用于解锁后改 config (例如点 "安装完成" 切 bootFromDiskOnly).
+    /// 加密 VM 改 config 必须重密 .yaml.enc → 需要 sub.config key. master KEK / password 仍不缓存.
+    /// 跟 unlockedConfigs 生命周期一致, 主动 lock / auto-lock / 进程退出同步清.
+    public private(set) var unlockedSubKeys: [UUID: EncryptionKDF.SubKeySet] = [:]
+    /// 解锁中状态 (避免重复点 / 显示 spinner). vmId → 进行中.
+    public private(set) var unlockingIDs: Set<UUID> = []
+    /// 每个已解锁 VM 的最后活动时间. selectedID 持续指向某 unlocked VM 时, refreshList
+    /// 1Hz 刷新这个时间 (= 用户在看, 续命); 一旦切走 stop 续命, 5 min 后 checkAutoLock 锁回.
+    private var unlockedAt: [UUID: Date] = [:]
+    /// 自动锁定 TTL: 末次活动后多久自动锁
+    public static let unlockedTTLSeconds: TimeInterval = 300   // 5 min
+    /// 自动锁定检查间隔: 太频繁浪费 CPU, 太稀释延迟到自动锁; 30s 让最坏延迟 ≤ TTL+30s
+    private static let autoLockCheckIntervalSec: TimeInterval = 30
+
     /// 扩容请求载体: VM 引用 + 磁盘 id (主盘 "main" / 数据盘 uuid8) + 当前 GiB
     public struct DiskResizeRequest: Identifiable, Sendable {
         public let id: UUID
@@ -263,6 +289,8 @@ public final class AppModel {
     /// QEMU 装机后 reboot 自退). refreshList 内部 mtime 缓存保证只在 BundleLock 状态变化
     /// 时实际更新 list, 1Hz 探测开销可接受.
     private var stateTickTimer: Timer?
+    /// 加密 VM 配置查看解锁的自动锁定检查 timer. 单例下不 invalidate (进程退出自然清).
+    private var autoLockTimer: Timer?
 
     public init() {
         // AppModel 是 App 全生命周期单例, 不需要 deinit 清 timer (进程退出即销毁).
@@ -270,6 +298,11 @@ public final class AppModel {
         // (deinit 不能访问 actor-isolated state), 不值得为单例加 nonisolated(unsafe) 暴露面
         stateTickTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshList() }
+        }
+        // 自动锁定: 每 30s 扫一遍 unlockedAt, 末次活动 > 5 min 的 lockEncryptedConfig
+        autoLockTimer = Timer.scheduledTimer(withTimeInterval: Self.autoLockCheckIntervalSec,
+                                              repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkAutoLockExpired() }
         }
     }
 
@@ -304,7 +337,15 @@ public final class AppModel {
                     continue
                 }
                 guard let routing = try? RoutingJSON.read(from: routingURL) else { continue }
-                let item = VMListItem(bundleURL: u, routing: routing, runState: runState)
+                // 已通过 UnlockPanel 解过配置 → 用解出的 config 走完整 VMListItem (保留 encryptionScheme
+                // 锁标识), 详情页能正常渲染 Resources/Disks/"安装完成" 等; 否则走 routing 派生 (空详情 + UnlockPanel)
+                let item: VMListItem
+                if let unlocked = unlockedConfigs[routing.vmId] {
+                    item = VMListItem(bundleURL: u, config: unlocked, runState: runState,
+                                       encryptionScheme: routing.scheme)
+                } else {
+                    item = VMListItem(bundleURL: u, routing: routing, runState: runState)
+                }
                 items.append(item)
                 newCache[u.path] = (mtime, item)
                 continue
@@ -338,6 +379,13 @@ public final class AppModel {
             selectedID = list.first?.id
         }
 
+        // 自动锁定续命: refreshList 1Hz 由 stateTickTimer 触发, 当前 selectedID 若指向已解锁
+        // 加密 VM, 标记为"用户在看", 续命 unlockedAt[id]. 切走后 stop 续命, checkAutoLockExpired
+        // 5 min 后扫到自动锁回. 主动 click 锁定走 lockEncryptedConfig 立即生效, 不走这里.
+        if let sel = selectedID, unlockedConfigs[sel] != nil {
+            unlockedAt[sel] = Date()
+        }
+
         // QEMU host 子进程退出 (BundleLock 释放, runState→stopped) 后, fanout 上的
         // channel 已断, detached 窗口若还开着会显示僵尸画面 — 主动拆掉.
         // 此处依赖 isBusy() 周期性探测 (refreshList 由 sidebar / popover / timer 触发).
@@ -346,6 +394,20 @@ public final class AppModel {
             return item.runState != "running"
         }
         for id in staleFanoutIDs { tearDownQemuFanout(id: id) }
+    }
+
+    /// 自动锁定扫描: 30s 由 autoLockTimer 触发. 末次活动 > unlockedTTLSeconds 的 VM
+    /// 调 lockEncryptedConfig 锁回. selected 期间 refreshList 持续 touch unlockedAt
+    /// → 永远不到期; 切走后 timer 自然倒数 5 min 自动锁.
+    private func checkAutoLockExpired() {
+        let now = Date()
+        let cutoff = now.addingTimeInterval(-Self.unlockedTTLSeconds)
+        let expired = unlockedAt.compactMap { (id, last) -> UUID? in
+            return last < cutoff ? id : nil
+        }
+        for id in expired {
+            lockEncryptedConfig(id: id)
+        }
     }
 
     public var selectedItem: VMListItem? {
@@ -391,6 +453,90 @@ public final class AppModel {
                 errors.present(error)
             }
         }
+    }
+
+    /// 配置查看解锁 — 输密码 → PBKDF2 → 解 config.yaml.enc 到内存. **不启动 VM**.
+    /// 成功 → unlockedConfigs[id] = 解出的 config → refreshList 让 sidebar/详情切换.
+    /// 错密码 throw .wrongPassword (UnlockPanel inline 显示重试).
+    /// VZ-sparsebundle 暂不接 (设计与启动期 attach 一致再做).
+    /// 安全: 不缓存 master KEK / password — 仅明文 VMConfig (相当于解了 yaml 文件不留 KEK).
+    public func unlockEncryptedConfigForView(item: VMListItem, password: String) async throws {
+        guard let scheme = item.encryptionScheme else { return }   // 明文不该走
+        guard scheme == .qemuPerfile else {
+            throw HVMError.encryption(.parseFailed(
+                reason: "VZ-sparsebundle 加密 GUI 配置查看暂未接入"))
+        }
+        let id = item.id
+        let bundleURL = item.bundleURL
+        unlockingIDs.insert(id)
+        defer { unlockingIDs.remove(id) }
+
+        // PBKDF2 在 detached task 跑 (600k 迭代主线程会顿一下)
+        // 同步派生 SubKeySet 缓存 — 让解锁后 GUI 改 config (例如 "安装完成" 切 bootFromDiskOnly)
+        // 不需重输密码. master KEK 派生完即丢, GUI 内存只留 sub keys + 解出的 config.
+        let result: (config: VMConfig, subKeys: EncryptionKDF.SubKeySet) = try await Task.detached(priority: .userInitiated) {
+            let routingURL = RoutingJSON.locationForQemuBundle(bundleURL)
+            let routing = try RoutingJSON.read(from: routingURL)
+            let master = try PasswordKDF.deriveMasterKey(password: password,
+                                                          salt: routing.kdfSalt,
+                                                          iterations: routing.kdfIterations)
+            let subKeys = EncryptionKDF.deriveAll(masterKey: master)
+            let cfg = try EncryptedConfigIO.load(from: bundleURL, key: subKeys.config)
+            return (cfg, subKeys)
+        }.value
+
+        unlockedConfigs[id] = result.config
+        unlockedSubKeys[id] = result.subKeys
+        // 解锁瞬间也算一次活动 — 给 5 min 倒计时起始点
+        unlockedAt[id] = Date()
+        // 触发 list 重建 — refreshCache 走 routing mtime 不会自动失效, 强制清掉自己这条
+        refreshCache.removeValue(forKey: bundleURL.path)
+        refreshList()
+    }
+
+    /// 主动锁定 — 把 unlockedConfigs[id] 移除, 详情页回到 UnlockPanel 状态.
+    /// 用户主动点 "锁定" 按钮 / checkAutoLockExpired 5 min 自动 / 进程退出自然清.
+    public func lockEncryptedConfig(id: UUID) {
+        guard unlockedConfigs.removeValue(forKey: id) != nil else { return }
+        unlockedSubKeys.removeValue(forKey: id)
+        unlockedAt.removeValue(forKey: id)
+        // 同样要让 cache 失效, 否则 refreshList 拿 cached.item 仍带 config
+        if let item = list.first(where: { $0.id == id }) {
+            refreshCache.removeValue(forKey: item.bundleURL.path)
+        }
+        refreshList()
+    }
+
+    /// 加密 VM 解锁后改 config 的统一入口. 明文 VM 走 BundleIO; 加密 VM 走
+    /// EncryptedConfigIO.save + unlockedSubKeys[id].config 重密 .yaml.enc.
+    /// 加密 VM 未解锁状态点该 helper 抛 .wrongPassword (理论不会触发: 详情页此时是 UnlockPanel,
+    /// 没 "安装完成" 等按钮可点).
+    /// mutate 闭包修改 config 后内部统一刷 unlockedConfigs / refreshCache / refreshList.
+    /// runIfRunning: VM 跑着是否阻止 (true 才检查 isBusy). "安装完成" 类按钮只在 stopped 才该点
+    /// → true; 其他场景 (例如 toggle 剪贴板共享) 跑着也能 mutate yaml → false.
+    public func saveConfig(item: VMListItem,
+                            requireStopped: Bool = true,
+                            mutate: (inout VMConfig) throws -> Void) throws {
+        if requireStopped, BundleLock.isBusy(bundleURL: item.bundleURL) {
+            throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
+        }
+        if item.isEncrypted {
+            guard let configKey = unlockedSubKeys[item.id]?.config,
+                  var current = unlockedConfigs[item.id] else {
+                throw HVMError.encryption(.wrongPassword)
+            }
+            try mutate(&current)
+            try EncryptedConfigIO.save(config: current, to: item.bundleURL, key: configKey)
+            unlockedConfigs[item.id] = current
+            // 用户刚做了 "改配置" 操作, 续命
+            unlockedAt[item.id] = Date()
+            refreshCache.removeValue(forKey: item.bundleURL.path)
+        } else {
+            var current = try BundleIO.load(from: item.bundleURL)
+            try mutate(&current)
+            try BundleIO.save(config: current, to: item.bundleURL)
+        }
+        refreshList()
     }
 
     /// 启动 VM. 加密 VM 必须先 prompt 密码 — 调用方走 requestStartWithPasswordIfNeeded,
@@ -562,10 +708,11 @@ public final class AppModel {
     /// 切换剪贴板共享: 改 yaml 持久化; 若 VM 在跑, 同时通过 IPC clipboard.setEnabled 即时生效.
     /// VM 不在跑时 IPC 部分跳过 (启动时按 yaml 自动生效). 失败抛 HVMError, 由调用方走 errors.present.
     public func toggleClipboardSharing(item: VMListItem, enabled: Bool) throws {
-        // 1) 落 yaml — 即便 IPC 失败也要先持久化, 防止重启后回到旧值
-        var cfg = try BundleIO.load(from: item.bundleURL)
-        cfg.clipboardSharingEnabled = enabled
-        try BundleIO.save(config: cfg, to: item.bundleURL)
+        // 1) 落 yaml — 即便 IPC 失败也要先持久化, 防止重启后回到旧值.
+        // 走 saveConfig 走加密路径分流: 加密 VM 内存中的 sub key 重密 .yaml.enc; running 也允许改
+        try saveConfig(item: item, requireStopped: false) { cfg in
+            cfg.clipboardSharingEnabled = enabled
+        }
         // 2) running → IPC 即时切换
         if item.runState == "running",
            let holder = BundleLock.inspect(bundleURL: item.bundleURL),

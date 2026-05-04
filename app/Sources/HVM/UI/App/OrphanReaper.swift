@@ -24,6 +24,7 @@ import Darwin
 import OSLog
 import HVMCore
 import HVMBundle
+import HVMEncryption
 
 private let log = Logger(subsystem: "com.hellmessage.vm", category: "OrphanReaper")
 
@@ -126,11 +127,19 @@ enum OrphanReaper {
         let fm = FileManager.default
         var removedCount = 0
         for u in urls {
-            // 只读 config 拿 id, 不抢锁 (避免跟可能正在启的 host 子进程争锁导致它误判)
-            guard let cfg = try? BundleIO.load(from: u) else { continue }
+            // 只读 vm id, 不抢锁 (避免跟可能正在启的 host 子进程争锁导致它误判).
+            // 加密 VM 没 config.yaml, 走 routing JSON 拿 id; 明文走 BundleIO.
+            let vmId: UUID?
+            if EncryptedBundleIO.detectScheme(at: u) != nil {
+                let routingURL = RoutingJSON.locationForQemuBundle(u)
+                vmId = (try? RoutingJSON.read(from: routingURL))?.vmId
+            } else {
+                vmId = (try? BundleIO.load(from: u))?.id
+            }
+            guard let id = vmId else { continue }
             // BundleLock busy = host 子进程仍持锁 (合法), 跳过
             if BundleLock.isBusy(bundleURL: u) { continue }
-            let uuidLower = cfg.id.uuidString.lowercased()
+            let uuidLower = id.uuidString.lowercased()
             // 删该 UUID 的所有 run/* 残留
             let suffixes = [".sock", ".qmp", ".qmp.input.sock", ".iosurface.sock",
                              ".vdagent.sock", ".console.sock",

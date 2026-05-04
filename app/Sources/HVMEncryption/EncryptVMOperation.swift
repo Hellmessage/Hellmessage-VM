@@ -183,11 +183,12 @@ public enum EncryptVMOperation {
         // EncryptedConfigIO.save 写到 <bundle>/config.yaml.enc; 这里走临时目录, 自己 in-line.
         try saveEncryptedConfig(config: config, key: subKeys.config, to: tmpConfigEnc)
 
-        // 7. 写临时 routing JSON
+        // 7. 写临时 routing JSON. guestOS 进 v3 让 GUI 解锁前正确显示 guest 类型.
         let routing = RoutingMetadata(
             vmId: config.id,
             scheme: .qemuPerfile,
             displayName: config.displayName,
+            guestOS: config.guestOS,
             kdfSalt: salt
         )
         let tmpRoutingURL = tmpDir.appendingPathComponent("encryption.json")

@@ -416,6 +416,16 @@ struct StoppedContentView: View {
                             .help("解密所有 disks / OVMF VARS / config. 操作不可逆 (除非再 encrypt)")
                             .hvmProbe(id: "detail.encryption.button.decrypt", label: "Decrypt",
                                        action: .button { model.decryptItem = item })
+                        // 仅在 GUI 内已"配置查看解锁" (config 非 nil) 时显示锁定按钮.
+                        // 此按钮立即清掉 unlockedConfigs[id] → 详情页回到 UnlockPanel.
+                        // 自动锁定: AppModel.checkAutoLock 5 分钟无 selected 续命也会自动触发.
+                        if item.config != nil {
+                            Button("锁定") { model.lockEncryptedConfig(id: item.id) }
+                                .buttonStyle(GhostButtonStyle())
+                                .help("立即锁回 — 详情页恢复 UnlockPanel 需重新输入密码 (5 分钟无操作也会自动锁)")
+                                .hvmProbe(id: "detail.encryption.button.lock", label: "Lock",
+                                           action: .button { model.lockEncryptedConfig(id: item.id) })
+                        }
                         Spacer()
                     }
                 } else {
@@ -586,19 +596,21 @@ struct StoppedContentView: View {
         )) { confirmed in
             guard confirmed else { return }
             do {
-                if BundleLock.isBusy(bundleURL: item.bundleURL) {
-                    throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
+                // 先算盘的绝对路径再走 saveConfig: 加密 VM 走 EncryptedConfigIO.save,
+                // 明文 VM 走 BundleIO.save. delete file 在 saveConfig 后跑 — 万一 save 失败
+                // 不会留 dangling file (相比老 load → delete → save 顺序更安全).
+                var deletedAbsURL: URL?
+                try model.saveConfig(item: item) { config in
+                    let relPath = "\(BundleLayout.disksDirName)/data-\(id).img"
+                    guard let idx = config.disks.firstIndex(where: { $0.role == .data && $0.path == relPath }) else {
+                        throw HVMError.config(.missingField(name: "data disk id=\(id) 未找到"))
+                    }
+                    deletedAbsURL = item.bundleURL.appendingPathComponent(config.disks[idx].path)
+                    config.disks.remove(at: idx)
                 }
-                var config = try BundleIO.load(from: item.bundleURL)
-                let relPath = "\(BundleLayout.disksDirName)/data-\(id).img"
-                guard let idx = config.disks.firstIndex(where: { $0.role == .data && $0.path == relPath }) else {
-                    throw HVMError.config(.missingField(name: "data disk id=\(id) 未找到"))
+                if let absURL = deletedAbsURL {
+                    try DiskFactory.delete(at: absURL)
                 }
-                let absURL = item.bundleURL.appendingPathComponent(config.disks[idx].path)
-                try DiskFactory.delete(at: absURL)
-                config.disks.remove(at: idx)
-                try BundleIO.save(config: config, to: item.bundleURL)
-                model.refreshList()
             } catch {
                 errors.present(error)
             }
@@ -808,6 +820,8 @@ struct StoppedContentView: View {
                     }
                     .buttonStyle(GhostButtonStyle())
                     .help("Win Setup 已装完 OS, 切到仅硬盘启动 (仍走 ramfb, 等装驱动)")
+                    .hvmProbe(id: "detail.button.installCompleted", label: "Install Completed",
+                               action: .button { installCompletedAction() })
                 }
                 if cfg.bootFromDiskOnly, !cfg.windowsDriversInstalled {
                     Button(action: driversInstalledAction) {
@@ -815,6 +829,8 @@ struct StoppedContentView: View {
                     }
                     .buttonStyle(GhostButtonStyle())
                     .help("guest 内已装完 viogpudo 等驱动, 切到 hvm-gpu-ramfb-pci 走 virtio-gpu 通路")
+                    .hvmProbe(id: "detail.button.driversInstalled", label: "Drivers Installed",
+                               action: .button { driversInstalledAction() })
                 }
             } else if !needsInstall, let cfg = item.config, cfg.installerISO != nil, !cfg.bootFromDiskOnly {
                 // Linux (VZ / QEMU 后端通用): 装完 OS 切仅硬盘启动.
@@ -825,6 +841,8 @@ struct StoppedContentView: View {
                 }
                 .buttonStyle(GhostButtonStyle())
                 .help("装完 OS 后切到只从硬盘启动")
+                .hvmProbe(id: "detail.button.bootFromDisk", label: "Boot From Disk",
+                           action: .button { bootFromDiskAction() })
             }
 
             // Clone — APFS clonefile + 身份字段重生. 必须 stopped (CloneManager 内部会再校验).
@@ -870,13 +888,7 @@ struct StoppedContentView: View {
 
     private func bootFromDiskAction() {
         do {
-            if BundleLock.isBusy(bundleURL: item.bundleURL) {
-                throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
-            }
-            var config = try BundleIO.load(from: item.bundleURL)
-            config.bootFromDiskOnly = true
-            try BundleIO.save(config: config, to: item.bundleURL)
-            model.refreshList()
+            try model.saveConfig(item: item) { $0.bootFromDiskOnly = true }
         } catch {
             errors.present(error)
         }
@@ -885,14 +897,10 @@ struct StoppedContentView: View {
     /// Windows 阶段 1 → 阶段 2: bootFromDiskOnly=true, 仍 ramfb, 不再加 -no-reboot
     private func installCompletedAction() {
         do {
-            if BundleLock.isBusy(bundleURL: item.bundleURL) {
-                throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
+            try model.saveConfig(item: item) {
+                $0.bootFromDiskOnly = true
+                $0.windowsDriversInstalled = false
             }
-            var config = try BundleIO.load(from: item.bundleURL)
-            config.bootFromDiskOnly = true
-            config.windowsDriversInstalled = false
-            try BundleIO.save(config: config, to: item.bundleURL)
-            model.refreshList()
         } catch {
             errors.present(error)
         }
@@ -901,14 +909,10 @@ struct StoppedContentView: View {
     /// Windows 阶段 2 → 阶段 3: 切 hvm-gpu-ramfb-pci 让 viogpudo 接管 virtio-gpu 通路
     private func driversInstalledAction() {
         do {
-            if BundleLock.isBusy(bundleURL: item.bundleURL) {
-                throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
+            try model.saveConfig(item: item) {
+                $0.bootFromDiskOnly = true
+                $0.windowsDriversInstalled = true
             }
-            var config = try BundleIO.load(from: item.bundleURL)
-            config.bootFromDiskOnly = true
-            config.windowsDriversInstalled = true
-            try BundleIO.save(config: config, to: item.bundleURL)
-            model.refreshList()
         } catch {
             errors.present(error)
         }
@@ -925,14 +929,10 @@ struct StoppedContentView: View {
         panel.prompt = "选择"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            if BundleLock.isBusy(bundleURL: item.bundleURL) {
-                throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
+            try model.saveConfig(item: item) { config in
+                config.installerISO = url.path
+                config.bootFromDiskOnly = false
             }
-            var config = try BundleIO.load(from: item.bundleURL)
-            config.installerISO = url.path
-            config.bootFromDiskOnly = false
-            try BundleIO.save(config: config, to: item.bundleURL)
-            model.refreshList()
         } catch {
             errors.present(error)
         }
@@ -940,14 +940,10 @@ struct StoppedContentView: View {
 
     private func ejectIsoAction() {
         do {
-            if BundleLock.isBusy(bundleURL: item.bundleURL) {
-                throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
+            try model.saveConfig(item: item) { config in
+                config.installerISO = nil
+                config.bootFromDiskOnly = true
             }
-            var config = try BundleIO.load(from: item.bundleURL)
-            config.installerISO = nil
-            config.bootFromDiskOnly = true
-            try BundleIO.save(config: config, to: item.bundleURL)
-            model.refreshList()
         } catch {
             errors.present(error)
         }

@@ -5,6 +5,7 @@
 import SwiftUI
 import HVMBundle
 import HVMCore
+import HVMEncryption
 import HVMQemu
 import HVMStorage
 
@@ -77,36 +78,47 @@ struct DiskResizeDialog: View {
 
     private func resize() {
         do {
-            if BundleLock.isBusy(bundleURL: request.item.bundleURL) {
-                throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
-            }
             guard let toGiB = UInt64(newSizeText), toGiB > request.currentSizeGiB else {
                 throw HVMError.config(.missingField(name: "new size 必须 > 当前 \(request.currentSizeGiB) GiB"))
             }
             let delta = (toGiB - request.currentSizeGiB) * (1 << 30)
             try VolumeInfo.assertSpaceAvailable(at: request.item.bundleURL.path, requiredBytes: delta)
-            var config = try BundleIO.load(from: request.item.bundleURL)
-            let idx: Int?
-            if request.diskID == "main" {
-                idx = config.disks.firstIndex { $0.role == .main }
-            } else {
-                // 兼容老 .img 与新 .qcow2 数据盘
-                let imgPath   = "\(BundleLayout.disksDirName)/data-\(request.diskID).img"
-                let qcow2Path = "\(BundleLayout.disksDirName)/data-\(request.diskID).qcow2"
-                idx = config.disks.firstIndex {
-                    $0.role == .data && ($0.path == imgPath || $0.path == qcow2Path)
+
+            // 加密 VM 的 config 在内存里 (unlockedConfigs[id]); 明文 VM 走 saveConfig 内 BundleIO.load.
+            // 找 idx 在 mutate 闭包内 (闭包 throws), 物理 grow 也在闭包内 — 失败时 saveConfig 不写盘
+            let item = request.item
+            let isEncrypted = item.isEncrypted
+            try model.saveConfig(item: item) { config in
+                let idx: Int?
+                if request.diskID == "main" {
+                    idx = config.disks.firstIndex { $0.role == .main }
+                } else {
+                    let imgPath   = "\(BundleLayout.disksDirName)/data-\(request.diskID).img"
+                    let qcow2Path = "\(BundleLayout.disksDirName)/data-\(request.diskID).qcow2"
+                    idx = config.disks.firstIndex {
+                        $0.role == .data && ($0.path == imgPath || $0.path == qcow2Path)
+                    }
                 }
+                guard let i = idx else {
+                    throw HVMError.config(.missingField(name: "disk id=\(request.diskID) 未找到"))
+                }
+                let absURL = item.bundleURL.appendingPathComponent(config.disks[i].path)
+                let format = config.disks[i].format
+                if isEncrypted {
+                    guard let diskKey = model.unlockedSubKeys[item.id]?.qcow2Disk else {
+                        throw HVMError.encryption(.wrongPassword)
+                    }
+                    let qemuImg = try QemuPaths.qemuImgBinary()
+                    try QcowLuksFactory.grow(at: absURL,
+                                              toBytes: toGiB * (1 << 30),
+                                              key: diskKey,
+                                              qemuImg: qemuImg)
+                } else {
+                    let qemuImg = format == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
+                    try DiskFactory.grow(at: absURL, toGiB: toGiB, format: format, qemuImg: qemuImg)
+                }
+                config.disks[i].sizeGiB = toGiB
             }
-            guard let i = idx else {
-                throw HVMError.config(.missingField(name: "disk id=\(request.diskID) 未找到"))
-            }
-            let absURL = request.item.bundleURL.appendingPathComponent(config.disks[i].path)
-            let format = config.disks[i].format
-            let qemuImg = format == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
-            try DiskFactory.grow(at: absURL, toGiB: toGiB, format: format, qemuImg: qemuImg)
-            config.disks[i].sizeGiB = toGiB
-            try BundleIO.save(config: config, to: request.item.bundleURL)
-            model.refreshList()
             close()
         } catch {
             errors.present(error)

@@ -273,10 +273,12 @@ public enum EncryptedBundleIO {
             throw error
         }
 
-        // 4. 写 routing JSON (与 sparsebundle 同级, 明文)
+        // 4. 写 routing JSON (与 sparsebundle 同级, 明文). guestOS 进 routing v3 让 GUI
+        // 解锁前能正确显示 guest 类型 (不再用 placeholder=.linux 兜底).
         let routing = RoutingMetadata(vmId: vmId,
                                        scheme: .vzSparsebundle,
                                        displayName: displayName,
+                                       guestOS: config.guestOS,
                                        kdfSalt: salt)
         let routingURL = RoutingJSON.locationForSparsebundle(sparsebundleURL)
         do {
@@ -384,10 +386,12 @@ public enum EncryptedBundleIO {
             throw error
         }
 
-        // 4. 写 routing JSON (bundle 内 meta/encryption.json, 明文)
+        // 4. 写 routing JSON (bundle 内 meta/encryption.json, 明文). guestOS 进 routing v3
+        // 让 GUI 解锁前正确显示 Win/Linux 不再 placeholder=.linux.
         let routing = RoutingMetadata(vmId: vmId,
                                        scheme: .qemuPerfile,
                                        displayName: displayName,
+                                       guestOS: config.guestOS,
                                        kdfSalt: salt)
         let routingURL = RoutingJSON.locationForQemuBundle(bundleURL)
         do {

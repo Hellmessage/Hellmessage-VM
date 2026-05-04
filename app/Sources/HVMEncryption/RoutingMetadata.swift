@@ -20,15 +20,21 @@ public struct RoutingMetadata: Sendable, Equatable, Codable {
     /// routing JSON 自己的 schema 版本 (与 VMConfig.schemaVersion 不同维度).
     /// v1: 初稿 (kek_source / keychain_item) — 已废
     /// v2: 加 kdf_* 字段 (强制密码 + 跨机器 portable; v2.2)
-    public static let currentSchemaVersion = 2
+    /// v3: 加 guest_os 字段 — 让加密 VM 解锁前 GUI 能正确显示 Windows/Linux/macOS, 不再
+    ///     掉到 placeholder=.linux. 解锁前可见的"装机完成"等按钮也按真 guestOS 分支.
+    ///     非敏感: 只是 win/linux/macos 三选一, 不暴露 VM 内容. 老 v2 JSON 解码时 guestOS=nil
+    ///     兜底 .linux 保兼容
+    public static let currentSchemaVersion = 3
 
     public var schemaVersion: Int
     public var vmId: UUID
     public var scheme: EncryptionSpec.EncryptionScheme
     public var displayName: String
+    /// guest 操作系统类型. v3 加; 老 v2 routing JSON 解码 nil → 调用方按 .linux 兜底.
+    public var guestOS: GuestOSType?
 
     // KDF 参数 (跨机器派生 master KEK 必备)
-    public var kdfAlgo: String                  // "pbkdf2-sha256" — 未来切 argon2id 升 v3
+    public var kdfAlgo: String                  // "pbkdf2-sha256" — 未来切 argon2id 升 v4
     public var kdfIterations: UInt32
     public var kdfSalt: Data                    // 16 字节 random; JSON 编 base64 (Data 默认)
     public var kdfKeylen: Int                   // 32 (256 bit)
@@ -49,12 +55,14 @@ public struct RoutingMetadata: Sendable, Equatable, Codable {
     public init(vmId: UUID,
                 scheme: EncryptionSpec.EncryptionScheme,
                 displayName: String,
+                guestOS: GuestOSType?,
                 kdfSalt: Data,
                 kdfIterations: UInt32 = PasswordKDF.defaultIterations) {
         self.schemaVersion = Self.currentSchemaVersion
         self.vmId = vmId
         self.scheme = scheme
         self.displayName = displayName
+        self.guestOS = guestOS
         self.kdfAlgo = "pbkdf2-sha256"
         self.kdfIterations = kdfIterations
         self.kdfSalt = kdfSalt
@@ -67,6 +75,7 @@ public struct RoutingMetadata: Sendable, Equatable, Codable {
         case vmId           = "vm_id"
         case scheme
         case displayName    = "display_name"
+        case guestOS        = "guest_os"
         case kdfAlgo        = "kdf_algo"
         case kdfIterations  = "kdf_iterations"
         case kdfSalt        = "kdf_salt"
