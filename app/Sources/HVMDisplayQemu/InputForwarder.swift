@@ -50,6 +50,10 @@ public final class InputForwarder: @unchecked Sendable {
                                        qos: .userInitiated)
     private var sockFD: Int32 = -1
     private var connected: Bool = false
+    /// disconnect() 设置, doConnectWithRetry 内每轮检查; 让 retry 中途
+    /// 提前退出 (否则 60s retry 会把 serial queue 卡满, 后续 disconnect 排队
+    /// 等到 retry 全跑完才能执行).
+    private var cancelled: Bool = false
 
     private let viewSizeLock = NSLock()
     private var viewWidth: Double = 1
@@ -75,13 +79,19 @@ public final class InputForwarder: @unchecked Sendable {
     // MARK: - Public
 
     /// 异步连接 + 完成 QMP 握手. QEMU 子进程 listen socket 通常晚于本类 connect()
-    /// 调用 (跟 DisplayChannel 对齐: 50 次 × 100ms 重试, 最多 5 秒). 全部失败后
-    /// connected 保持 false, 后续 send 静默丢弃.
+    /// 调用 (跟 DisplayChannel 对齐: 600 次 × 100ms 重试, 最多 60 秒). 加密 VM
+    /// 子进程因 PBKDF2 解锁 + LUKS keyslot + secret file + swtpm + unattend
+    /// regen 等步骤, QEMU 真正 bind socket 通常在 BundleLock 拿到后 5-10s,
+    /// 老 5s 窗口对加密 VM 不够 → 黑屏永远不恢复. 60s 给冷启动 + 慢盘留余量.
+    /// 全部失败后 connected 保持 false, 后续 send 静默丢弃.
     public func connect() {
         queue.async { [weak self] in self?.doConnectWithRetry() }
     }
 
     public func disconnect() {
+        // cancelled 在 caller 同步置位 (queue.async 之前), retry 循环本轮就能看到
+        // → tearDown 不必等 60s retry 跑完
+        cancelled = true
         queue.async { [weak self] in self?.forceDisconnect() }
     }
 
@@ -193,7 +203,10 @@ public final class InputForwarder: @unchecked Sendable {
     }
 
     private func doConnectWithRetry() {
-        for attempt in 0..<50 {
+        // 60s 窗口 (600 × 100ms): 加密 VM 子进程解锁 + setup 时间长, 5s 不够;
+        // 明文 VM 通常 1-2s 内连上, 不受影响. cancelled 让 disconnect 中途打断.
+        for attempt in 0..<600 {
+            if cancelled { return }
             if doConnect() {
                 if attempt > 0 {
                     Self.log.info("input QMP connected on attempt \(attempt) socket=\(self.socketPath, privacy: .public)")
@@ -202,7 +215,7 @@ public final class InputForwarder: @unchecked Sendable {
             }
             Thread.sleep(forTimeInterval: 0.1)
         }
-        Self.log.error("input QMP connect attempts exhausted (5s) socket=\(self.socketPath, privacy: .public) — keyboard/mouse events will be dropped")
+        Self.log.error("input QMP connect attempts exhausted (60s) socket=\(self.socketPath, privacy: .public) — keyboard/mouse events will be dropped")
     }
 
     /// 单次 connect + greeting + qmp_capabilities. true=完成握手 connected=true.

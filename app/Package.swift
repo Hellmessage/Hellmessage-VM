@@ -86,7 +86,11 @@ let package = Package(
         // 仅 HVM_GUI_PROBE=1 env 启用 server, release 默认 link 但不启 (体积 +几十 KB).
         .target(
             name: "HVMGuiProbe",
-            dependencies: ["HVMCore", "HVMIPC"]
+            // HVMDisplayQemu: ScreenshotRenderer 把 FramebufferHostView 的当前帧
+            // (renderer.snapshotCGImage) 合成进截图. bitmapImageRepForCachingDisplay
+            // 不抓 Metal-backed view (MTKView 用 IOSurface) → 嵌入 framebuffer 截出来
+            // 是黑块. 必须从 renderer 拿 CGImage 再用 CGContext draw 到对应 rect.
+            dependencies: ["HVMCore", "HVMIPC", "HVMDisplayQemu"]
         ),
 
         // 可执行 target

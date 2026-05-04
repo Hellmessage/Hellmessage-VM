@@ -102,8 +102,21 @@ install_one() {
     done
     args_xml+="    <string>$sock</string>"
 
-    # 旧 daemon 存在则先 bootout 再 bootstrap, 保证新参数生效
+    # 旧 daemon 残留必须彻底清掉, 否则 launchctl bootstrap 偶发 "Bootstrap failed: 5:
+    # Input/output error" — launchd database 内 stale 引用未清, 由 plist file 仍存
+    # 在 / 老 service handle 还没被 GC 触发. 历史 BUG: 用户撞 "shared 缺失 + host 装好 +
+    # 想加 bridged.en8" 这种部分状态, 直接点安装就 error 5; 必须先 "卸载全部" 再装.
+    # 这里强化清理路径: by-label bootout + by-plist bootout (新形式更可靠) + 删 plist 文件,
+    # 让 bootstrap 跑前 launchd 视图里这个 label 不存在任何痕迹.
     launchctl bootout "system/$label" 2>/dev/null || true
+    if [ -f "$plist" ]; then
+        # bootout 接 plist 路径 (Big Sur+) 比 by-label 更彻底, 顺手清掉 launchd 缓存
+        launchctl bootout system "$plist" 2>/dev/null || true
+    fi
+    rm -f "$plist"
+    # 短延迟给 launchd async unload + KeepAlive teardown 一点时间. 实测 bootout 返 0
+    # 不代表 service 真死, 200ms 经验值够覆盖 SIGTERM → exit 路径.
+    sleep 0.2
 
     cat > "$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -135,7 +148,22 @@ EOF
     # 旧残留 socket 先清掉, 避免 socket_vmnet 拒绝 bind
     rm -f "$sock"
 
-    launchctl bootstrap system "$plist"
+    # bootstrap: 一次失败立即兜底重试 (再 bootout + sleep + 重新 bootstrap), 不让用户
+    # 看到 error 5 后还要"卸载全部 → 安装" 两步. launchctl 没有 idempotent install
+    # 的官方 API, 错误码 5 (EIO) 是 launchd 内部 stale state, 二次清理通常就能过.
+    if ! launchctl bootstrap system "$plist" 2>/tmp/hvm-vmnet-bootstrap.err; then
+        local err1
+        err1=$(cat /tmp/hvm-vmnet-bootstrap.err 2>/dev/null || true)
+        echo "    ⚠ bootstrap 第 1 次失败: ${err1:-unknown}, 强制清理后重试 ..."
+        launchctl bootout "system/$label" 2>/dev/null || true
+        launchctl bootout system "$plist" 2>/dev/null || true
+        sleep 0.5
+        if ! launchctl bootstrap system "$plist"; then
+            echo "    ✗ bootstrap 第 2 次仍失败 — 请运行 '$0 --uninstall' 后重试" >&2
+            return 1
+        fi
+    fi
+    rm -f /tmp/hvm-vmnet-bootstrap.err
     # enable 一次, 下次系统重启也会自动起
     launchctl enable "system/$label" 2>/dev/null || true
     echo "    ✓ $label  →  $sock"

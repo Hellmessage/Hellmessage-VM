@@ -126,26 +126,31 @@ final class QemuFanoutSession {
         runConnectLoop()
     }
 
-    /// 异步 connect 重试 (最多 5 秒). 成功后启动 eventLoop. start() / reconnectChannel()
+    /// 异步 connect 重试 (最多 60 秒). 成功后启动 eventLoop. start() / reconnectChannel()
     /// 共用. 相同 socket 路径; eventLoop 重启时 self.channel 已是新实例.
+    /// 60s 窗口 (600 × 100ms): 加密 VM 子进程从 BundleLock 拿到 (GUI 据此判 running
+    /// 触发 fanout.start) 到 QEMU iosurface backend 真正 listen, 加上 PBKDF2 解锁 +
+    /// LUKS keyslot + secret file + swtpm + unattend regen + QEMU init, 通常 5-10s,
+    /// 冷启动可能 20s+. 老 5s 窗口对加密 VM 不够 → 永远黑屏不恢复. 明文 VM 通常 1-2s
+    /// 内连上, 不受窗口扩大影响. Task.cancel 让 stop / refreshList 中途打断.
     private func runConnectLoop() {
         let channel = self.channel
         connectTask = Task.detached(priority: .userInitiated) { [weak self] in
-            for attempt in 0..<50 {
+            for attempt in 0..<600 {
                 do {
                     try channel.connect()
                     log.info("HDP channel connect OK on attempt \(attempt)")
                     await MainActor.run { self?.startEventLoop() }
                     return
                 } catch {
-                    if attempt == 0 || attempt == 10 {
+                    if attempt == 0 || attempt == 50 || attempt == 200 {
                         log.info("HDP connect attempt \(attempt) failed: \(String(describing: error))")
                     }
                     try? await Task.sleep(nanoseconds: 100_000_000)
                     if Task.isCancelled { return }
                 }
             }
-            log.error("HDP connect attempts exhausted (5s)")
+            log.error("HDP connect attempts exhausted (60s)")
         }
     }
 
