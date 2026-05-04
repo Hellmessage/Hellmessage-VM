@@ -51,6 +51,12 @@ public enum RekeyVMOperation {
         }
         let config = handle.config
 
+        // SIGINT 防中断 (PR-C). rekey 没临时目录可清 (in-place 改 LUKS keyslot),
+        // 但仍要拦中断 — keyslot 改一半就 Ctrl-C 退出会导致 config.enc 与 keyslot 不匹配,
+        // 用户两个密码都解不开. 所以这里防中断的价值最高.
+        SignalGuard.install(message: "⚠ 改密进行中, 请等待结束 (中途中断会让 keyslot 与 config.enc 不一致, 两个密码都解不开)")
+        defer { SignalGuard.uninstall(); SignalGuard.clearCleanup() }
+
         // 2. 派生 new
         let newSalt = try PasswordKDF.generateSalt()
         let newMaster = try PasswordKDF.deriveMasterKey(password: newPassword, salt: newSalt)

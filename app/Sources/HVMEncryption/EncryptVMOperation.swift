@@ -97,6 +97,13 @@ public enum EncryptVMOperation {
                                                       withIntermediateDirectories: true)
         }
 
+        // SIGINT 防中断 + 兜底清理 (PR-C). atexit / 二次 Ctrl-C 硬退时跑.
+        SignalGuard.install(message: "⚠ 加密操作进行中, 请等待结束 (再次 Ctrl-C 强制退出, 临时目录可能残留)")
+        SignalGuard.registerCleanup {
+            try? FileManager.default.removeItem(at: tmpDir)
+        }
+        defer { SignalGuard.uninstall(); SignalGuard.clearCleanup() }
+
         // 失败时清临时目录 (保护 main bundle 不动)
         var rollbackTmpDir = true
         defer {
