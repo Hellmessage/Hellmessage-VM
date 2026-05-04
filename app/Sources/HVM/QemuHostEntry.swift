@@ -252,15 +252,15 @@ public enum QemuHostEntry {
         }
         fputs("HVMHost(qemu): QEMU 已启动 (state=\(runner.state)) bundle=\(bundleURL.lastPathComponent)\n", stderr)
 
-        // 加密 secret 文件: 不能立即 unlink — QEMU 是 lazy 解析 -object secret, file= 形式
-        // 在磁盘 attach 时才读 file. 立即 unlink 会让 QEMU 报 ENOENT.
-        // 退而求其次: NSTemporaryDirectory 是 0o600 + 用户私有 (/var/folders/<user>/T/),
-        // session 结束 OS 清; tearDown 时 deinit 会主动 unlink. 残留窗口 = VM 运行期, 接受.
+        // 加密 secret 文件: QEMU 启动 init 阶段 secret object 创建时即读完 file (disk attach
+        // 同步完成于 main_loop 之前). QMP 连接成功 = init 完成 = secret 已读 → 可 unlink.
+        // (TODO #6 缩窗口) 旧策略保留到 VM 退出 (~小时级); 新策略 QMP 连成功后秒级清.
+        // 残留窗口最差 = QMP 连接超时窗口 (HVMTimeout.qmpConnect). tearDown 兜底 cleanup.
         if let dsf = diskSecretFile {
-            fputs("HVMHost(qemu): ✔ disk secret 文件 \(dsf.path) (VM 退出时 unlink)\n", stderr)
+            fputs("HVMHost(qemu): ✔ disk secret 文件 \(dsf.path) (QMP 连成功后 unlink)\n", stderr)
         }
         if let nsf = nvramSecretFile {
-            fputs("HVMHost(qemu): ✔ nvram secret 文件 \(nsf.path) (VM 退出时 unlink)\n", stderr)
+            fputs("HVMHost(qemu): ✔ nvram secret 文件 \(nsf.path) (QMP 连成功后 unlink)\n", stderr)
         }
 
         // 5. NSApp accessory 策略 + 状态栏图标
@@ -291,6 +291,19 @@ public enum QemuHostEntry {
             }
             QemuHostState.shared.qmpClient = client
             fputs("HVMHost(qemu): QMP 已连接\n", stderr)
+
+            // (TODO #6) QMP 已连 = QEMU init 完成 = secret object 已读完 file → 立即 unlink.
+            // 缩残留窗口从 VM 全生命周期 → 启动期 ~秒级.
+            if let dsf = QemuHostState.shared.diskSecretFile {
+                dsf.cleanup()
+                QemuHostState.shared.diskSecretFile = nil
+                fputs("HVMHost(qemu): ✔ disk secret 已 unlink (QMP 连成功后)\n", stderr)
+            }
+            if let nsf = QemuHostState.shared.nvramSecretFile {
+                nsf.cleanup()
+                QemuHostState.shared.nvramSecretFile = nil
+                fputs("HVMHost(qemu): ✔ nvram secret 已 unlink\n", stderr)
+            }
 
             // (6.0 EFI Shell auto-inject 已删除: bootmgfw "Press any key to boot from CD or DVD"
             // 倒计时 5s 内 user 手动按一次任意键即可进 Setup, 跟物理 USB 装机一致, 不再

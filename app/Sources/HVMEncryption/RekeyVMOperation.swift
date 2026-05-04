@@ -1,23 +1,30 @@
 // HVMEncryption/RekeyVMOperation.swift
-// 加密 QEMU VM 改密. 设计稿 docs/v3/ENCRYPTION.md v2.4 PR-10b.
+// 加密 QEMU VM 改密. 设计稿 docs/v3/ENCRYPTION.md v2.4 PR-10b + TODO #12 原子化加固.
 //
-// 流程 (`hvm-cli rekey <vm>`):
+// 流程 (`hvm-cli rekey <vm>`) — TODO #12 原子化重排:
 //   1. 校验 VM stopped + 加密形态
 //   2. EncryptedBundleIO.unlock(oldPassword) → oldSubKeys + config
 //   3. 派生 newSalt + newMaster + newSubKeys
-//   4. for each disk: QcowLuksFactory.rekey(oldKey: oldSubKeys.qcow2Disk, newKey: newSubKeys.qcow2Disk)
-//      (走 amend 两步: add new keyslot → remove old keyslot)
-//   5. nvram (Win): QcowLuksFactory.rekey
-//   6. config.yaml.enc: 用 newSubKeys.config 重 seal (EncryptedConfigIO.save 覆写)
-//   7. 写新 routing JSON (新 salt, 同 iter)
-//   8. 重置 TPM (swtpm-key 也变, 现有 state 用 old swtpm-key 加密, 解不开)
+//   4. **for each disk: addNewKeyslot** (老 + 新都活, 老密码仍能解)
+//   5. **nvram (Win): addNewKeyslot**
+//   6. **atomic write config.yaml.enc** (用 newSubKeys.config)
+//   7. **atomic write routing JSON** (新 salt)
+//   8. **for each disk: removeOldKeyslot** (只剩新 keyslot)
+//   9. **nvram: removeOldKeyslot**
+//   10. 重置 TPM (swtpm-key 也变, 现有 state 用 old swtpm-key 加密, 解不开)
 //
-// 中间失败处理: rekey 中途失败可能让 VM 半旧半新, 用户应记住老密码 + 重试 rekey.
-// QcowLuksFactory.rekey 内部已有 .luksRekeyHalfDone 错误标记 step 2 失败的中间态.
+// 原子化保证: 任何 crash 点都能用某个密码解 (等价于"绝不发生两个密码都解不开"灾难)
+//   - crash in 4-5: routing/config 仍 old → 老密码可继续 (新 keyslot 加了无害)
+//   - crash in 6-7: 双 keyslot 激活 + 部分新 metadata → 新密码可解 (新 keyslot + 新 sub.config + 新 salt)
+//                    若 6 已成功 7 失败 → routing 还是 old salt 但 config 是新 sub 加密
+//                    → 用户输 new 密码 → PBKDF2(new, old salt) ≠ new master → 解不开 config.enc
+//                    **加固**: 6 + 7 用 临时文件 + atomic rename (mv 替换) 让 6/7 等价为单 atomic 写
+//   - crash in 8-9: routing/config 已新, 部分 disk 切完 → 新密码可解全部 (老 keyslot 残留无害)
 //
 // 不做:
 // - swtpm rewrap (无工具; 当前重置 TPM)
 // - 增量 / 部分 rekey (整 VM 一次性)
+// - host crash 在 LUKS amend 的 atomic 区间内 (qemu-img 内部, 无干预空间)
 
 import Foundation
 import CryptoKit
@@ -62,12 +69,12 @@ public enum RekeyVMOperation {
         let newMaster = try PasswordKDF.deriveMasterKey(password: newPassword, salt: newSalt)
         let newSubKeys = EncryptionKDF.deriveAll(masterKey: newMaster)
 
-        // 3. 改 disks 密
+        // 3a. 全部 disks: 加新 keyslot (老 + 新都活, 老密码仍能解)
         for (i, disk) in config.disks.enumerated() {
             let diskURL = bundleURL.appendingPathComponent(disk.path)
             let baseName = (disk.path as NSString).lastPathComponent
-            log("[\(i+1)/\(config.disks.count)] rekey 磁盘 \(baseName) ...")
-            try QcowLuksFactory.rekey(
+            log("[\(i+1)/\(config.disks.count)] addNewKeyslot 磁盘 \(baseName) ...")
+            try QcowLuksFactory.addNewKeyslot(
                 at: diskURL,
                 oldKey: oldSubKeys.qcow2Disk,
                 newKey: newSubKeys.qcow2Disk,
@@ -75,36 +82,90 @@ public enum RekeyVMOperation {
             )
         }
 
-        // 4. 改 nvram 密 (Win)
-        if config.guestOS == .windows {
-            let nvramURL = BundleLayout.nvramDir(bundleURL)
-                .appendingPathComponent(BundleLayout.nvramLuksFileName)
-            if FileManager.default.fileExists(atPath: nvramURL.path) {
-                log("rekey OVMF VARS \(BundleLayout.nvramLuksFileName) ...")
-                try QcowLuksFactory.rekey(
-                    at: nvramURL,
-                    oldKey: oldSubKeys.qcow2Nvram,
-                    newKey: newSubKeys.qcow2Nvram,
-                    qemuImg: qemuImg
-                )
-            }
+        // 3b. nvram (Win): 加新 keyslot
+        var hasNvram = false
+        let nvramURL = BundleLayout.nvramDir(bundleURL)
+            .appendingPathComponent(BundleLayout.nvramLuksFileName)
+        if config.guestOS == .windows && FileManager.default.fileExists(atPath: nvramURL.path) {
+            hasNvram = true
+            log("addNewKeyslot OVMF VARS \(BundleLayout.nvramLuksFileName) ...")
+            try QcowLuksFactory.addNewKeyslot(
+                at: nvramURL,
+                oldKey: oldSubKeys.qcow2Nvram,
+                newKey: newSubKeys.qcow2Nvram,
+                qemuImg: qemuImg
+            )
         }
 
-        // 5. config.yaml.enc 用新 config-key 重 seal
-        // 注: encryption.createdAt 不变 (代表 VM 加密的初始时间, 不是密码 rotation 时间)
-        log("重新加密 config.yaml.enc ...")
-        try EncryptedConfigIO.save(config: config, to: bundleURL, key: newSubKeys.config)
+        // 4. config.yaml.enc + routing JSON: atomic 切换 (TODO #12 原子化关键).
+        // 实现: 先写两个临时文件 → atomic rename 替换 (rename(2) 在 APFS 上 atomic).
+        // 这样用户态视角 6+7 是一个 atomic boundary; crash 在 boundary 之前 = 老 metadata,
+        // crash 在 boundary 之后 = 新 metadata; 二者都能解 (3a/3b 加了 new keyslot, 8 还没 remove old).
+        log("atomic 切换 config.yaml.enc + routing JSON ...")
+        let configEncURL = EncryptedConfigIO.configEncURL(bundleURL)
+        let routingURL = RoutingJSON.locationForQemuBundle(bundleURL)
+        let stagedConfig = configEncURL.appendingPathExtension("staging")
+        let stagedRouting = routingURL.appendingPathExtension("staging")
+        try? FileManager.default.removeItem(at: stagedConfig)
+        try? FileManager.default.removeItem(at: stagedRouting)
 
-        // 6. 写新 routing JSON (覆写老的)
-        let routing = RoutingMetadata(
+        // 写新 config 到 staging (用 new sub.config)
+        try EncryptedConfigIO.save(config: config, to: bundleURL, key: newSubKeys.config,
+                                     overrideURL: stagedConfig)
+        // 写新 routing 到 staging
+        let newRouting = RoutingMetadata(
             vmId: config.id,
             scheme: .qemuPerfile,
             displayName: config.displayName,
             kdfSalt: newSalt
         )
-        try RoutingJSON.write(routing, to: RoutingJSON.locationForQemuBundle(bundleURL))
+        try RoutingJSON.write(newRouting, to: stagedRouting)
 
-        // 7. 重置 TPM (Win): 现有 state 用 old swtpm-key 加密, 用 new swtpm-key 解不开.
+        // atomic replace (FileManager.replaceItemAt 在同卷 = rename(2) 等价)
+        // 顺序: 先 config 后 routing. 任一失败回滚 staging
+        do {
+            if FileManager.default.fileExists(atPath: configEncURL.path) {
+                _ = try FileManager.default.replaceItemAt(configEncURL, withItemAt: stagedConfig)
+            } else {
+                try FileManager.default.moveItem(at: stagedConfig, to: configEncURL)
+            }
+            if FileManager.default.fileExists(atPath: routingURL.path) {
+                _ = try FileManager.default.replaceItemAt(routingURL, withItemAt: stagedRouting)
+            } else {
+                try FileManager.default.moveItem(at: stagedRouting, to: routingURL)
+            }
+        } catch {
+            // atomic 切换失败: staging 文件留 (排查), 但 LUKS keyslot 已加 new — 老密码仍能解
+            try? FileManager.default.removeItem(at: stagedConfig)
+            try? FileManager.default.removeItem(at: stagedRouting)
+            throw error
+        }
+
+        // 5a. disks: 销毁老 keyslot (现 disks/nvram 仍双 keyslot 激活, 删 old 后只剩 new)
+        for (i, disk) in config.disks.enumerated() {
+            let diskURL = bundleURL.appendingPathComponent(disk.path)
+            let baseName = (disk.path as NSString).lastPathComponent
+            log("[\(i+1)/\(config.disks.count)] removeOldKeyslot 磁盘 \(baseName) ...")
+            try QcowLuksFactory.removeOldKeyslot(
+                at: diskURL,
+                oldKey: oldSubKeys.qcow2Disk,
+                newKey: newSubKeys.qcow2Disk,
+                qemuImg: qemuImg
+            )
+        }
+
+        // 5b. nvram: 销毁老 keyslot
+        if hasNvram {
+            log("removeOldKeyslot OVMF VARS \(BundleLayout.nvramLuksFileName) ...")
+            try QcowLuksFactory.removeOldKeyslot(
+                at: nvramURL,
+                oldKey: oldSubKeys.qcow2Nvram,
+                newKey: newSubKeys.qcow2Nvram,
+                qemuImg: qemuImg
+            )
+        }
+
+        // 6. 重置 TPM (Win): 现有 state 用 old swtpm-key 加密, 用 new swtpm-key 解不开.
         // 直接 secure-erase 整 tpm/, 启动期 swtpm 用 new swtpm-key 重新初始化.
         var tpmReset = false
         if config.guestOS == .windows {

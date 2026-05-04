@@ -88,8 +88,57 @@ public enum QcowLuksFactory {
         ])
     }
 
-    /// 改密 (rekey, 两步法). step 1 加新 keyslot, step 2 销毁老 keyslot.
+    /// 改密 step 1 (拆出): 加新 keyslot. 加完两个 keyslot 都激活, 老密码仍能解.
+    /// 用于 RekeyVMOperation 原子化重排 (TODO #12): 先全部 disk addNewKeyslot →
+    /// atomic write config + routing → 全部 removeOldKeyslot. 任意 crash 点都能用一个密码解.
+    public static func addNewKeyslot(at url: URL,
+                                       oldKey: SymmetricKey,
+                                       newKey: SymmetricKey,
+                                       qemuImg: URL) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw HVMError.storage(.ioError(errno: ENOENT, path: url.path))
+        }
+        let oldSecret = try LuksSecretFile(key: oldKey)
+        defer { oldSecret.cleanup() }
+        let newSecret = try LuksSecretFile(key: newKey)
+        defer { newSecret.cleanup() }
+
+        Self.log.info("qcow2 LUKS addNewKeyslot: \(url.lastPathComponent, privacy: .public)")
+        try runQemuImg(qemuImg: qemuImg, verb: "amend", args: [
+            "--object", "secret,id=sec_old,file=\(oldSecret.path)",
+            "--object", "secret,id=sec_new,file=\(newSecret.path)",
+            "-o", "encrypt.new-secret=sec_new,encrypt.state=active",
+            "--image-opts",
+            "driver=qcow2,file.filename=\(url.path),encrypt.key-secret=sec_old",
+        ])
+    }
+
+    /// 改密 step 2 (拆出): 销毁老 keyslot. 之后只有新 keyslot 激活.
+    public static func removeOldKeyslot(at url: URL,
+                                          oldKey: SymmetricKey,
+                                          newKey: SymmetricKey,
+                                          qemuImg: URL) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw HVMError.storage(.ioError(errno: ENOENT, path: url.path))
+        }
+        let oldSecret = try LuksSecretFile(key: oldKey)
+        defer { oldSecret.cleanup() }
+        let newSecret = try LuksSecretFile(key: newKey)
+        defer { newSecret.cleanup() }
+
+        Self.log.info("qcow2 LUKS removeOldKeyslot: \(url.lastPathComponent, privacy: .public)")
+        try runQemuImg(qemuImg: qemuImg, verb: "amend", args: [
+            "--object", "secret,id=sec_old,file=\(oldSecret.path)",
+            "--object", "secret,id=sec_new,file=\(newSecret.path)",
+            "-o", "encrypt.old-secret=sec_old,encrypt.state=inactive",
+            "--image-opts",
+            "driver=qcow2,file.filename=\(url.path),encrypt.key-secret=sec_new",
+        ])
+    }
+
+    /// 改密 (rekey, 两步法 — 内联调). step 1 加新 keyslot, step 2 销毁老 keyslot.
     /// step 2 失败 → 抛 .luksRekeyHalfDone (此时老 + 新两个 keyslot 都激活, 用户重试 rekey 可恢复).
+    /// **注**: 推荐用 addNewKeyslot + removeOldKeyslot 拆开调用 (TODO #12 原子化).
     public static func rekey(at url: URL,
                              oldKey: SymmetricKey,
                              newKey: SymmetricKey,

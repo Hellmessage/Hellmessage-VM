@@ -197,30 +197,60 @@ public enum EncryptVMOperation {
         rollbackTmpDir = false
         log("✔ 转换完成, 替换原文件 ...")
 
-        // 8. 删旧明文 disks (best-effort secure-erase 单 pass random + unlink)
+        // 8. 替换 disks (TODO #13 加固): 先 rename 旧 → mv 新 → 全部 mv 完后再 secure-erase 旧.
+        // 原顺序"先 erase 旧 → 再 mv 新"风险: mv 失败后 disks/ 空 (灾难). 现新顺序保证 mv 失败仍可恢复.
         let disksDir = BundleLayout.disksDir(bundleURL)
+        var oldDiskRenames: [(orig: URL, staged: URL)] = []
         if let entries = try? FileManager.default.contentsOfDirectory(atPath: disksDir.path) {
             for n in entries {
-                SecureErase.eraseFile(at: disksDir.appendingPathComponent(n))
+                let orig = disksDir.appendingPathComponent(n)
+                let staged = disksDir.appendingPathComponent("\(n).old-encrypt")
+                try? FileManager.default.removeItem(at: staged)   // 防上次崩溃残留
+                try FileManager.default.moveItem(at: orig, to: staged)
+                oldDiskRenames.append((orig, staged))
             }
         }
-        // mv 临时 disks → 主 disks
+        // mv 临时 disks → 主 disks. 失败回滚 oldDiskRenames
         let tmpDisksDir = tmpDir.appendingPathComponent("disks")
-        if let names = try? FileManager.default.contentsOfDirectory(atPath: tmpDisksDir.path) {
-            for n in names {
-                let from = tmpDisksDir.appendingPathComponent(n)
-                let to = disksDir.appendingPathComponent(n)
-                try FileManager.default.moveItem(at: from, to: to)
+        do {
+            if let names = try? FileManager.default.contentsOfDirectory(atPath: tmpDisksDir.path) {
+                for n in names {
+                    let from = tmpDisksDir.appendingPathComponent(n)
+                    let to = disksDir.appendingPathComponent(n)
+                    try FileManager.default.moveItem(at: from, to: to)
+                }
             }
+        } catch {
+            // mv 失败 — 回滚 .old-encrypt → 原名, 抛错 (主 bundle 还原)
+            for (orig, staged) in oldDiskRenames {
+                try? FileManager.default.removeItem(at: orig)   // 部分 mv 成功的清掉
+                try? FileManager.default.moveItem(at: staged, to: orig)
+            }
+            throw error
+        }
+        // 全部 mv 成功 → secure-erase 旧 .old-encrypt
+        for (_, staged) in oldDiskRenames {
+            SecureErase.eraseFile(at: staged)
         }
 
-        // 9. NVRAM (Win) — secure-erase 旧明文 efi-vars.fd
+        // 9. NVRAM (Win) 加固: 同 disks 模式
         if nvramReplaced {
             let oldVars = BundleLayout.nvramURL(bundleURL)
-            SecureErase.eraseFile(at: oldVars)
+            let stagedVars = BundleLayout.nvramURL(bundleURL).appendingPathExtension("old-encrypt")
+            try? FileManager.default.removeItem(at: stagedVars)
+            if FileManager.default.fileExists(atPath: oldVars.path) {
+                try FileManager.default.moveItem(at: oldVars, to: stagedVars)
+            }
             let from = tmpDir.appendingPathComponent("nvram/\(BundleLayout.nvramLuksFileName)")
             let to = BundleLayout.nvramDir(bundleURL).appendingPathComponent(BundleLayout.nvramLuksFileName)
-            try FileManager.default.moveItem(at: from, to: to)
+            do {
+                try FileManager.default.moveItem(at: from, to: to)
+            } catch {
+                // 回滚: 把 staged 还原成 oldVars
+                try? FileManager.default.moveItem(at: stagedVars, to: oldVars)
+                throw error
+            }
+            SecureErase.eraseFile(at: stagedVars)
         }
 
         // 10. config.yaml.enc + secure-erase 旧 config.yaml (含 MAC / 设备信息等)

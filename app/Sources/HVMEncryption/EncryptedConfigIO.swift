@@ -60,9 +60,12 @@ public enum EncryptedConfigIO {
     // MARK: - save
 
     /// AES-GCM 加密 config 写到 <bundle>/config.yaml.enc, atomic. 走 .yaml.enc.tmp 中转.
+    /// overrideURL: 非 nil 则写到该路径, 不是默认 bundleURL/config.yaml.enc. 用于 RekeyVMOperation
+    /// 原子化写 staging 文件 (TODO #12).
     public static func save(config: VMConfig,
                              to bundleURL: URL,
-                             key: SymmetricKey) throws {
+                             key: SymmetricKey,
+                             overrideURL: URL? = nil) throws {
         try config.validate()
 
         // 1. yaml encode (与 BundleIO.save 同款选项, 保持 round-trip 字节稳定)
@@ -106,9 +109,9 @@ public enum EncryptedConfigIO {
         out.append(combined)
 
         // 4. atomic write
-        let target = configEncURL(bundleURL)
+        let target = overrideURL ?? configEncURL(bundleURL)
         let tmp = target.deletingLastPathComponent()
-            .appendingPathComponent(".\(configEncFileName).tmp")
+            .appendingPathComponent(".\(target.lastPathComponent).tmp")
         do {
             try out.write(to: tmp, options: .atomic)
             if FileManager.default.fileExists(atPath: target.path) {

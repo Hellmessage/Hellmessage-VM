@@ -107,14 +107,14 @@ PR-1 ~ PR-10b 全部合入. 覆盖:
 | 3 | hvm-cli iso 加密适配 | Done | 🔴, 走 EncryptedConfigEditor |
 | 4 | hvm-cli boot-from-disk 加密适配 | Done | 🔴, 走 EncryptedConfigEditor |
 | 5 | logs/kill/pause/resume 加密 VM 验证 | Done | 🔴, kill/pause/resume 仅 IPC 不读 config; logs 走 routing JSON 不需密码; 真机 e2e 已跑 |
-| 6 | LUKS secret fifo / 缩 unlink 窗口 | Pending | 🟡 |
-| 7 | master/sub key mlock | Pending | 🟡 |
-| 8 | 多盘 encrypt/decrypt/rekey 真机 | Pending | 🟡 |
+| 6 | LUKS secret 缩 unlink 窗口 | Done | 🟡, QMP 连接成功后立即 unlink (从 VM 全生命周期 → 启动期秒级). fifo 推后 (现状已够) |
+| 7 | master key mlock | Done | 🟡, SecureBytes (mlock + memset_s) 包 MasterKey. SubKeySet (CryptoKit SymmetricKey) 不动 |
+| 8 | 多盘 encrypt/decrypt/rekey 真机 | Done | 🟡, MultiDiskTest VM (1主64G + 1数据4G) e2e: encrypt/rekey/decrypt/start 全过 |
 | 9 | 装机 → reboot → 桌面完整生命周期 | Pending | 🟡 |
 | 10 | GUI 加密 (PR-11) | Done (待自动化测) | 🟡, PR-11a-e 已落: VMListItem 重构 / 启动密码 modal / CreateVMDialog 加密 toggle / CloneVMDialog 加密源 / 详情页加密区 + Encrypt/Decrypt/Rekey 三 dialog. 真机 e2e (PR-11f) 走 PR-G GUI 协议自动化测 |
-| 11 | delete secure-erase | Pending | 🟡 |
-| 12 | rekey 原子性 (staging + journal) | Pending | 🟡 |
-| 13 | encrypt 流程临时目录策略对齐 decrypt | Pending | 🟡 |
+| 11 | delete secure-erase | Done | 🟡, hvm-cli delete --purge 加密 VM 默认走 SecureErase; 明文 VM 加 --secure-erase opt-in |
+| 12 | rekey 原子性 | Done | 🟡, **重排顺序**: 全部 addNewKeyslot → atomic write config+routing (replaceItemAt) → 全部 removeOldKeyslot. 任何 crash 点都能用一个密码解 |
+| 13 | encrypt 临时目录策略对齐 | Done | 🟡, encrypt 替换阶段改 "rename .old-encrypt → mv 新 → secure-erase 旧"; mv 失败回滚 |
 | 14 | 加密 VM clone | Done | 🟢→🔴 升级, D9=方案 A 同密码 + 整字节复制. CloneManager 加密分支 + GUI 暂未接入 (PR-11) |
 | 15 | 加密 VM snapshot | Done | 🟢, 顺带修 SnapshotManager qcow2 老 bug (PR-1 起所有 QEMU VM snapshot 都是空) |
 | 16 | create --import-disk --encrypt | Postponed | 🟢, 等用户需求 |
