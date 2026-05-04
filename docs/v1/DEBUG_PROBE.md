@@ -46,6 +46,8 @@ hvm-dbg ──IPC──▶ HVMHost ──VZ API / QMP / HDP──▶ VM
 
 协议: length-prefix JSON (`HVMIPC/Protocol.swift`), `IPCOp.dbg*` 一族 case (`dbg.screenshot` `dbg.key` `dbg.mouse` `dbg.ocr` `dbg.find_text` `dbg.boot_progress` `dbg.console.read` `dbg.console.write` `dbg.display.info` `dbg.display.resize` `dbg.exec.guest` 等)。两端永远一起构建, 不做版本协商。
 
+`hvm-dbg gui *` 子命令例外: 走 **HDP-GUI 协议**直连 HVM 主 GUI 进程的 ProbeServer (不经 VMHost), socket 是 `~/Library/Application Support/HVM/run/hvm-dbg-gui.sock`。
+
 ## 双后端通路
 
 - **VZ 后端**: `screenshot` 走 NSView cacheDisplay → CGImage; `key` / `mouse` 走 `VZUSBKeyboard` / `VZUSBScreenCoordinatePointingDevice`; `console` 走 virtio-console hvc0 + `ConsoleBridge` ring buffer
@@ -75,10 +77,11 @@ hvm-dbg wait <vm> --for text|state|frame-stable ...         轮询等达成态
 hvm-dbg boot-progress <vm>                                  启动阶段 (bios/boot-logo/ready-tty/ready-gui)
 hvm-dbg console <vm> --read [--since-bytes N] | --write     串口请求 / 响应模型
 hvm-dbg exec <vm> [--user U --password-from-stdin] -- <cmd> 通过 console 自动登录 + 跑命令 (Linux 需 hvc0 / ttyAMA0 起 getty)
-hvm-dbg exec.guest <vm> --bin <exe> [--args] [--ps] [--cmd] 通过 qemu-guest-agent 跑命令 (Windows guest 必备)
-hvm-dbg display.info <vm>                                   guest 真实 framebuffer 尺寸 (验证 dynamic resize)
-hvm-dbg display.resize <vm> --width W --height H            host → guest dynamic resize (HDP RESIZE_REQUEST + vdagent MONITORS_CONFIG)
-hvm-dbg qemu-launch <vm> [--print-args] [--shutdown-timeout N]   调试: 直接拉起 QEMU 后端 (绕过 hvm-cli start 主流程)
+hvm-dbg exec-guest <vm> [--path | --ps | --cmd] [--args ...] 通过 qemu-guest-agent 跑命令 (Windows guest 必备)
+hvm-dbg display-info <vm>                                   guest 真实 framebuffer 尺寸 (验证 dynamic resize)
+hvm-dbg display-resize <vm> --width W --height H            host → guest dynamic resize (HDP RESIZE_REQUEST + vdagent MONITORS_CONFIG)
+hvm-dbg qemu-launch <vm> [--dry-run] [--shutdown-timeout N] 调试: 直接拉起 QEMU 后端 (绕过 hvm-cli start 主流程)
+hvm-dbg gui <subcommand>                                    HVM GUI 自动化测试 (HDP-GUI 协议, 详下)
 ```
 
 通用选项: `--format human|json` (json 默认偏 hvm-dbg 的自动化场景, 各命令默认值不一); `--timeout` 30s 起步。
@@ -111,10 +114,31 @@ hvm-dbg console foo --write-stdin                host stdin 流式
 
 QEMU 后端走 ARM virt PL011 串口到 unix socket (`run/<vm-id>.console.sock`); Linux ARM 默认 `serial-getty@ttyAMA0.service` 可登录。
 
-### `exec` vs `exec.guest`
+### `exec` vs `exec-guest`
 
 - `exec`: 客户端状态机, 通过 `console.read` / `console.write` 跑 `login → password → uuid sentinel 包裹命令` (Linux guest 内 hvc0 / ttyAMA0 起 getty 必需)
-- `exec.guest`: 通过 qemu-guest-agent JSON-RPC (`guest-exec` + `guest-exec-status`), 直拿 stdout / stderr (base64) + exit code, **绕过键盘 / OCR / 鼠标**, 跨平台。Windows guest 走 powershell.exe / cmd.exe (`--ps` 优先 / `--cmd` 一行包 `cmd.exe /C`)。优先用此命令做行为验证, OCR 文本判断成败误识率高 (CLAUDE.md「端到端验证用 hvm-dbg」)
+- `exec-guest`: 通过 qemu-guest-agent JSON-RPC (`guest-exec` + `guest-exec-status`), 直拿 stdout / stderr (base64) + exit code, **绕过键盘 / OCR / 鼠标**, 跨平台。Windows guest 走 powershell.exe / cmd.exe (`--ps` 优先 / `--cmd` 一行包 `cmd.exe /C`)。优先用此命令做行为验证, OCR 文本判断成败误识率高 (CLAUDE.md「端到端验证用 hvm-dbg」)
+
+### `gui` 子命令 (HVM GUI 自动化, HDP-GUI 协议)
+
+测 HVM 主进程 GUI 自身行为 (创建向导 / 加密 dialog / 详情页等) 走 **HDP-GUI 协议**, 替代脆弱的 osascript UI scripting. 设计稿 [docs/v3/HVM_DBG_GUI_PROTOCOL.md](../v3/HVM_DBG_GUI_PROTOCOL.md), 现已合入。
+
+- **启用 server**: `HVM_GUI_PROBE=1 open /Applications/HVM.app` — release 默认不启 (体积 +几十 KB, 不暴露 socket)
+- **socket**: `~/Library/Application Support/HVM/run/hvm-dbg-gui.sock` (0600, 同用户)
+- **业务侧接入**: SwiftUI 控件加 `.hvmProbe(id: "<scene>.<role>.<name>", label: "...", action: ...)`, 走自家 `HVMGuiProbe.ProbeRegistry`, **不**走 SwiftUI `.accessibilityIdentifier` (macOS 14+ 实测不暴露给程序内 a11y 查询)
+
+子命令:
+
+```
+hvm-dbg gui ping                                            ping server (验证已启)
+hvm-dbg gui list [--prefix X] [--format human|json]         列 ProbeRegistry 已注册控件
+hvm-dbg gui click --identifier X                            触发 button.action / 切 toggle
+hvm-dbg gui type --identifier X --text "..."                给 textField 输文字
+hvm-dbg gui read --identifier X                             读 textField/toggle 当前值
+hvm-dbg gui screenshot [--output X.png]                     截主窗口 + dialog → PNG
+```
+
+命名规范: `<scene>.<role>.<name>`, 例 `dialog.encryptVM.button.encrypt` / `toolbar.button.newVM` / `dialog.encryptionPassword.input.password`. 任何 GUI 改动 (新 dialog / 新按钮) 优先用 hvm-dbg gui 自动化测, 不让用户手动点。
 
 ### `boot-progress`
 
@@ -195,7 +219,8 @@ hvm-dbg exec.guest foo --ps "Get-PnpDevice -Class Display | Format-List"
 - [CLI.md](CLI.md) — `hvm-cli`, 职责分工
 - [DISPLAY_INPUT.md](DISPLAY_INPUT.md) — VZ / QEMU 输入设备
 - [QEMU_DISPLAY_PROTOCOL.md](QEMU_DISPLAY_PROTOCOL.md) — HDP framebuffer + RESIZE_REQUEST 协议
+- [../v3/HVM_DBG_GUI_PROTOCOL.md](../v3/HVM_DBG_GUI_PROTOCOL.md) — HDP-GUI 协议 (`hvm-dbg gui *` 设计稿)
 
 ---
 
-**最后更新**: 2026-05-04
+**最后更新**: 2026-05-05

@@ -1,12 +1,18 @@
 # todo.md (历史归档)
 
-> **本文件保留作历史追溯**, 当前 TODO 一律走 [../v2/](../v2/)。
+> **本文件保留作历史追溯**, 当前 TODO 看 [../CHANGELOG.md](../CHANGELOG.md) (历史 v2 清单归档) 与 [ROADMAP.md](ROADMAP.md) "残余项指引"。
 >
-> v2 入口: [../v2/README.md](../v2/README.md) — 2026-05-03 全项目深审产出的 45 项 TODO, 按 P0/P1/P2 分级。
->
-> 原 v1/todo.md 的"阻塞中 / 长期 / Polish"段(V-1 / L-2 / L-4 / P-1 ~ P-4)已迁到 [../v2/05-pending-from-v1.md](../v2/05-pending-from-v1.md) 统一管理。
+> 2026-05-05 全量文档重构后, 原 V/L/P 系列 (V-1 / L-2 / L-4 / P-1 ~ P-4) 全部归档到 [../CHANGELOG.md](../CHANGELOG.md) "V/L/P — v1 todo 悬挂项" 节。
 
 ## ✅ 已完成 (供历史追溯, 滚动归档)
+
+- (2026-05-05) **文档全量重构**: README + v1 全篇 + CLAUDE.md (schema v2→v3) 按代码现状对齐; v3 已合入提案状态推到"代码已合入"; v2 归档进 ../CHANGELOG.md; 新写 v1/ENCRYPTION.md + v1/CLONE.md 现状描述
+
+- (2026-05) **整 VM 加密 (HVMEncryption) QEMU 路径全闭环**: `qemu-perfile` scheme 落地 — qcow2 LUKS + OVMF VARS LUKS + swtpm encrypt + AES-GCM `config.yaml.enc` + PBKDF2-SHA256 600k iter master KEK + HKDF 4 个子 key + routing JSON 跨机器 portable; CLI: `encrypt / decrypt / rekey / encrypt-status / create --encrypt`; GUI: `EncryptVMDialog / DecryptVMDialog / RekeyVMDialog / EncryptionPasswordDialog / CreateVMDialog 加密 toggle / sidebar lock 标识`; 长事务 `SignalGuard` SIGINT 防中断; 加密 VM clone (D9 等价复制 + 同密码) + snapshot
+
+- (2026-05) **HDP-GUI 测试协议 (HVMGuiProbe)**: `hvm-dbg gui ping/list/click/type/read/screenshot` 6 子命令 + ProbeRegistry SwiftUI `.hvmProbe(id:label:action:)` 修饰符; HVM_GUI_PROBE=1 启 server, socket `~/Library/Application Support/HVM/run/hvm-dbg-gui.sock`; release 默认不启
+
+- (2026-05) **整 VM 克隆 (CloneManager)**: APFS clonefile + 身份字段重生 (id / displayName / createdAt / MAC / machine-identifier / 数据盘 uuid8) + 加密 VM D9 等价复制分支; CLI `hvm-cli clone --name --target-dir --keep-mac --force`; GUI `CloneVMDialog` 三态
 
 - (2026-05-04) **剪贴板共享 + macOS 风快捷键 + detached 窗口重写**: `HVMDisplayQemu.PasteboardBridge` 双向 UTF-8 文本同步走 vdagent virtio-serial; VMConfig 加 `clipboardSharingEnabled` (默认 true) + `macStyleShortcuts` (host cmd→guest ctrl 转发, 默认 true); IPC 加 `clipboard.setEnabled` 运行时切换; detached borderless 窗口重写, 嵌入 ⇄ 独立切换稳定; README 同步过时项
 
@@ -52,19 +58,12 @@
 
 ## 当前未完成项
 
-未完成项已迁到 [../v2/05-pending-from-v1.md](../v2/05-pending-from-v1.md) (V-1 / L-2 / L-4 / P-1 ~ P-4)。
+未完成项见 [ROADMAP.md](ROADMAP.md) "残余项指引"。
 
-## v2 优化项
+## 历史 TODO 归档
 
-完整 45 项 TODO 总览见 [../v2/](../v2/), 按优先级分:
-
-- [01-P0-immediate.md](../v2/01-P0-immediate.md) — P0 立即修
-- [02-P1-this-week.md](../v2/02-P1-this-week.md) — P1 本周做
-- [03-P2-techdebt.md](../v2/03-P2-techdebt.md) — P2 技术债
-- [04-doc-drift.md](../v2/04-doc-drift.md) — 文档与代码漂移
-- [05-pending-from-v1.md](../v2/05-pending-from-v1.md) — 来自 v1/todo.md 的悬挂项
-- [06-already-compliant.md](../v2/06-already-compliant.md) — 已合规项审核留痕
+完整 v2 (2026-05-03 全项目深审 45 项) 历史归档见 [../CHANGELOG.md](../CHANGELOG.md)。
 
 ---
 
-**最后更新**: 2026-05-04
+**最后更新**: 2026-05-05

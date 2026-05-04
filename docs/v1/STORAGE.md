@@ -10,12 +10,20 @@
 
 ## 磁盘格式分流
 
-| 后端 | 格式 | 文件名 | 创建工具 | 扩容工具 |
-|---|---|---|---|---|
-| **VZ** | `raw` sparse | `disks/os.img` | `ftruncate` | `ftruncate` |
-| **QEMU** | `qcow2` | `disks/os.qcow2` | `qemu-img create` | `qemu-img resize` |
+| 后端 | 明文格式 | 加密格式 | 文件名 | 创建工具 | 扩容工具 |
+|---|---|---|---|---|---|
+| **VZ** | `raw` sparse | (整 bundle 套 sparsebundle) | `disks/os.img` | `ftruncate` | `ftruncate` |
+| **QEMU** | `qcow2` | `qcow2 LUKS-aes-256-xts` | `disks/os.qcow2` | `qemu-img create` (+ `--object secret`) | `qemu-img resize` |
 
 VZ 的 `VZDiskImageStorageDeviceAttachment` **只接受 raw**, 是硬约束; qcow2 文件丢给 VZ 直接报错. QEMU 后端走 qcow2 是 sparse + 内置压缩 + 可被 `qemu-img info/resize` 安全管理.
+
+**加密 VM 落盘形态**:
+
+- VZ 加密走整 bundle 套 hdiutil sparsebundle (AES-256 + APFS), 内部磁盘仍是 raw (sparsebundle 自己加密)
+- QEMU 加密走每文件 LUKS qcow2 (header 嵌在 qcow2 内, 跟非加密 qcow2 同样可被 `qemu-img info` 解析但需 `--object secret` 才能读内容)
+- 加密 VM 的 `DiskFactory.create` 自动走 LUKS 分支 (`QcowLuksFactory`), 调用方不需要区分
+
+详见 [ENCRYPTION.md](ENCRYPTION.md)。
 
 ### `DiskFormat` 枚举
 
@@ -111,7 +119,7 @@ foo.hvmz/disks/
 
 - 磁盘 `0644` (vm owner 读写, 他人只读)
 - bundle 目录 `0755`
-- 不做 encryption-at-rest, 依赖 FileVault
+- **整 VM 加密** (encryption-at-rest, 用户控制密码) 已落地, 见 [ENCRYPTION.md](ENCRYPTION.md); 不依赖 FileVault 兜底
 
 ## 扩容
 
@@ -287,10 +295,11 @@ public enum CloneManager {
 ## 不做什么
 
 1. 不支持 vmdk / vhdx / vdi 等其他外部格式 (导入时拒, 用户自己 `qemu-img convert`)
-2. 不做加密卷 (FileVault 兜底)
-3. 不做自动 defrag / compact (APFS 自管)
-4. 不做磁盘 I/O throttle (VZ / QEMU 都不暴露稳定接口)
-5. 不做共享磁盘 (多 VM 同一磁盘, VZ 不支持, flock 也禁止)
+2. 不做自动 defrag / compact (APFS 自管)
+3. 不做磁盘 I/O throttle (VZ / QEMU 都不暴露稳定接口)
+4. 不做共享磁盘 (多 VM 同一磁盘, VZ 不支持, flock 也禁止)
+
+> 整 VM 加密 (qcow2 LUKS / sparsebundle) 已落地, 见 [ENCRYPTION.md](ENCRYPTION.md)。
 
 ## 性能注记
 
@@ -328,11 +337,13 @@ for disk in config.disks {
 
 ## 相关文档
 
-- [VM_BUNDLE.md](VM_BUNDLE.md) — bundle 布局 / config.yaml schema
+- [VM_BUNDLE.md](VM_BUNDLE.md) — bundle 布局 / config.yaml schema (v3)
 - [VZ_BACKEND.md](VZ_BACKEND.md) — 磁盘 attachment 构建
 - [QEMU_INTEGRATION.md](QEMU_INTEGRATION.md) — qemu-img 路径
 - [GUEST_OS_INSTALL.md](GUEST_OS_INSTALL.md) — 装机阶段 ISO 处理 / 自动下载
+- [ENCRYPTION.md](ENCRYPTION.md) — 整 VM 加密 (qcow2 LUKS / sparsebundle / config.yaml.enc)
+- [CLONE.md](CLONE.md) — 整 VM 克隆 (与 snapshot 正交, 引 SnapshotManager.cloneFile)
 
 ---
 
-**最后更新**: 2026-05-04
+**最后更新**: 2026-05-05

@@ -1,6 +1,6 @@
 # VM 整盘加密 (`HVMEncryption`)
 
-> 状态: **设计稿 v2.4 — QEMU 路径优先实施 (2026-05-04)**, PR-1 ~ PR-8 已落, PR-9~11 集中实施 QEMU 启动接入 / CLI / GUI; **VZ 路径接入推后**(底层 SparsebundleTool / EncryptedBundleIO 仍保留, 未删, 等待用户回头实施)。
+> 状态: **代码已合入 (2026-05-05, QEMU 路径全闭环)**. 现状描述独立成册 [../v1/ENCRYPTION.md](../v1/ENCRYPTION.md). VZ-sparsebundle 启动解锁推后(底层 SparsebundleTool / EncryptedBundleIO 仍保留, 等用户回头)。
 >
 > **设计变更日志**:
 > - **v1**: 单方案 A "sparsebundle 套整 bundle", 双后端透明 — **已废弃**

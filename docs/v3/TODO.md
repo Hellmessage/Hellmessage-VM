@@ -1,6 +1,6 @@
 # QEMU 加密 — BUG / 遗漏清单 (PR-10b 后)
 
-> 状态: **TODO 清单 v1 (2026-05-04)** — PR-1 ~ PR-10b 已落 + 真机端到端验证 (encrypt → status → encrypt-status → rekey 新/老密码 → decrypt → 明文启动) 全闭环. 本稿沉淀剩余的 BUG / 功能洞 / 安全加固 / 文档同步项, 按优先级分组.
+> 状态: **大多已 Done (2026-05-05)** — PR-1 ~ PR-10b + #14 clone / #15 snapshot / #19 SIGINT / #G1 GUI 协议 + #10 GUI 加密 dialogs 全部合入. 本清单留底作 PR 回顾用; 仍存的低优项 (例 argon2id KDF / VZ 加密接入) 已挪 [../v1/ROADMAP.md](../v1/ROADMAP.md) "残余项指引".
 >
 > 父设计稿: [ENCRYPTION.md](ENCRYPTION.md) v2.4 (QEMU 路径优先实施).
 >

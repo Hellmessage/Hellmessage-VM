@@ -1,9 +1,9 @@
 # 加密长事务 SIGINT 清理 (encrypt / decrypt / rekey)
 
-> 状态: **设计稿 v1 (2026-05-04)** — 评审中
+> 状态: **代码已合入 (2026-05)** (PR-C SignalGuard). 现状回写 [../v1/ENCRYPTION.md](../v1/ENCRYPTION.md) "长事务 SIGINT 防中断" 节.
 >
-> 父设计稿: [ENCRYPTION.md](ENCRYPTION.md) v2.4
-> 关联 TODO: [TODO.md](TODO.md) #19
+> 父设计稿: [ENCRYPTION.md](ENCRYPTION.md) (代码已合入)
+> 关联 TODO: [TODO.md](TODO.md) #19 — 已 Done
 
 ## 背景
 

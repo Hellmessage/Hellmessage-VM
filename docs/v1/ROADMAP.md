@@ -9,13 +9,16 @@
 | **M2** | GUI 基础 (列表 / 向导 / detached 窗口) | ✅ 已完成 |
 | **M3** | macOS guest (IPSW + 内建下载器) | ✅ 已完成 |
 | **M4** | 桥接网络 | ⏳ VZ bridged 待 entitlement; QEMU 走 socket_vmnet 已完成 |
-| **M5** | hvm-dbg 完整化 (OCR / find-text / wait / exec) | ✅ 已完成 |
-| **M6** | 打磨 + 文档完善 | 🟡 进行中 |
+| **M5** | hvm-dbg 完整化 (OCR / find-text / wait / exec / gui) | ✅ 已完成 |
+| **M6** | 打磨 + 文档完善 | ✅ 已完成 (2026-05-05 文档全量重构) |
 | **QEMU 集成** (跨 M4-M6) | Linux/Windows arm64 QEMU 后端 | ✅ 已完成 |
 | **OS 镜像自动下载** | OSImageCatalog 7 发行版 | ✅ 已完成 (2026-05-03) |
 | **剪贴板 + macOS 快捷键** | QEMU 后端 vdagent + cmd→ctrl | ✅ 已完成 (2026-05-04) |
+| **整 VM 克隆** (CloneManager) | APFS clonefile + 身份字段重生 + 加密分支 | ✅ 已完成 (2026-05) |
+| **整 VM 加密** (HVMEncryption) | qcow2 LUKS + config.yaml.enc + KDF 跨机器 portable | ✅ QEMU 路径全闭环; VZ-sparsebundle 启动解锁推后 |
+| **HDP-GUI 测试协议** | hvm-dbg gui * + ProbeRegistry | ✅ 已完成 |
 
-以下只排优先级, 不排日期(个人项目, 按进展推进)。当前主体能力已闭环, 残余项收纳在 [../v2/](../v2/)。
+以下只排优先级, 不排日期(个人项目, 按进展推进)。当前主体能力已闭环, 残余项收纳在 [../CHANGELOG.md](../CHANGELOG.md) 历史完成清单 + 顶层 [todo.md](todo.md)。
 
 ## M0 — 项目骨架 ✅
 
@@ -60,7 +63,7 @@
 
 ### VZ 后端 bridged ⏳
 
-需 `com.apple.vm.networking` entitlement 审批(2026-04-25 提交, 进行中)。落地步骤见 [ENTITLEMENT.md](ENTITLEMENT.md), 残余项见 [../v2/05-pending-from-v1.md](../v2/05-pending-from-v1.md) V-1。
+需 `com.apple.vm.networking` entitlement 审批(2026-04-25 提交, 进行中)。落地步骤见 [ENTITLEMENT.md](ENTITLEMENT.md), 历史归档见 [../CHANGELOG.md](../CHANGELOG.md) V-1。
 
 ## M5 — hvm-dbg 完整化 ✅
 
@@ -70,12 +73,12 @@
 - VZ + QEMU 共用 `BootPhaseClassifier / OCRTextSearch`
 - Vision OCR 集成
 
-## M6 — 打磨 🟡
+## M6 — 打磨 ✅
 
 - bugfix + 文档查漏补缺
-- 当前 v2 收纳的 P-1 ~ P-4 polish 项
+- 2026-05-03 落地 v2 P0 (6 项) + P1 (11 项) + P2 (~85%) 全部修复, 后归档进 [../CHANGELOG.md](../CHANGELOG.md)
 - `make build` + `make install` SOP 完善
-- README 已对齐当前能力(2026-05-04 同步剪贴板 / cmd→ctrl / detached borderless)
+- README 已对齐当前能力 (2026-05-05 全量重构: 加密 / 克隆 / hvm-dbg gui / schema v3 等都同步)
 
 ## 重大跨 M 完成项
 
@@ -110,9 +113,32 @@
 - VMConfig 新增 `clipboardSharingEnabled` + `macStyleShortcuts`(host cmd→guest ctrl)
 - detached borderless 窗口重写, 与嵌入态切换稳定
 
+### 整 VM 克隆 (CloneManager) (2026-05) ✅
+
+- `HVMStorage/CloneManager`: APFS clonefile 整 bundle + 身份字段重生 (id / displayName / createdAt / MAC / machine-identifier / 数据盘 uuid8)
+- 加密 VM clone 走 D9 等价复制 + 同密码 (字节级 LUKS qcow2 复制 + 用源 sub.config 重新加密 config.yaml.enc + routing JSON 改 vmId 保留 salt/iter)
+- CLI: `hvm-cli clone <vm> --name <new> [--target-dir <dir>] [--keep-mac] [--force]`
+- GUI: `CloneVMDialog` 三态; 加密源 prompt 密码
+
+### 整 VM 加密 (HVMEncryption) (2026-04 ~ 2026-05) ✅ (QEMU)
+
+- `HVMEncryption` 17 个 Swift 文件实现: PasswordKDF (PBKDF2-SHA256, 600k iter, 16B salt) → master KEK → EncryptionKDF (HKDF-SHA256) → 4 个子 key (qcow2-disk / qcow2-nvram / swtpm / config)
+- bundle 落盘形态: `config.yaml.enc` (AES-256-GCM, "HENC" magic) + `meta/encryption.json` (明文 routing) + `disks/*.qcow2` LUKS-aes-256-xts + `nvram/efi-vars.qcow2` LUKS (Win) + `tpm/*` swtpm encrypt
+- CLI: `hvm-cli encrypt / decrypt / rekey / encrypt-status / create --encrypt`; 加密 VM 启动 prompt 密码 (`--password-stdin` 自动化)
+- GUI: `CreateVMDialog` 加密 toggle (仅 QEMU) / `EncryptVMDialog` / `DecryptVMDialog` / `RekeyVMDialog` / `EncryptionPasswordDialog` / sidebar `lock.fill` 标识
+- 长事务 SIGINT 防中断: `SignalGuard` 统一 atexit cleanup
+- VZ-sparsebundle 暂只接通"创建", 启动解锁推后 (跟 v3 ENCRYPTION.md v2.4 一致)
+
+### HDP-GUI 测试协议 (2026-05) ✅
+
+- `HVMGuiProbe` 模块: `ProbeRegistry` SwiftUI `.hvmProbe(id:label:action:)` 修饰符 (走自家 closure 注册, 不走 NSAccessibility — macOS 14+ a11y 实测不暴露给程序内查询)
+- `hvm-dbg gui ping / list / click / type / read / screenshot` 6 个子命令
+- `HVM_GUI_PROBE=1 open /Applications/HVM.app` 启 server, socket `~/Library/Application Support/HVM/run/hvm-dbg-gui.sock`
+- release 默认 link 但不启 (体积 +几十 KB, 不暴露 socket)
+
 ## 持续项
 
-- **文档与代码同步**: CLAUDE.md 约束变更 → docs/v1 同步 → 漂移登记 docs/v2/04-doc-drift.md
+- **文档与代码同步**: CLAUDE.md 约束变更 → docs/v1 同步 (实时, 不再单独维护漂移清单)
 - **依赖审计**: 每季度检查 SwiftPM 三方依赖白名单(当前 `swift-argument-parser` + `Yams`)
 - **安全审计**: team ID / 证书 SHA / 私钥路径 不出现在日志 / 报错文案
 
@@ -147,14 +173,13 @@
 
 ## 残余项指引
 
-未完成项已统一迁到 [../v2/05-pending-from-v1.md](../v2/05-pending-from-v1.md):
+未完成项 (来自历史 v1 todo / v2 P-x 清单, v2 文档已归档进 [../CHANGELOG.md](../CHANGELOG.md)):
 
-- **V-1** Apple `com.apple.vm.networking` entitlement(等审批)
-- **L-2** Rosetta share 集成
+- **V-1** Apple `com.apple.vm.networking` entitlement(等审批 → VZ bridged 才能启)
+- **L-2** Rosetta share 集成 (`linux.rosettaShare` 字段定义但 ConfigBuilder 未接)
 - **L-4** vmnet daemon 热重装时 QMP 热重连(方案 C, 已暂搁置)
-- **P-1 ~ P-4** polish 项
-
-完整未来动作清单见 [../v2/](../v2/) 各 P0/P1/P2 文件。
+- VZ-sparsebundle 加密 VM 启动解锁路径 (跟 v3 ENCRYPTION.md 一致, QEMU 路径优先)
+- 真实 Win11 / Linux arm64 ISO 端到端实测覆盖 TPM / SecureBoot / virtio 驱动加载
 
 ## 风险项
 
@@ -177,10 +202,12 @@
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 全局模块视角
 - [QEMU_INTEGRATION.md](QEMU_INTEGRATION.md) — QEMU 后端集成
+- [ENCRYPTION.md](ENCRYPTION.md) — 整 VM 加密
+- [CLONE.md](CLONE.md) — 整 VM 克隆
 - [ENTITLEMENT.md](ENTITLEMENT.md) — VZ bridged 前置依赖
 - [todo.md](todo.md) — 已完成项历史
-- [../v2/](../v2/) — 当前 TODO
+- [../CHANGELOG.md](../CHANGELOG.md) — v2 全量 TODO 归档
 
 ---
 
-**最后更新**: 2026-05-04
+**最后更新**: 2026-05-05

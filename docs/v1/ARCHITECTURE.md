@@ -25,25 +25,30 @@ HVM 是一个 macOS 虚拟机管理工具, 双后端: **VZ (Apple `Virtualizatio
 
 ## 模块划分
 
-全部模块前缀 `HVM`(Hell Message VM), 主 App target 名 `HVM`。SwiftPM 包根在 `app/` 子目录, 当前 16 个 target:
+全部模块前缀 `HVM`(Hell Message VM), 主 App target 名 `HVM`。SwiftPM 包根在 `app/` 子目录, 当前 17 个 target (14 库 + 3 可执行):
 
 ```
 app/Package.swift
 ├── HVMCore         — 基础类型 / HVMError / HVMLog / HVMPaths, 无下游依赖
 ├── HVMUtils        — 跨模块 helper: Format(bytes/rate/eta) / Hashing(sha256) / ResumableDownloader
 ├── HVMBundle       — .hvmz 布局 (BundleLayout) / config.yaml (VMConfig + Yams) / BundleLock / ConfigMigrator
-├── HVMStorage      — 磁盘镜像创建 / 扩容 (raw ftruncate + qemu-img) / ISO 路径校验
-├── HVMNet          — 网络 attachment 构建 (NAT / socket_vmnet shared/host/bridged 路径协调)
+├── HVMEncryption   — 整 VM 加密: PasswordKDF(PBKDF2) / EncryptionKDF(HKDF) / SparsebundleTool /
+│                     QcowLuksFactory / EncryptedConfigIO / RoutingMetadata / SignalGuard
+├── HVMStorage      — 磁盘镜像创建 / 扩容 (raw ftruncate + qemu-img) / ISO 路径校验 /
+│                     SnapshotManager (APFS clonefile) / CloneManager (整 VM 克隆 + 加密分支)
+├── HVMNet          — 网络 attachment 构建 (NAT / socket_vmnet shared/host/bridged 路径协调) +
+│                     MACAddressGenerator (Clone 重生 NIC MAC 用)
 ├── HVMDisplay      — VZ graphics / keyboard / pointer / OCR / 截屏 / boot 阶段分类
 ├── HVMBackend      — VZ 封装: VMHandle 生命周期 / VZ 配置构建 / 事件发布
-├── HVMQemu        — QEMU 后端: argv 构造 / QmpClient / QemuProcessRunner / SwtpmRunner / WindowsUnattend
+├── HVMQemu         — QEMU 后端: argv 构造 / QmpClient / QemuProcessRunner / SwtpmRunner / WindowsUnattend
 ├── HVMScmRecv      — POSIX recvmsg + SCM_RIGHTS C wrapper (Swift 不能调 cmsg 宏), 仅给 HVMDisplayQemu 用
 ├── HVMDisplayQemu  — QEMU 显示嵌入: HDP v1.0.0 protocol / Metal 零拷贝 / vdagent 剪贴板 / 输入转发
 ├── HVMInstall      — IPSW 下载/校验 (IPSWFetcher 包 ResumableDownloader) / macOS 装机驱动 / OSImageCatalog 7 发行版
 ├── HVMIPC          — hvm-cli / hvm-dbg ↔ host 子进程 unix domain socket 协议
-├── HVM   (App)     — SwiftUI GUI, 深色主题, 主窗口 + 创建向导 + ErrorDialog + 双后端 host 子进程 entry
-├── hvm-cli (exe)   — 命令行工具
-└── hvm-dbg (exe)   — 调试探针, 替代 osascript 做 guest 内操作
+├── HVMGuiProbe     — hvm-dbg ↔ HVM GUI 测试协议 (HDP-GUI), HVM_GUI_PROBE=1 启 server, 走自家 ProbeRegistry
+├── HVM   (App)     — SwiftUI GUI, 深色主题, 主窗口 + 创建向导 + 加密 dialogs + ErrorDialog + 双后端 host 子进程 entry
+├── hvm-cli (exe)   — 命令行工具 (含 encrypt / decrypt / rekey / clone / snapshot 等子命令)
+└── hvm-dbg (exe)   — 调试探针, 替代 osascript 做 guest 内 + GUI 内自动化操作
 ```
 
 ### 依赖拓扑
@@ -57,24 +62,30 @@ app/Package.swift
                             ▼           ▼
                        HVMUtils     HVMIPC
                             │
-              ┌─────────────┼──────────┬──────────┬──────────┐
-              ▼             ▼          ▼          ▼          ▼
-         HVMBundle*    HVMStorage  HVMNet    HVMDisplay   HVMQemu*
-              │             │          │          │          │
-              └─────────────┴──────┬───┴──────────┘          │
-                                   ▼                         │
-                              HVMBackend                HVMScmRecv
-                                   │                         │
-                                   │          ┌──────────────┘
-                                   │          ▼
-                                   │   HVMDisplayQemu
-                                   │          │
-                                   ▼          ▼
-                              HVMInstall  ┌─ HVM (App)
-                                   │      ├─ hvm-cli
-                                   └──────┴─ hvm-dbg
+              ┌─────────────┼─────────────┬──────────┬──────────┐
+              ▼             ▼             ▼          ▼          ▼
+         HVMBundle*    HVMEncryption*  HVMNet   HVMDisplay   HVMQemu*
+              │             ▲             │          │          │
+              │             │             │          │          │
+              └──────┬──────┴─────────────┴──────────┘          │
+                     ▼                                          │
+              HVMStorage                                  HVMScmRecv
+              (引 HVMNet + HVMEncryption: Clone 重生 MAC + 加密分支)
+                     │                                          │
+                     │                            ┌─────────────┘
+                     ▼                            ▼
+              HVMBackend                    HVMDisplayQemu
+                     │                            │
+                     ▼                            ▼
+              HVMInstall                  HVMGuiProbe
+                     │                            │
+                     └────────────┬───────────────┘
+                                  ▼
+                             ┌─ HVM (App)
+                             ├─ hvm-cli
+                             └─ hvm-dbg
 
-* HVMBundle 依赖 Yams; HVMQemu 不依赖 VZ
+* HVMBundle / HVMEncryption / HVMQemu 都依赖 Yams; HVMQemu / HVMEncryption 不依赖 VZ
 ```
 
 规则:
@@ -82,7 +93,9 @@ app/Package.swift
 - `HVMCore` 不依赖任何下游模块
 - `HVMBackend` 是 VZ 相关逻辑的唯一落点; `HVMQemu` 是 QEMU 后端的唯一落点, 二者并行不交叉(各自完成自己的 process / config / event)
 - 仅 `HVMDisplay` / `HVMBackend` / 主 App 进程 import `Virtualization`
+- `HVMEncryption` 不依赖 VZ / QEMU, 只通过 `EncryptedBundleIO` 给 `HVMStorage.CloneManager` 与主 App 进程的解锁路径用
 - `HVMDisplayQemu` 仅依赖 `HVMQemu` + `HVMScmRecv`, 不知道 VZ 的存在
+- `HVMGuiProbe` 仅在 `HVM` 主 App 进程内启用 (HVM_GUI_PROBE=1), CLI / hvm-dbg 不引
 - GUI / CLI / dbg 三端共享 HVM* 库, 不互相依赖
 
 ## 进程模型
@@ -183,7 +196,7 @@ qemu-system-aarch64 -display iosurface,socket=...   (HVM patch 0002)
 
 ```swift
 public struct VMConfig: Codable, Sendable, Equatable {
-    public static let currentSchemaVersion = 2     // YAML
+    public static let currentSchemaVersion = 3     // YAML, v3 加 encryption 字段
     public var schemaVersion: Int
     public var id: UUID
     public var createdAt: Date
@@ -199,12 +212,16 @@ public struct VMConfig: Codable, Sendable, Equatable {
     public var windowsDriversInstalled: Bool       // 仅 Windows
     public var clipboardSharingEnabled: Bool       // 仅 QEMU
     public var macStyleShortcuts: Bool             // 仅 QEMU
+    public var displaySpec: DisplaySpec?           // 显式 framebuffer 尺寸 + DPI
     public var macOS: MacOSSpec?
     public var linux: LinuxSpec?
     public var windows: WindowsSpec?
+    public var encryption: EncryptionSpec?         // schema v3 加: enabled / scheme (vz-sparsebundle | qemu-perfile)
     public func validate() throws                  // 校验 engine ↔ guestOS 合法组合
 }
 ```
+
+> KDF 参数 (salt / iterations) 不在 `EncryptionSpec` 内, 而落在 routing JSON (`<bundle>/meta/encryption.json` 或 `<bundle>.encryption.json`) — config 自身可能加密 (QEMU per-file), 解开 config 才能读 KDF 会陷死循环, 因此 routing JSON 是明文外部元数据, 跨机器 portable 入口。详见 [ENCRYPTION.md](ENCRYPTION.md)。
 
 完整 schema 见 [VM_BUNDLE.md](VM_BUNDLE.md)。
 
@@ -309,10 +326,12 @@ public enum HVMError: Error, CustomStringConvertible {
 - [QEMU_INTEGRATION.md](QEMU_INTEGRATION.md) — QEMU 后端集成
 - [QEMU_DISPLAY_PROTOCOL.md](QEMU_DISPLAY_PROTOCOL.md) — HDP v1.0.0 协议
 - [STORAGE.md](STORAGE.md) — 磁盘与 ISO
+- [CLONE.md](CLONE.md) — 整 VM 克隆 (APFS clonefile + 加密分支)
+- [ENCRYPTION.md](ENCRYPTION.md) — 整 VM 加密 (sparsebundle / qcow2 LUKS / config AES-GCM)
 - [NETWORK.md](NETWORK.md) — 网络 (NAT + socket_vmnet)
 - [GUI.md](GUI.md) — 主 App 界面
 - [CLI.md](CLI.md) — hvm-cli
-- [DEBUG_PROBE.md](DEBUG_PROBE.md) — hvm-dbg
+- [DEBUG_PROBE.md](DEBUG_PROBE.md) — hvm-dbg (含 GUI 自动化)
 - [BUILD_SIGN.md](BUILD_SIGN.md) — 构建签名
 - [GUEST_OS_INSTALL.md](GUEST_OS_INSTALL.md) — 装机流程
 - [DISPLAY_INPUT.md](DISPLAY_INPUT.md) — 显示与输入
@@ -322,4 +341,4 @@ public enum HVMError: Error, CustomStringConvertible {
 
 ---
 
-**最后更新**: 2026-05-04
+**最后更新**: 2026-05-05

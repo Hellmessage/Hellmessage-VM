@@ -44,12 +44,11 @@ borderless NSWindow + 自家 toolbar (`HVM/UI/Shell/Toolbar.swift`) + `MainWindo
 └────────────────────────────────────────────────────────────┘
 ```
 
-- `SidebarView` (`HVM/UI/Content/SidebarView.swift`): VM 列表 + GuestIcon + 状态点
+- `SidebarView` (`HVM/UI/Content/SidebarView.swift`): VM 列表 + GuestIcon + 状态点 + 加密 VM `lock.fill` 图标 + "Encrypted" 标签
 - `DetailContainerView` / `DetailBars`: 选中 VM 的详情 + 配置概览 + 主操作按钮; 嵌入运行时承载 `FramebufferHostView` (QEMU) 或 VZ view
 - `RunningTabsBar`: 多个 VM 同时运行时的快速切换条, 跟选中态 / 嵌入态联动
-- `StatusBar` + `MenuPopoverView`: menu bar 常驻 status item, 点出 popover 切显隐主窗口
-
-> **menu bar 双 status item 残留**: GUI 主进程 + 子进程 (`--host-mode-bundle`) 各注册一个 status item, 视觉上重复 (见 docs/v2/05 P-4 待清理)。
+- `UnlockPanel`: 加密 VM 解锁前 `VMListItem.config = nil`, 详情页改显示密码框 + 解锁按钮 (`AppModel.unlockEncryptedConfigForView`), 解锁结果存内存 `unlockedConfigs[vmId]`
+- `StatusBar` + `MenuPopoverView`: menu bar 常驻 status item, 点出 popover 列运行中 VM + 缩略图 + IP, 提供 Show Main / Quit footer
 
 ## detached 独立窗口
 
@@ -89,13 +88,17 @@ App 级合规 modal 栈容器, 同一时刻只渲染一个 modal, 队列排队:
 
 | 弹窗 | 触发 |
 |---|---|
-| `CreateVMDialog` | 新建 VM 向导 (macOS / Linux / Windows arm64) |
+| `CreateVMDialog` | 新建 VM 向导 (4 步: 名字 → OS 类型 → CPU/内存/磁盘 → 网络+加密) |
 | `EditConfigDialog` | 编辑 VM 配置 (CPU / 内存 / 网络 / 磁盘等), 含 `VMSettingsNetworkSection` 子节 |
 | `ErrorDialog` | 全项目唯一错误入口, 队列排队, 折叠 details |
 | `ConfirmDialog` | 二次确认 (Kill / 删除 / 还原 snapshot 等) |
 | `DiskAddDialog` / `DiskResizeDialog` | 数据盘加 / 主盘扩容 |
 | `SnapshotCreateDialog` | 创建 snapshot |
-| `CloneVMDialog` | 整 VM 克隆 (form / running / done 三态; 详情页 actionRow "Clone" 触发) |
+| `CloneVMDialog` | 整 VM 克隆 (form / running / done 三态; 加密源 prompt 密码; 详情页 actionRow "Clone" 触发) |
+| `EncryptVMDialog` | 明文 → 加密 VM (form / running / done 三态; 加密事务进行中 `closeAction = nil` 不可关) |
+| `DecryptVMDialog` | 加密 → 明文 VM (form / running / done 三态) |
+| `RekeyVMDialog` | 改密 (form 含原密码 + 新密码二次确认; running / done 三态) |
+| `EncryptionPasswordDialog` | 启动加密 VM 时弹 password prompt; 失败重试 |
 | `OSImagePickerDialog` | Linux 创建向导选 OSImageCatalog 内置发行版或自定 URL |
 | `OSImageFetchDialog` | OSImage 下载进度 modal |
 | `IPSWFetchDialog` (`HVM/UI/IPSW/`) | macOS IPSW 下载进度, `IpswCatalogPicker` 选具体 build |
@@ -119,17 +122,16 @@ App 级合规 modal 栈容器, 同一时刻只渲染一个 modal, 队列排队:
 
 新增"自绘 X" 必须放 `app/Sources/HVM/UI/Style/HVMX.swift` 并把 CLAUDE.md 清单加一行。
 
-## 创建向导 (`CreateVMDialog`)
+## 创建向导 (`CreateVMDialog`, 4-step)
 
-- **类型选择**: macOS (VZ) / Linux (默认 VZ, 可切 QEMU) / **Windows arm64 (实验性: QEMU 后端)** — Windows 选项必须显式标"实验性 (QEMU 后端)" + 强制 `engine=qemu`, 缺 QEMU 产物 (`make qemu` 未跑) 时灰掉并提示
-- **基础参数**: 名称 / CPU / 内存 / 主盘 GiB
-- **安装源**:
-  - macOS: 走 `IpswCatalogPicker` + `IpswFetchDialog` (Use Latest / Choose Version / Browse)
-  - Linux: 走 `OSImagePickerDialog` 选 `OSImageCatalog` 7 发行版 (Ubuntu 24.04 / 22.04 LTS / Debian 13 / Fedora 44 / Alpine 3.20 / Rocky 9 / openSUSE Tumbleweed) 或自填 ISO 路径; 已下载有 cached 标记
-  - Windows: 自家提供 ISO 路径 (Windows ISO 不入 catalog, 走 custom URL 兜底); 创建过程会触发 `VirtioWinFetchDialog` 按需下载 virtio-win 驱动 ISO 到 `cache/virtio-win/`
-- **网络**: `HVMNetModeSegment` 选 NAT / Bridged / Shared / Host (Bridged / Shared / Host 只 QEMU 后端可选, VZ bridged 等 entitlement 审批)
-- **Bundle 位置**: 默认 `~/Library/Application Support/HVM/VMs/<name>.hvmz`
-- **确认**: 摘要展示全部参数, 点 `创建` 落盘 `config.yaml` (schema v2) + 进入装机流程
+- **第 1 步 名字**: 名称 + bundle 父目录 (默认 `~/Library/Application Support/HVM/VMs/`)
+- **第 2 步 OS 类型 + 安装源**:
+  - macOS (VZ): `IpswCatalogPicker` + `IpswFetchDialog` (Use Latest / Choose Version / Browse)
+  - Linux (默认 VZ, 可切 QEMU): `OSImagePickerDialog` 选 `OSImageCatalog` 7 发行版 (Ubuntu 24.04 / 22.04 LTS / Debian 13 / Fedora 44 / Alpine 3.20 / Rocky 9 / openSUSE Tumbleweed) 或自填 ISO; Linux 还可选 `--import-disk` 直接复用现有 raw / qcow2 (cloud image)
+  - **Windows arm64 (实验性: QEMU 后端)**: 自家提供 ISO 路径 (不入 catalog), 创建过程会触发 `VirtioWinFetchDialog` 按需下载 virtio-win 驱动 ISO 到 `cache/virtio-win/`; 缺 QEMU 产物 (`make qemu` 未跑) 时灰掉并提示
+- **第 3 步 资源**: CPU 核心 / 内存 GiB / 主盘 GiB; 网络模式选 NAT / Bridged / Shared / Host (Bridged / Shared / Host 只 QEMU 后端可选, VZ bridged 等 entitlement 审批)
+- **第 4 步 加密** (仅 QEMU engine 显示): toggle + 双密码框二次确认; macOS guest 与 VZ Linux 因 scheme 推后, toggle 灰掉
+- **确认**: 摘要展示全部参数, 点 `创建` 落盘 `config.yaml` (schema v3) + 进入装机流程; 加密 VM 创建时同步生成 `meta/encryption.json` routing JSON 与 LUKS qcow2 主盘
 
 ## 多 VM 并发与 RunningTabsBar
 
@@ -166,6 +168,17 @@ QEMU 后端 `FramebufferHostView` 默认 `macStyleShortcuts = true` (跟 `VMConf
 
 `ErrorPresenter` 单例 (`AppModel.errors`), 队列排队 — 前一个关掉再弹下一个。details 折叠展示, 等宽字体, 可复制。所有业务侧报错统一 `errors.present(...)`, **任何地方都不能用 `NSAlert`**。
 
+## 加密 VM GUI 集成
+
+- **sidebar 标识**: `VMListItem.isEncrypted` true 时显示 `lock.fill` 图标 + 副文本 "Encrypted" 替代 guestOS 类型 (`SidebarView`)
+- **解锁前 config = nil**: `VMListItem.config: VMConfig?` 加密 VM 解锁前是 nil, 详情页 view 必须 `if let cfg = item.config` 兜底; routing JSON 提供 displayName / id 等 minimum 字段
+- **启动入口**: `requestStartWithPasswordIfNeeded` 自动弹 `EncryptionPasswordDialog`, **不**直接调 `start(item)` 不传 password
+- **加密事务 dialogs**: CreateVMDialog 加密 toggle / CloneVMDialog 加密源 prompt / Encrypt+Decrypt+RekeyVMDialog 三独立 dialog 各走 form / running / done 三态; running 态 `closeAction = nil` 不可关
+- **后台执行**: 加密事务 `Task.detached` 跑, 完成回主线程刷 list — 不阻 UI
+- **GUI 自动化**: 业务侧加 `.hvmProbe(id: ...)` 修饰符, 通过 `hvm-dbg gui *` 子命令做端到端测试 (HDP-GUI 协议, 见 [DEBUG_PROBE.md](DEBUG_PROBE.md))
+
+> VZ-sparsebundle 加密 GUI 暂未接入 (推后跟 ENCRYPTION.md v2.4 一致), 当前所有加密 VM 走 QEMU per-file scheme。
+
 ## 设置 / 网络面板
 
 - 没有独立 Settings 窗口, 配置在 `EditConfigDialog` 内
@@ -181,12 +194,13 @@ QEMU 后端 `FramebufferHostView` 默认 `macStyleShortcuts = true` (跟 `VMConf
 
 ## 相关文档
 
-- [DEBUG_PROBE.md](DEBUG_PROBE.md) — hvm-dbg, GUI 操作的可编程替代
+- [DEBUG_PROBE.md](DEBUG_PROBE.md) — hvm-dbg, GUI 操作的可编程替代 (含 `gui *` 子命令)
 - [DISPLAY_INPUT.md](DISPLAY_INPUT.md) — VZ / QEMU display 与输入设备
 - [QEMU_DISPLAY_PROTOCOL.md](QEMU_DISPLAY_PROTOCOL.md) — HDP framebuffer 协议
 - [NETWORK.md](NETWORK.md) — socket_vmnet daemon 装/卸
 - [GUEST_OS_INSTALL.md](GUEST_OS_INSTALL.md) — 装机向导背后流程
+- [ENCRYPTION.md](ENCRYPTION.md) — 加密 VM 对应模块的字段 / 流程
 
 ---
 
-**最后更新**: 2026-05-04
+**最后更新**: 2026-05-05

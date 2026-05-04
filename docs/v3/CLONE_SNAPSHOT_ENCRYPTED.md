@@ -1,9 +1,9 @@
 # 加密 VM clone + snapshot 支持 (顺带修 qcow2 snapshot 漏 bug)
 
-> 状态: **设计稿 v1 (2026-05-04)** — 评审中, 等用户敲定 D9 后开第一个 PR
+> 状态: **代码已合入 (2026-05)** (PR-A snapshot / PR-B clone). D9 决策 = 等价复制 + 同密码. 现状回写 [../v1/CLONE.md](../v1/CLONE.md) + [../v1/ENCRYPTION.md](../v1/ENCRYPTION.md).
 >
-> 父设计稿: [ENCRYPTION.md](ENCRYPTION.md) v2.4 / [CLONE.md](CLONE.md) (代码已合入)
-> 关联 TODO: [TODO.md](TODO.md) #14 (clone) / #15 (snapshot)
+> 父设计稿: [ENCRYPTION.md](ENCRYPTION.md) / [CLONE.md](CLONE.md) (均已合入)
+> 关联 TODO: [TODO.md](TODO.md) #14 (clone) / #15 (snapshot) — 已 Done
 
 ## 背景
 

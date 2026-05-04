@@ -1,9 +1,9 @@
 # HDP-GUI: hvm-dbg ↔ HVM GUI 测试协议
 
-> 状态: **设计稿 v1 (2026-05-04)** — 评审中, 用户主动提议 (中断 PR-11c 时插入)
+> 状态: **代码已合入 (2026-05)** (PR-G1/G2/G3/G5). D-G2 决策走自家 ProbeRegistry 不走 NSAccessibility (macOS 14+ a11y 实测不暴露给程序内查询). 现状回写 [../v1/DEBUG_PROBE.md](../v1/DEBUG_PROBE.md) "gui 子命令" 节 + [../v1/GUI.md](../v1/GUI.md) "加密 VM GUI 集成" 节.
 >
-> 关联 TODO: [TODO.md](TODO.md) (新增条目, 暂称"#G1 GUI 自动化测试通道")
-> 父稿: [GUI_ENCRYPTION.md](GUI_ENCRYPTION.md) PR-11 — GUI 加密验证依赖此协议
+> 关联 TODO: [TODO.md](TODO.md) #G1 GUI 自动化测试通道 — 已 Done
+> 父稿: [GUI_ENCRYPTION.md](GUI_ENCRYPTION.md) PR-11 (代码已合入)
 
 ## 背景
 

@@ -12,9 +12,11 @@
 
 ## 目录布局
 
+### 明文 VM (encryption.enabled=false 或字段缺省)
+
 ```
 foo.hvmz/
-├── config.yaml              — VMConfig 的 YAML 序列化(权威配置, schema v2)
+├── config.yaml              — VMConfig 的 YAML 序列化(权威配置, schema v3)
 ├── auxiliary/               — VZ macOS guest 必需数据
 │   ├── aux-storage          — VZMacAuxiliaryStorage 后端文件
 │   ├── machine-identifier   — VZMacMachineIdentifier (Data)
@@ -38,6 +40,41 @@ foo.hvmz/
 └── (无 run/ 子目录, 运行时 socket 走全局 HVMPaths.runDir/<uuid>.*)
 ```
 
+### 加密 VM (encryption.enabled=true)
+
+按 `EncryptionSpec.scheme` 分两路 (详见 [ENCRYPTION.md](ENCRYPTION.md)):
+
+**`scheme = qemu-perfile`** (QEMU 后端, 当前主路径):
+
+```
+foo.hvmz/
+├── config.yaml.enc          — config.yaml 的 AES-256-GCM 密文 ("HENC" magic + nonce + cipher + tag)
+├── meta/
+│   ├── encryption.json      — routing JSON, **明文**, 跨机器派生 KEK 入口
+│   │                          (schemaVersion / vm_id / scheme / kdf_algo / kdf_iterations / kdf_salt /
+│   │                           kdf_keylen / encrypted_paths / display_name / guest_os)
+│   └── thumbnail.png
+├── disks/
+│   ├── os.qcow2             — qcow2 LUKS-aes-256-xts (qcow2 内嵌 LUKS header)
+│   └── data-<uuid8>.qcow2   — 同 LUKS qcow2
+├── nvram/
+│   └── efi-vars.qcow2       — Win VM: OVMF VARS 转 LUKS qcow2 (raw 模板 → qemu-img convert 加密)
+├── tpm/                     — swtpm encrypt: aes-256-cbc + format=binary, 由 swtpm key fd 注入
+└── (其余目录与明文一致, 但 disks/nvram/tpm 落盘内容均为密文)
+```
+
+**`scheme = vz-sparsebundle`** (VZ 后端, 暂只接通"创建"分支, 启动解锁推后):
+
+```
+<parent>/
+├── foo.hvmz.sparsebundle/             — hdiutil AES-256 + APFS 整体加密容器
+│   └── (attach 后 mountpoint=/Volumes/HVM-<uuid8>)
+│       └── foo.hvmz/
+│           ├── config.yaml            — 明文 (sparsebundle 自己加密)
+│           └── [其余文件结构同明文 VM]
+└── foo.hvmz.encryption.json           — routing JSON, **明文**, 落 sparsebundle 外部
+```
+
 注:
 
 - `auxiliary/` 仅 `guestOS=.macOS` 用, 丢失整台 VM 报废
@@ -45,16 +82,18 @@ foo.hvmz/
 - `unattend.iso` 与 `.unattend-stage/` 仅 Windows guest 装机阶段
 - 运行时 socket(IPC / QMP / HDP / vdagent / swtpm)走 `~/Library/Application Support/HVM/run/<uuid>.*`, **不在 bundle 内**
 - VM 删除时**不**清理 host 侧 `~/Library/Application Support/HVM/logs/<displayName>-<uuid8>/`
+- 加密 VM `meta/encryption.json` 故意落明文: 没它 master KEK 派生不出来; 用户备份加密 VM 必须把 routing JSON 一起带
 
-## `config.yaml` Schema (v2)
+## `config.yaml` Schema (v3)
 
 > v1 (.json) 已断兼容: `BundleIO.load` 检测到 `config.json` 存在但无 `config.yaml` 时直接报错,要求重新创建或手动迁移。
+> v2 (.yaml, 早期无加密字段) 仍可读, 走 `ConfigMigrator.migrate_v2_to_v3` 自动升级 (顶层加 `encryption: { enabled: false }` 兜底)。
 
 ### 顶层字段
 
 | 字段 | 类型 | 说明 | 克隆 |
 |---|---|---|---|
-| `schemaVersion` | Int | 当前 `2`。> 当前抛 `.invalidSchema`; < 当前走 `ConfigMigrator` | 保留 |
+| `schemaVersion` | Int | 当前 `3`。> 当前抛 `.invalidSchema`; < 当前走 `ConfigMigrator` | 保留 |
 | `id` | UUID | bundle 创建时生成, 跟随一生 | **重生** |
 | `createdAt` | ISO8601 Date | 创建时间, 仅展示 | **重生** |
 | `displayName` | String | 展示名, 允许中文, 可与目录名不一致 | **重生** (用户输入) |
@@ -69,9 +108,11 @@ foo.hvmz/
 | `windowsDriversInstalled` | Bool | Windows 三态切换(false=ramfb / true=hvm-gpu-ramfb-pci) | 保留 |
 | `clipboardSharingEnabled` | Bool | 默认 true; 仅 QEMU 走 vdagent, VZ macOS guest 自带忽略此字段 | 保留 |
 | `macStyleShortcuts` | Bool | 默认 true; 仅 QEMU 生效, host cmd→guest ctrl | 保留 |
+| `displaySpec` | DisplaySpec? | 显式 framebuffer 尺寸 + DPI; 缺省按 `guestOS` 走默认 | 保留 |
 | `macOS` | MacOSSpec? | 仅 `guestOS=macOS` | 保留 |
 | `linux` | LinuxSpec? | 仅 `guestOS=linux` | 保留 |
 | `windows` | WindowsSpec? | 仅 `guestOS=windows` | 保留 |
+| `encryption` | EncryptionSpec? | schema v3 加, 详下 | 保留 (clone 走"等价复制 + 同密码", 见 CLONE.md) |
 
 > 克隆细节见 [STORAGE.md "Clone: 整 VM 克隆"](STORAGE.md). `auxiliary/machine-identifier` (macOS) 重生; `auxiliary/hardware-model` / `aux-storage` / `nvram/efi-vars.fd` / `tpm/*` 全保留.
 
@@ -129,7 +170,7 @@ macOS:
 ```yaml
 linux:
   kernelCmdLineExtra: null
-  rosettaShare: false       # 当前未接 ConfigBuilder, 见 docs/v2/05-pending-from-v1.md L-2
+  rosettaShare: false       # 当前未接 ConfigBuilder, 见 ROADMAP.md "残余项指引" L-2
 ```
 
 ### WindowsSpec
@@ -142,6 +183,24 @@ windows:
   autoInstallVirtioWin: false     # 当前 false: UTM Guest Tools ISO 已替代
   autoInstallSpiceTools: true     # 装完静默装 spice-guest-tools.exe
 ```
+
+### EncryptionSpec (schema v3)
+
+```yaml
+encryption:
+  enabled: true
+  scheme: qemu-perfile      # qemu-perfile (QEMU 主路径) | vz-sparsebundle (VZ 路径)
+  createdAt: 2026-04-12T10:23:18Z
+```
+
+字段语义:
+
+- `enabled = false` 或字段缺省 → 明文 VM, scheme 字段忽略
+- `scheme = qemu-perfile` → bundle 内 `config.yaml` 不存在, 改为 `config.yaml.enc` (AES-GCM 加密) + `meta/encryption.json` (明文 routing JSON)
+- `scheme = vz-sparsebundle` → bundle 整体套加密 sparsebundle, 解锁后 `config.yaml` 仍是明文; routing JSON 落 `<bundle>.encryption.json` (sparsebundle 外部)
+- `createdAt` 仅展示, GUI 详情页用; 改密 (rekey) 不重置该字段
+
+> KDF 参数 (salt / iterations / algo) **不在此结构里**, 落 routing JSON。原因: scheme=qemu-perfile 时 `config.yaml.enc` 是密文, 解开它需要先派生 master KEK, 而派生需要 KDF 参数 — 把 KDF 放在被加密的 config 里会陷死循环。详见 [ENCRYPTION.md](ENCRYPTION.md)。
 
 ## 命名规则
 
@@ -232,8 +291,8 @@ public final class BundleLock {
 
 ### 当前实现
 
-- `VMConfig.currentSchemaVersion = 2`
-- `ConfigMigrator.migrate(data:from:to:)` 框架已就位, 但**当前无 v2→v3 hook**(下一版加时按模板)
+- `VMConfig.currentSchemaVersion = 3`
+- `ConfigMigrator.migrate(data:from:to:)` 链式 hook 框架, **已实现 `migrate_v2_to_v3`**: 顶层加 `encryption: { enabled: false }` 兜底, schemaVersion 改 3, 幂等
 - v1 (.json) **已断兼容**: `BundleIO.load` 检测到 `legacyConfigFileName` 存在但无 `configFileName` 时, 抛 `BundleError` 报"重新创建 VM 或手动迁移", **不进入 migrator**
 
 ### `BundleIO.load` 流程
@@ -248,13 +307,16 @@ public final class BundleLock {
 ### 加新版本步骤(模板)
 
 ```swift
-// 1. VMConfig.currentSchemaVersion +1
+// 1. VMConfig.currentSchemaVersion +1 (例 3 → 4)
 // 2. ConfigMigrator.migrate 的 switch 加 case
-//    case (2, 3): current = try migrate_v2_to_v3(current)
-// 3. 实现 migrate_v2_to_v3(_:Data) -> Data:
+//    case (3, 4): current = try migrate_v3_to_v4(current)
+// 3. 实现 migrate_v3_to_v4(_:Data) -> Data:
 //    Yams.load → [String: Any] dict 改 → Yams.dump → Data
-//    最后写入 dict["schemaVersion"] = 3
+//    最后写入 dict["schemaVersion"] = 4
+//    必须幂等: migrate(migrate(x)) ≡ migrate(x)
 ```
+
+参考实现: `ConfigMigrator.migrate_v2_to_v3` (schema v2 → v3 加 `encryption: { enabled: false }` 兜底)。
 
 ## I/O 原子性
 
@@ -290,11 +352,12 @@ try FileManager.default.replaceItem(at: configURL, withItemAt: tmp, ...)
 
 ## 不做什么
 
-1. **不加密 bundle**(FileVault 已负责)
-2. **不签名 bundle**(用户改 yaml 自负)
-3. **不嵌入 snapshot 进 config**(独立 `snapshots/` 子目录, qcow2 内部链 + VZ save-state)
-4. **不做 iCloud Drive 同步指引**(同步工具与 flock / sparse 文件冲突, 明确不支持)
-5. **不再支持 v1 .json**(2026 年初已断兼容)
+1. **不签名 bundle**(用户改 yaml 自负)
+2. **不嵌入 snapshot 进 config**(独立 `snapshots/` 子目录, qcow2 内部链 + VZ save-state)
+3. **不做 iCloud Drive 同步指引**(同步工具与 flock / sparse 文件冲突, 明确不支持)
+4. **不再支持 v1 .json**(2026 年初已断兼容)
+
+> 加密 bundle 在 schema v3 已落地 (qemu-perfile + vz-sparsebundle 双 scheme), 不再依赖 FileVault 兜底。详见 [ENCRYPTION.md](ENCRYPTION.md)。
 
 ## 未决事项
 
@@ -305,4 +368,4 @@ try FileManager.default.replaceItem(at: configURL, withItemAt: tmp, ...)
 
 ---
 
-**最后更新**: 2026-05-04
+**最后更新**: 2026-05-05

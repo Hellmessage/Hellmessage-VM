@@ -1,9 +1,9 @@
 # PR-11: GUI 加密 VM 适配
 
-> 状态: **设计稿 v1 (2026-05-04)** — 评审中
+> 状态: **代码已合入 (2026-05)** (PR-11a/b/c 全落). 现状回写 [../v1/GUI.md](../v1/GUI.md) "加密 VM GUI 集成" 节.
 >
-> 父设计稿: [ENCRYPTION.md](ENCRYPTION.md) v2.4 PR-11
-> 关联 TODO: [TODO.md](TODO.md) #10
+> 父设计稿: [ENCRYPTION.md](ENCRYPTION.md) (代码已合入)
+> 关联 TODO: [TODO.md](TODO.md) #10 — 已 Done
 
 ## 背景
 
