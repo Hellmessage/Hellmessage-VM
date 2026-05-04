@@ -20,6 +20,10 @@ struct GuiCommand: AsyncParsableCommand {
         subcommands: [
             GuiPingCommand.self,
             GuiScreenshotCommand.self,
+            GuiListCommand.self,
+            GuiClickCommand.self,
+            GuiTypeCommand.self,
+            GuiReadCommand.self,
         ]
     )
 }
@@ -71,6 +75,133 @@ struct GuiPingCommand: AsyncParsableCommand {
             let ver  = resp.data?["version"] ?? "?"
             print("✔ pong (server version: \(ver))")
             _ = pong
+        } catch {
+            bail(error)
+        }
+    }
+}
+
+// MARK: - gui list
+
+struct GuiListCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "list",
+        abstract: "列当前主窗口所有打了 accessibilityIdentifier 的控件"
+    )
+
+    @Option(name: .long, help: "输出格式: human | json")
+    var format: OutputFormat = .human
+
+    @Option(name: .long, help: "过滤 identifier 前缀, 例 'dialog.createVM.'")
+    var prefix: String?
+
+    func run() async throws {
+        do {
+            let resp = try GuiSocket.wrappedRequest(op: "gui.list")
+            guard let json = resp.data?["payload"],
+                  let data = json.data(using: .utf8),
+                  var entries = try? JSONDecoder().decode([GuiEntry].self, from: data) else {
+                throw HVMError.ipc(.decodeFailed(reason: "gui.list payload"))
+            }
+            if let pfx = prefix {
+                entries = entries.filter { $0.identifier.hasPrefix(pfx) }
+            }
+            switch format {
+            case .json:
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                if let jdata = try? encoder.encode(entries),
+                   let s = String(data: jdata, encoding: .utf8) {
+                    print(s)
+                }
+            case .human:
+                if entries.isEmpty {
+                    print("(no controls with accessibilityIdentifier in current window)")
+                    return
+                }
+                print("IDENTIFIER                                                ROLE              LABEL")
+                for e in entries {
+                    let id = e.identifier.padding(toLength: 56, withPad: " ", startingAt: 0)
+                    let role = e.role.padding(toLength: 18, withPad: " ", startingAt: 0)
+                    let lab = e.label ?? "—"
+                    print("\(id)\(role)\(lab)")
+                }
+            }
+        } catch {
+            bail(error)
+        }
+    }
+}
+
+private struct GuiEntry: Codable {
+    let identifier: String
+    let label: String
+    let role: String
+}
+
+// MARK: - gui click
+
+struct GuiClickCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "click",
+        abstract: "点指定 identifier 的控件 (button / toggle 切换)"
+    )
+
+    @Option(name: .long, help: "控件 identifier (走 hvm-dbg gui list 拿)")
+    var identifier: String
+
+    func run() async throws {
+        do {
+            _ = try GuiSocket.wrappedRequest(op: "gui.click", args: ["identifier": identifier])
+            print("✔ clicked '\(identifier)'")
+        } catch {
+            bail(error)
+        }
+    }
+}
+
+// MARK: - gui type
+
+struct GuiTypeCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "type",
+        abstract: "给 textField 输文字 (覆盖现有值)"
+    )
+
+    @Option(name: .long, help: "控件 identifier")
+    var identifier: String
+
+    @Option(name: .long, help: "要输入的文字")
+    var text: String
+
+    func run() async throws {
+        do {
+            _ = try GuiSocket.wrappedRequest(op: "gui.type",
+                                              args: ["identifier": identifier, "text": text])
+            print("✔ typed into '\(identifier)'")
+        } catch {
+            bail(error)
+        }
+    }
+}
+
+// MARK: - gui read
+
+struct GuiReadCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "read",
+        abstract: "读 textField / toggle 当前值"
+    )
+
+    @Option(name: .long, help: "控件 identifier")
+    var identifier: String
+
+    func run() async throws {
+        do {
+            let resp = try GuiSocket.wrappedRequest(op: "gui.read",
+                                                     args: ["identifier": identifier])
+            let value = resp.data?["value"] ?? ""
+            print(value)
         } catch {
             bail(error)
         }

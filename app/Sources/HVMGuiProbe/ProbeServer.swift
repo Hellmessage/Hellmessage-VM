@@ -88,11 +88,69 @@ public enum ProbeServer {
         case "gui.screenshot":
             return handleScreenshot(req)
 
+        case "gui.list":
+            return handleList(req)
+
+        case "gui.click":
+            return handleClick(req)
+
+        case "gui.type":
+            return handleType(req)
+
+        case "gui.read":
+            return handleRead(req)
+
         default:
             return .failure(id: req.id,
                              code: "gui.unknown_op",
-                             message: "unknown op '\(req.op)' (PR-G1 仅支持 gui.ping / gui.screenshot)")
+                             message: "unknown op '\(req.op)'")
         }
+    }
+
+    @MainActor
+    private static func handleList(_ req: IPCRequest) -> IPCResponse {
+        let entries = ViewRegistry.list()
+        return .encoded(id: req.id, payload: entries, kind: "gui.list")
+    }
+
+    @MainActor
+    private static func handleClick(_ req: IPCRequest) -> IPCResponse {
+        guard let id = req.args["identifier"] else {
+            return .failure(id: req.id, code: "gui.missing_arg",
+                             message: "gui.click 需要 args.identifier")
+        }
+        if ViewRegistry.click(identifier: id) {
+            return .success(id: req.id, data: ["clicked": id])
+        }
+        return .failure(id: req.id, code: "gui.identifier_not_found",
+                         message: "no clickable control with identifier '\(id)' (use gui.list 看可用 ids)")
+    }
+
+    @MainActor
+    private static func handleType(_ req: IPCRequest) -> IPCResponse {
+        guard let id = req.args["identifier"] else {
+            return .failure(id: req.id, code: "gui.missing_arg",
+                             message: "gui.type 需要 args.identifier")
+        }
+        let text = req.args["text"] ?? ""
+        if ViewRegistry.type(identifier: id, text: text) {
+            return .success(id: req.id, data: ["typed": id])
+        }
+        return .failure(id: req.id, code: "gui.identifier_not_found",
+                         message: "no textField/toggle with identifier '\(id)'")
+    }
+
+    @MainActor
+    private static func handleRead(_ req: IPCRequest) -> IPCResponse {
+        guard let id = req.args["identifier"] else {
+            return .failure(id: req.id, code: "gui.missing_arg",
+                             message: "gui.read 需要 args.identifier")
+        }
+        if let value = ViewRegistry.read(identifier: id) {
+            return .success(id: req.id, data: ["value": value])
+        }
+        return .failure(id: req.id, code: "gui.identifier_not_found",
+                         message: "no readable control with identifier '\(id)'")
     }
 
     @MainActor

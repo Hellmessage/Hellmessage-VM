@@ -3,6 +3,7 @@
 
 import SwiftUI
 import HVMCore
+import HVMGuiProbe
 
 struct HVMToolbar: View {
     @Bindable var model: AppModel
@@ -48,6 +49,9 @@ struct HVMToolbar: View {
             .buttonStyle(PillAccentButtonStyle())
             .help("新建 VM (Cmd+N)")
             .keyboardShortcut("n", modifiers: [.command])
+            .hvmProbe(id: "toolbar.button.newVM",
+                       label: "New VM",
+                       action: .button { model.showCreateWizard = true })
         }
         .padding(.horizontal, HVMSpace.lg)
         .frame(height: HVMBar.toolbarHeight)
