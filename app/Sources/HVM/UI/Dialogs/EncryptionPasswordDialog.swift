@@ -14,6 +14,7 @@
 // 错误 (例如错密码) 走 errorMessage inline 显示, 不退 dialog 让用户重试.
 
 import SwiftUI
+import HVMGuiProbe
 
 struct EncryptionPasswordDialog: View {
     let displayName: String
@@ -62,15 +63,25 @@ struct EncryptionPasswordDialog: View {
                               variant: .secure,
                               error: errorMessage)
                     .frame(maxWidth: .infinity)
+                    .hvmProbe(id: "dialog.encryptionPassword.input.password",
+                               label: "Password",
+                               action: .textField(getter: { password },
+                                                   setter: { password = $0 }))
             }
         } footer: {
             HVMModalFooter {
                 Button("取消", action: onCancel)
                     .buttonStyle(GhostButtonStyle())
+                    .hvmProbe(id: "dialog.encryptionPassword.button.cancel",
+                               label: "Cancel",
+                               action: .button { onCancel() })
                 Button(submitLabel) { onSubmit(password) }
                     .buttonStyle(PrimaryButtonStyle())
                     .disabled(password.isEmpty)
                     .keyboardShortcut(.return, modifiers: [])
+                    .hvmProbe(id: "dialog.encryptionPassword.button.submit",
+                               label: submitLabel,
+                               action: .button { onSubmit(password) })
             }
         }
     }

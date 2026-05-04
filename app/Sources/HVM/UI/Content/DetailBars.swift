@@ -14,6 +14,7 @@ import HVMBackend
 import HVMBundle
 import HVMCore
 import HVMEncryption
+import HVMGuiProbe
 import HVMStorage
 
 // MARK: - 状态徽章
@@ -284,6 +285,8 @@ struct StoppedContentView: View {
                 }
                 .buttonStyle(PrimaryButtonStyle())
                 .keyboardShortcut(.return, modifiers: [.command])
+                .hvmProbe(id: "detail.button.start", label: "Start",
+                           action: .button { startAction() })
             }
         }
     }
@@ -406,9 +409,13 @@ struct StoppedContentView: View {
                         Button("改密 (Rekey)…") { model.rekeyItem = item }
                             .buttonStyle(GhostButtonStyle())
                             .help("重写所有 LUKS keyslot + 重密 config + 写新 routing salt. Win 会重置 TPM")
+                            .hvmProbe(id: "detail.encryption.button.rekey", label: "Rekey",
+                                       action: .button { model.rekeyItem = item })
                         Button("转明文…") { model.decryptItem = item }
                             .buttonStyle(GhostButtonStyle())
                             .help("解密所有 disks / OVMF VARS / config. 操作不可逆 (除非再 encrypt)")
+                            .hvmProbe(id: "detail.encryption.button.decrypt", label: "Decrypt",
+                                       action: .button { model.decryptItem = item })
                         Spacer()
                     }
                 } else {
@@ -419,6 +426,8 @@ struct StoppedContentView: View {
                         Button("加密这台 VM…") { model.encryptItem = item }
                             .buttonStyle(GhostButtonStyle())
                             .help("把 disks / OVMF VARS / config 全部加密 (LUKS + AES-GCM). 启动需密码")
+                            .hvmProbe(id: "detail.encryption.button.encrypt", label: "Encrypt",
+                                       action: .button { model.encryptItem = item })
                         Spacer()
                     }
                 }

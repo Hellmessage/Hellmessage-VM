@@ -129,7 +129,7 @@ PR-1 ~ PR-10b 全部合入. 覆盖:
 
 | # | 项 | 状态 | 备注 |
 |---|---|---|---|
-| **G1** | hvm-dbg GUI 测试协议 (HDP-GUI) | Pending | 🛠, 用户主动提议 2026-05-04. Unix socket + JSON-RPC 让 hvm-dbg 能 click/type/screenshot HVM 主进程 GUI. 设计稿 docs/v3/HVM_DBG_GUI_PROTOCOL.md. **主张先行** — PR-11f 真机 e2e 依赖此通道. PR-G1~G6 共 ~2.5 天 |
+| **G1** | hvm-dbg GUI 测试协议 (HDP-GUI) | Done | 🛠, 用户提议 2026-05-04. PR-G1 (probe server + screenshot) / PR-G2+G3 (ProbeRegistry + gui list/click/type/read) / PR-G5 (PR-11 dialog 补 .hvmProbe). **D-G2 决策变更**: 弃 NSAccessibility 路径, 走自家 closure 注册表 (SwiftUI a11y 不暴露给程序内查询; ProbeRegistry 直接 closure 调用更稳). PR-G4 (event subscribe) 推后 (YAGNI). 真机 e2e: hvm-dbg gui 自动化跑通 Win11 → encrypt → decrypt 全 GUI 链路 |
 
 ## 不在本清单内 (明确划走)
 

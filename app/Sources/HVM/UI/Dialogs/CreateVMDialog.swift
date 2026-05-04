@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 import HVMBundle
 import HVMCore
 import HVMEncryption
+import HVMGuiProbe
 import HVMInstall
 import HVMNet
 import HVMQemu
@@ -107,10 +108,16 @@ struct CreateVMDialog: View {
             HVMModalFooter {
                 Button("Cancel") { model.showCreateWizard = false }
                     .buttonStyle(GhostButtonStyle())
+                    .hvmProbe(id: "dialog.createVM.button.cancel",
+                               label: "Cancel",
+                               action: .button { model.showCreateWizard = false })
                 Button(guestOS == .macOS ? "Create & Install" : "Create") { createAction() }
                     .buttonStyle(PrimaryButtonStyle())
                     .disabled(creating || name.isEmpty || !installerPathValid)
                     .keyboardShortcut(.return, modifiers: [.command])
+                    .hvmProbe(id: "dialog.createVM.button.create",
+                               label: "Create",
+                               action: .button { createAction() })
             }
         }
         .onAppear {
@@ -156,6 +163,9 @@ struct CreateVMDialog: View {
         VStack(alignment: .leading, spacing: HVMSpace.lg) {
             field("Name") {
                 HVMTextField("linux-vm", text: $name)
+                    .hvmProbe(id: "dialog.createVM.input.name",
+                               label: "VM Name",
+                               action: .textField(getter: { name }, setter: { name = $0 }))
             }
 
             field("Guest OS") {
@@ -166,12 +176,16 @@ struct CreateVMDialog: View {
                         }
                         .buttonStyle(.plain)
                         .frame(maxWidth: .infinity)
+                        .hvmProbe(id: "dialog.createVM.os.linux", label: "Linux",
+                                   action: .button { guestOS = .linux })
 
                         Button { guestOS = .macOS } label: {
                             osChip("macOS", selected: guestOS == .macOS)
                         }
                         .buttonStyle(.plain)
                         .frame(maxWidth: .infinity)
+                        .hvmProbe(id: "dialog.createVM.os.macOS", label: "macOS",
+                                   action: .button { guestOS = .macOS })
 
                         Button { guestOS = .windows } label: {
                             osChip("Windows", selected: guestOS == .windows,
@@ -183,6 +197,8 @@ struct CreateVMDialog: View {
                         .help(qemuBackendAvailable
                               ? "实验性: Windows arm64 走 QEMU 后端"
                               : "Windows 需要 QEMU 后端: 请先 make qemu (或 make build-all)")
+                        .hvmProbe(id: "dialog.createVM.os.windows", label: "Windows",
+                                   action: .button { guestOS = .windows })
                     }
                     if guestOS == .windows {
                         Text("实验性: Windows arm64 走 QEMU 后端 (强制 engine=qemu)")
@@ -224,11 +240,15 @@ struct CreateVMDialog: View {
                             osChip("VZ", selected: linuxEngine == .vz)
                         }
                         .buttonStyle(.plain)
+                        .hvmProbe(id: "dialog.createVM.engine.vz", label: "VZ",
+                                   action: .button { linuxEngine = .vz })
                         Button { linuxEngine = .qemu } label: {
                             osChip("QEMU", selected: linuxEngine == .qemu, disabled: !qemuBackendAvailable)
                         }
                         .buttonStyle(.plain)
                         .disabled(!qemuBackendAvailable)
+                        .hvmProbe(id: "dialog.createVM.engine.qemu", label: "QEMU",
+                                   action: .button { linuxEngine = .qemu })
                         .help(qemuBackendAvailable
                               ? "QEMU 后端: 支持 socket_vmnet 桥接 / 共享网络"
                               : "QEMU 暂不可选 — 需先 make qemu (或 make build-all)")
@@ -343,6 +363,9 @@ struct CreateVMDialog: View {
                 isOn: $enableEncryption,
                 help: "启用后磁盘 / OVMF VARS / config 全部加密. 启动期需输密码. 跨机器 portable: cp 整 .hvmz 到另一台 Mac, 同密码可启动. 想换密码用 hvm-cli rekey"
             )
+            .hvmProbe(id: "dialog.createVM.toggle.encrypt", label: "Encrypt VM",
+                       action: .toggle(getter: { enableEncryption },
+                                        setter: { enableEncryption = $0 }))
 
             if enableEncryption {
                 VStack(alignment: .leading, spacing: HVMSpace.sm) {
@@ -350,12 +373,20 @@ struct CreateVMDialog: View {
                         HVMTextField("≥ 4 字符",
                                       text: $encryptPassword,
                                       variant: .secure)
+                            .hvmProbe(id: "dialog.createVM.input.password",
+                                       label: "Password",
+                                       action: .textField(getter: { encryptPassword },
+                                                           setter: { encryptPassword = $0 }))
                     }
                     field("Confirm") {
                         HVMTextField("再次输入",
                                       text: $encryptPasswordConfirm,
                                       variant: .secure,
                                       error: passwordError)
+                            .hvmProbe(id: "dialog.createVM.input.passwordConfirm",
+                                       label: "Confirm Password",
+                                       action: .textField(getter: { encryptPasswordConfirm },
+                                                           setter: { encryptPasswordConfirm = $0 }))
                     }
                     Text("⚠ 忘密不可恢复. 没有 backdoor / Keychain 缓存. 请妥善保存.")
                         .font(HVMFont.small)

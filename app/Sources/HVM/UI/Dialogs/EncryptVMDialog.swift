@@ -10,6 +10,7 @@ import SwiftUI
 import HVMBundle
 import HVMCore
 import HVMEncryption
+import HVMGuiProbe
 import HVMQemu
 
 struct EncryptVMDialog: View {
@@ -47,10 +48,14 @@ struct EncryptVMDialog: View {
                 case .form:
                     Button("取消") { close() }
                         .buttonStyle(GhostButtonStyle())
+                        .hvmProbe(id: "dialog.encryptVM.button.cancel", label: "Cancel",
+                                   action: .button { close() })
                     Button("加密") { startEncrypt() }
                         .buttonStyle(PrimaryButtonStyle())
                         .keyboardShortcut(.return, modifiers: [.command])
                         .disabled(password.isEmpty || password != passwordConfirm || password.count < 4)
+                        .hvmProbe(id: "dialog.encryptVM.button.encrypt", label: "Encrypt",
+                                   action: .button { startEncrypt() })
                 case .running:
                     Button("加密中…") {}
                         .buttonStyle(PrimaryButtonStyle())
@@ -59,6 +64,8 @@ struct EncryptVMDialog: View {
                     Button("完成") { close() }
                         .buttonStyle(PrimaryButtonStyle())
                         .keyboardShortcut(.return, modifiers: [.command])
+                        .hvmProbe(id: "dialog.encryptVM.button.done", label: "Done",
+                                   action: .button { close() })
                 }
             }
         }
@@ -88,11 +95,17 @@ struct EncryptVMDialog: View {
             VStack(alignment: .leading, spacing: HVMSpace.xs) {
                 LabelText("Password")
                 HVMTextField("≥ 4 字符", text: $password, variant: .secure)
+                    .hvmProbe(id: "dialog.encryptVM.input.password", label: "Password",
+                               action: .textField(getter: { password },
+                                                   setter: { password = $0 }))
             }
             VStack(alignment: .leading, spacing: HVMSpace.xs) {
                 LabelText("Confirm")
                 HVMTextField("再次输入", text: $passwordConfirm, variant: .secure,
                               error: passwordError)
+                    .hvmProbe(id: "dialog.encryptVM.input.passwordConfirm", label: "Confirm",
+                               action: .textField(getter: { passwordConfirm },
+                                                   setter: { passwordConfirm = $0 }))
             }
 
             Text("⚠ 忘密不可恢复. 操作不可撤销.")

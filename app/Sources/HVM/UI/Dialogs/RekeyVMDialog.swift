@@ -6,6 +6,7 @@ import SwiftUI
 import HVMBundle
 import HVMCore
 import HVMEncryption
+import HVMGuiProbe
 import HVMQemu
 
 struct RekeyVMDialog: View {
@@ -44,10 +45,14 @@ struct RekeyVMDialog: View {
                 case .form:
                     Button("取消") { close() }
                         .buttonStyle(GhostButtonStyle())
+                        .hvmProbe(id: "dialog.rekeyVM.button.cancel", label: "Cancel",
+                                   action: .button { close() })
                     Button("改密") { startRekey() }
                         .buttonStyle(PrimaryButtonStyle())
                         .keyboardShortcut(.return, modifiers: [.command])
                         .disabled(!canSubmit)
+                        .hvmProbe(id: "dialog.rekeyVM.button.rekey", label: "Rekey",
+                                   action: .button { startRekey() })
                 case .running:
                     Button("改密中…") {}
                         .buttonStyle(PrimaryButtonStyle())
@@ -56,6 +61,8 @@ struct RekeyVMDialog: View {
                     Button("完成") { close() }
                         .buttonStyle(PrimaryButtonStyle())
                         .keyboardShortcut(.return, modifiers: [.command])
+                        .hvmProbe(id: "dialog.rekeyVM.button.done", label: "Done",
+                                   action: .button { close() })
                 }
             }
         }
@@ -89,15 +96,24 @@ struct RekeyVMDialog: View {
             VStack(alignment: .leading, spacing: HVMSpace.xs) {
                 LabelText("Old Password")
                 HVMTextField("当前密码", text: $oldPassword, variant: .secure)
+                    .hvmProbe(id: "dialog.rekeyVM.input.oldPassword", label: "Old Password",
+                               action: .textField(getter: { oldPassword },
+                                                   setter: { oldPassword = $0 }))
             }
             VStack(alignment: .leading, spacing: HVMSpace.xs) {
                 LabelText("New Password")
                 HVMTextField("≥ 4 字符", text: $newPassword, variant: .secure)
+                    .hvmProbe(id: "dialog.rekeyVM.input.newPassword", label: "New Password",
+                               action: .textField(getter: { newPassword },
+                                                   setter: { newPassword = $0 }))
             }
             VStack(alignment: .leading, spacing: HVMSpace.xs) {
                 LabelText("Confirm New")
                 HVMTextField("再次输入新密码", text: $newPasswordConfirm, variant: .secure,
                               error: passwordError)
+                    .hvmProbe(id: "dialog.rekeyVM.input.newPasswordConfirm", label: "Confirm New",
+                               action: .textField(getter: { newPasswordConfirm },
+                                                   setter: { newPasswordConfirm = $0 }))
             }
 
             if let inlineError {

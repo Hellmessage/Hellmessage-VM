@@ -5,6 +5,7 @@ import SwiftUI
 import HVMBundle
 import HVMCore
 import HVMEncryption
+import HVMGuiProbe
 import HVMQemu
 
 struct DecryptVMDialog: View {
@@ -41,10 +42,14 @@ struct DecryptVMDialog: View {
                 case .form:
                     Button("取消") { close() }
                         .buttonStyle(GhostButtonStyle())
+                        .hvmProbe(id: "dialog.decryptVM.button.cancel", label: "Cancel",
+                                   action: .button { close() })
                     Button("解密") { startDecrypt() }
                         .buttonStyle(PrimaryButtonStyle())
                         .keyboardShortcut(.return, modifiers: [.command])
                         .disabled(password.isEmpty)
+                        .hvmProbe(id: "dialog.decryptVM.button.decrypt", label: "Decrypt",
+                                   action: .button { startDecrypt() })
                 case .running:
                     Button("解密中…") {}
                         .buttonStyle(PrimaryButtonStyle())
@@ -53,6 +58,8 @@ struct DecryptVMDialog: View {
                     Button("完成") { close() }
                         .buttonStyle(PrimaryButtonStyle())
                         .keyboardShortcut(.return, modifiers: [.command])
+                        .hvmProbe(id: "dialog.decryptVM.button.done", label: "Done",
+                                   action: .button { close() })
                 }
             }
         }
@@ -76,6 +83,9 @@ struct DecryptVMDialog: View {
             VStack(alignment: .leading, spacing: HVMSpace.xs) {
                 LabelText("Password")
                 HVMTextField("当前密码", text: $password, variant: .secure)
+                    .hvmProbe(id: "dialog.decryptVM.input.password", label: "Password",
+                               action: .textField(getter: { password },
+                                                   setter: { password = $0 }))
             }
 
             if let inlineError {
