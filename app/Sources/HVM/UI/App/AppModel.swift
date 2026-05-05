@@ -165,9 +165,9 @@ public final class AppModel {
     /// 设计稿 docs/v3/GUI_ENCRYPTION.md PR-11b.
     public var startPasswordRequest: StartPasswordRequest? = nil
 
-    /// 用户在 sidebar 右键"配置…"加密未解锁 VM → 弹密码 modal 解锁后自动 set editConfigItem.
-    /// 与 startPasswordRequest 同结构, 但 submit 走 unlockForEditConfig 不走 startInternal.
-    public var editConfigUnlockRequest: StartPasswordRequest? = nil
+    /// 用户在 sidebar 右键"配置…"加密未解锁 VM → 弹密码 modal 解锁后停在详情页, 不再弹 EditConfigDialog.
+    /// 与 startPasswordRequest 同结构, 但 submit 走 unlockFromSidebarMenu 不走 startInternal.
+    public var sidebarUnlockRequest: StartPasswordRequest? = nil
 
     /// 启动密码请求. 用户输入后 → 调用 onSubmit (异步走 startInternal).
     public struct StartPasswordRequest: Identifiable {
@@ -240,7 +240,7 @@ public final class AppModel {
             || diskAddItem != nil
             || diskResizeRequest != nil
             || startPasswordRequest != nil
-            || editConfigUnlockRequest != nil
+            || sidebarUnlockRequest != nil
             || encryptItem != nil
             || decryptItem != nil
             || rekeyItem != nil
@@ -599,22 +599,20 @@ public final class AppModel {
         refreshList()
     }
 
-    /// EncryptionPasswordDialog (editConfigUnlockRequest 路径) 的 onSubmit 入口.
-    /// 解锁成功 → 从刷新后的 list 取带 config 的同 id item → set editConfigItem 弹编辑 dialog.
-    /// 错密码 → editConfigUnlockRequest.errorMessage inline 显示让用户重试.
+    /// EncryptionPasswordDialog (sidebarUnlockRequest 路径) 的 onSubmit 入口.
+    /// 解锁成功 → 关 dialog, selectedID 在 sidebar 右键时已设, 详情页自动展开为完整视图.
+    /// 不再自动弹 EditConfigDialog (用户要编辑配置走详情页内入口, 不强推 modal).
+    /// 错密码 → sidebarUnlockRequest.errorMessage inline 显示让用户重试.
     /// 其他错误 → errors.present + 关 dialog.
-    public func unlockForEditConfig(_ item: VMListItem, password: String, errors: ErrorPresenter) {
+    public func unlockFromSidebarMenu(_ item: VMListItem, password: String, errors: ErrorPresenter) {
         Task { @MainActor in
             do {
                 try await unlockEncryptedConfigForView(item: item, password: password)
-                editConfigUnlockRequest = nil
-                if let unlocked = list.first(where: { $0.id == item.id }), unlocked.config != nil {
-                    editConfigItem = unlocked
-                }
+                sidebarUnlockRequest = nil
             } catch HVMError.encryption(.wrongPassword) {
-                editConfigUnlockRequest?.errorMessage = "密码错误"
+                sidebarUnlockRequest?.errorMessage = "密码错误"
             } catch {
-                editConfigUnlockRequest = nil
+                sidebarUnlockRequest = nil
                 errors.present(error)
             }
         }

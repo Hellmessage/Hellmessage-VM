@@ -80,8 +80,8 @@ struct SidebarView: View {
                             ))
                             // 右键菜单: 克隆 / 配置.
                             // - 克隆走 CloneVMDialog (加密 VM 走等价复制 + 同密码, 由 dialog 内部 prompt 处理)
-                            // - 配置: 明文 / 已解锁加密 → 直接 EditConfigDialog;
-                            //         加密未解锁 → 弹 EncryptionPasswordDialog 解锁后自动 EditConfigDialog
+                            // - 配置: 选中该 VM (详情页展开为编辑视图); 加密未解锁 → 弹密码框,
+                            //         解锁后停在详情页, 不强推 EditConfigDialog modal
                             .contextMenu {
                                 Button("克隆…") {
                                     model.selectedID = captured
@@ -89,10 +89,8 @@ struct SidebarView: View {
                                 }
                                 Button("配置…") {
                                     model.selectedID = captured
-                                    if item.config != nil {
-                                        model.editConfigItem = item
-                                    } else {
-                                        model.editConfigUnlockRequest = .init(item: item)
+                                    if item.config == nil {
+                                        model.sidebarUnlockRequest = .init(item: item)
                                     }
                                 }
                             }

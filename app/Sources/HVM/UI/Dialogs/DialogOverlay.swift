@@ -79,19 +79,19 @@ struct DialogOverlay: View {
                     }
                 )
             }
-            // sidebar 右键 "配置…" 加密未解锁 → 解锁后自动 set editConfigItem
-            if let req = model.editConfigUnlockRequest {
+            // sidebar 右键 "配置…" 加密未解锁 → 解锁后停在详情页 (不再弹 EditConfigDialog)
+            if let req = model.sidebarUnlockRequest {
                 EncryptionPasswordDialog(
                     displayName: req.item.displayName,
                     prompt: "解锁加密 VM",
-                    body: "VM \"\(req.item.displayName)\" 已加密. 输入密码解锁后进入配置编辑.",
+                    body: "VM \"\(req.item.displayName)\" 已加密. 输入密码解锁查看完整配置.",
                     errorMessage: req.errorMessage,
                     submitLabel: "解锁",
                     onSubmit: { pw in
-                        model.unlockForEditConfig(req.item, password: pw, errors: errors)
+                        model.unlockFromSidebarMenu(req.item, password: pw, errors: errors)
                     },
                     onCancel: {
-                        model.editConfigUnlockRequest = nil
+                        model.sidebarUnlockRequest = nil
                     }
                 )
             }
