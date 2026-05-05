@@ -10,6 +10,8 @@ struct HVMStatusBar: View {
     /// 全局日志开关本地镜像. UserDefaults 是源, init 时读, 切换时写回 UserDefaults +
     /// 通知 LogSink. SwiftUI 用 @State 自己维护 + 渲染响应.
     @State private var loggingEnabled: Bool = LoggingPreferences.readEnabledFromDefaults()
+    /// 全局缩略图开关本地镜像. 同 LoggingPreferences 的模式.
+    @State private var thumbnailsEnabled: Bool = ThumbnailPreferences.readEnabledFromDefaults()
 
     private var stats: (total: Int, running: Int) {
         var r = 0
@@ -48,10 +50,34 @@ struct HVMStatusBar: View {
 
             Spacer()
 
-            // 日志开关: 关闭后 LogSink 不再写 ~/Library/Application Support/HVM/logs/<date>.log.
-            // 跨进程 (CLI / VMHost) 通过 UserDefaults 共享, 下次启动也保留. 子进程自家 stderr
-            // (qemu-stderr.log / swtpm.log 等) 不受影响 — 那是 Process stderr 重定向, 跟主进程
-            // os.Logger 通路独立.
+            // 缩略图开关: 关闭后 VZ / QEMU 抓帧定时器 short-circuit, 不再写
+            // bundle/meta/thumbnail.png; 状态栏 popover 显示占位图标. 已有 .png 不主动删.
+            Button(action: { toggleThumbnails() }) {
+                HStack(spacing: 4) {
+                    Image(systemName: thumbnailsEnabled ? "photo" : "photo.badge.exclamationmark")
+                        .font(HVMFont.small)
+                        .foregroundStyle(thumbnailsEnabled ? HVMColor.accent : HVMColor.textTertiary)
+                    Text(thumbnailsEnabled ? "缩略图: 开" : "缩略图: 关")
+                        .font(HVMFont.small)
+                        .foregroundStyle(thumbnailsEnabled ? HVMColor.textSecondary : HVMColor.textTertiary)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+            }
+            .buttonStyle(.plain)
+            .help(thumbnailsEnabled
+                  ? "缩略图开 — 运行中 VM 周期截图 (10s), 状态栏 popover 显示真实画面"
+                  : "缩略图关 — 不再周期截图, popover 显示占位图标 (已有 thumbnail.png 不删)")
+            .hvmProbe(id: "statusbar.button.toggleThumbnails",
+                       label: thumbnailsEnabled ? "Thumbnails On" : "Thumbnails Off",
+                       action: .button { toggleThumbnails() })
+
+            // 日志开关: 关闭后 host 侧所有诊断 .log 全部不落盘 —
+            //   - LogSink 顶层 ~/Library/Application Support/HVM/logs/<date>.log
+            //   - per-VM 子目录 host-<date>.log / qemu-stderr.log / swtpm.log / swtpm-stderr.log
+            // 跨进程 (CLI / VMHost) 通过 com.hellmessage.vm UserDefaults suite 共享, 下次启动
+            // 也保留. guest 自身 serial console-*.log (在 bundle/logs/) 是 guest 的输出,
+            // 不在本开关范围.
             Button(action: { toggleLogging() }) {
                 HStack(spacing: 4) {
                     Image(systemName: loggingEnabled ? "doc.text" : "doc.text.fill.viewfinder")
@@ -66,8 +92,8 @@ struct HVMStatusBar: View {
             }
             .buttonStyle(.plain)
             .help(loggingEnabled
-                  ? "全局日志开 — 点击关闭后 HVM 主进程不再落 .log"
-                  : "全局日志关 — 点击开启 (子进程 stderr / guest serial 不受本开关影响)")
+                  ? "全局日志开 — 点击关闭后 HVM 全部 host 侧 .log 不再落盘 (含子进程 qemu/swtpm)"
+                  : "全局日志关 — 点击开启 (guest serial console-*.log 始终落 bundle, 不受本开关影响)")
             .hvmProbe(id: "statusbar.button.toggleLogging",
                        label: loggingEnabled ? "Logging On" : "Logging Off",
                        action: .button { toggleLogging() })
@@ -85,5 +111,11 @@ struct HVMStatusBar: View {
         let newValue = !loggingEnabled
         loggingEnabled = newValue
         LoggingPreferences.setEnabled(newValue)
+    }
+
+    private func toggleThumbnails() {
+        let newValue = !thumbnailsEnabled
+        thumbnailsEnabled = newValue
+        ThumbnailPreferences.setEnabled(newValue)
     }
 }

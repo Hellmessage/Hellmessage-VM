@@ -340,6 +340,9 @@ final class QemuFanoutSession {
     /// 借用任意一个 alive subscriber 的 renderer 抓 CGImage; 全部空时跳过本 tick.
     /// 各 subscriber 的 renderer 内容相同 (映射同一份 shm), 借任一个均可.
     private func captureThumbnail() {
+        // 缩略图开关关闭 → 跳过 capture, 不写 bundle/meta/thumbnail.png.
+        // 每 tick 读 (而非启动时拍板), 用户切换 toggle 立即生效.
+        guard ThumbnailPreferences.readEnabledFromDefaults() else { return }
         guard let view = subscribers.lazy.compactMap({ $0.view }).first,
               let cg = view.renderer.snapshotCGImage() else { return }
         let bundle = self.bundleURL

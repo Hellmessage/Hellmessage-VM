@@ -96,11 +96,18 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         }
 
         // stderr 落全局 ~/Library/.../HVM/logs/<displayName>-<uuid8>/qemu-stderr.log;
-        // 每次 truncate 避免累积老错误干扰判断
-        let qemuLogsDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id)
-        _ = try? HVMPaths.ensure(qemuLogsDir)
-        let stderrLog = qemuLogsDir.appendingPathComponent("qemu-stderr.log")
-        try? FileManager.default.removeItem(at: stderrLog)
+        // 每次 truncate 避免累积老错误干扰判断. 日志开关关闭 → stderrLog=nil, runner
+        // 丢弃 stderr, 不创建 vmLogsDir 子目录.
+        let stderrLog: URL?
+        if LoggingPreferences.readEnabledFromDefaults() {
+            let qemuLogsDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id)
+            _ = try? HVMPaths.ensure(qemuLogsDir)
+            let url = qemuLogsDir.appendingPathComponent("qemu-stderr.log")
+            try? FileManager.default.removeItem(at: url)
+            stderrLog = url
+        } else {
+            stderrLog = nil
+        }
 
         // 桥接 (vmnet) 路径已下线; 当前仅 .nat 可用, 不需要父进程 fd 透传.
         let runner = QemuProcessRunner(
@@ -111,7 +118,7 @@ struct QemuLaunchCommand: AsyncParsableCommand {
             print("✔ QEMU 已启动 pid=\(pid)")
             print("  bundle: \(bundleURL.path)")
             print("  qmp:    \(qmpSocket.path)")
-            print("  stderr: \(stderrLog.path)")
+            print("  stderr: \(stderrLog?.path ?? "(日志关, 不落盘)")")
         }
 
         // QMP 连接重试: QEMU bind unix socket 与 listen 之间有窗口, ECONNREFUSED 期间重试.
@@ -142,7 +149,8 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         guard let client else {
             FileHandle.standardError.write("✗ QMP 连接失败 (15s 超时): \(lastErr.map(String.init(describing:)) ?? "未知")\n".data(using: .utf8)!)
             FileHandle.standardError.write("  QEMU 状态: \(runner.state)\n".data(using: .utf8)!)
-            FileHandle.standardError.write("  查看 stderr: tail \(stderrLog.path)\n".data(using: .utf8)!)
+            let logHint = stderrLog.map { "tail \($0.path)" } ?? "(日志开关已关, 无 stderr 落盘)"
+            FileHandle.standardError.write("  查看 stderr: \(logHint)\n".data(using: .utf8)!)
             runner.forceKill()
             runner.waitUntilExit()
             throw ExitCode(5)
@@ -257,9 +265,21 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         try HVMPaths.ensure(HVMPaths.runDir)
         let sockPath = HVMPaths.swtpmSocketPath(for: config.id).path
         let pidPath = HVMPaths.swtpmPidPath(for: config.id)
-        let swtpmLogsDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id)
-        try HVMPaths.ensure(swtpmLogsDir)
-        let logFile = swtpmLogsDir.appendingPathComponent("swtpm.log")
+        // 日志开关关闭 → swtpm.log / swtpm-stderr.log 全部跳过, 不创建 vmLogsDir 子目录.
+        let logFile: URL?
+        let stderrLog: URL?
+        if LoggingPreferences.readEnabledFromDefaults() {
+            let swtpmLogsDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id)
+            try HVMPaths.ensure(swtpmLogsDir)
+            let lf = swtpmLogsDir.appendingPathComponent("swtpm.log")
+            let sl = swtpmLogsDir.appendingPathComponent("swtpm-stderr.log")
+            try? FileManager.default.removeItem(at: sl)
+            logFile = lf
+            stderrLog = sl
+        } else {
+            logFile = nil
+            stderrLog = nil
+        }
         try? FileManager.default.removeItem(atPath: sockPath)
         try? FileManager.default.removeItem(at: pidPath)
 
@@ -267,8 +287,6 @@ struct QemuLaunchCommand: AsyncParsableCommand {
             stateDir: stateDir, ctrlSocketPath: sockPath,
             logFile: logFile, pidFile: pidPath
         ))
-        let stderrLog = swtpmLogsDir.appendingPathComponent("swtpm-stderr.log")
-        try? FileManager.default.removeItem(at: stderrLog)
         let runner = SwtpmRunner(binary: swtpmBin, args: argsList,
                                  ctrlSocketPath: sockPath, stderrLog: stderrLog)
         do {
@@ -280,7 +298,11 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         let ready = await runner.waitForSocketReady(timeoutSec: 5)
         guard ready else {
             FileHandle.standardError.write("✗ swtpm socket 5s 未就绪 (state=\(runner.state))\n".data(using: .utf8)!)
-            FileHandle.standardError.write("  详见 \(stderrLog.path) 与 \(logFile.path)\n".data(using: .utf8)!)
+            if let sl = stderrLog, let lf = logFile {
+                FileHandle.standardError.write("  详见 \(sl.path) 与 \(lf.path)\n".data(using: .utf8)!)
+            } else {
+                FileHandle.standardError.write("  (日志开关已关, 无 swtpm-stderr.log / swtpm.log 落盘)\n".data(using: .utf8)!)
+            }
             runner.forceKill()
             runner.waitUntilExit()
             throw ExitCode(32)

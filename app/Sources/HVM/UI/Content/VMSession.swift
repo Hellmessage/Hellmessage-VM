@@ -178,6 +178,9 @@ public final class VMSession {
         thumbnailTimer = Timer.scheduledTimer(withTimeInterval: HVMScreenshot.thumbnailIntervalSec, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
+                // 缩略图开关关闭 → 跳过 capture, 不写 bundle/meta/thumbnail.png.
+                // 每 tick 读 (而非启动时拍板), 用户切换 toggle 立即生效.
+                guard ThumbnailPreferences.readEnabledFromDefaults() else { return }
                 _ = ThumbnailGenerator.capture(from: self.attachment.view, to: self.bundleURL)
             }
         }

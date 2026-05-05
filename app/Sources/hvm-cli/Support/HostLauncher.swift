@@ -34,8 +34,9 @@ public enum HostLauncher {
         return nil
     }
 
-    /// 拉起 VMHost 子进程并立即返回. stdout/stderr 重定向到全局
-    /// `~/Library/Application Support/HVM/logs/<displayName>-<uuid8>/host-<date>.log`.
+    /// 拉起 VMHost 子进程并立即返回. 日志开 → stdout/stderr 重定向到全局
+    /// `~/Library/Application Support/HVM/logs/<displayName>-<uuid8>/host-<date>.log`;
+    /// 日志关 → stdout/stderr 重定向 /dev/null, 不创建 vmLogsDir 子目录.
     ///
     /// 加密 VM (`password` 非空) 通过 stdin Pipe 透传 password 到子进程, 子进程
     /// main.swift 读 stdin until EOF, 拿到 password 后调 EncryptedBundleIO.unlock.
@@ -66,15 +67,21 @@ public enum HostLauncher {
             displayName = config.displayName
             vmId = config.id
         }
-        let logURL = try makeHostLogURL(displayName: displayName, id: vmId)
-        let logHandle = try FileHandle(forWritingTo: logURL)
-        try logHandle.seekToEnd()
 
         let proc = Process()
         proc.executableURL = binary
         proc.arguments = ["--host-mode-bundle", resolved.path]
-        proc.standardOutput = logHandle
-        proc.standardError = logHandle
+        if LoggingPreferences.readEnabledFromDefaults() {
+            let logURL = try makeHostLogURL(displayName: displayName, id: vmId)
+            let logHandle = try FileHandle(forWritingTo: logURL)
+            try logHandle.seekToEnd()
+            proc.standardOutput = logHandle
+            proc.standardError = logHandle
+        } else {
+            let devNull = FileHandle(forWritingAtPath: "/dev/null")
+            proc.standardOutput = devNull
+            proc.standardError = devNull
+        }
         // stdin: 透传 password (加密 VM) / 立即 close (明文 VM)
         let stdinPipe = Pipe()
         proc.standardInput = stdinPipe

@@ -234,11 +234,19 @@ public enum QemuHostEntry {
         QemuHostState.shared.consoleSocketURL = consoleSocketURL
 
         // 3. stderr 落全局 ~/Library/.../HVM/logs/<displayName>-<uuid8>/qemu-stderr.log
-        // (truncate, 不累积老错误)
-        let qemuLogsDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id)
-        _ = try? HVMPaths.ensure(qemuLogsDir)
-        let stderrLog = qemuLogsDir.appendingPathComponent("qemu-stderr.log")
-        try? FileManager.default.removeItem(at: stderrLog)
+        // (truncate, 不累积老错误). 日志开关关闭 → stderrLog=nil, runner 丢弃 stderr,
+        // 不创建 vmLogsDir 子目录.
+        let loggingEnabled = LoggingPreferences.readEnabledFromDefaults()
+        let stderrLog: URL?
+        if loggingEnabled {
+            let qemuLogsDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id)
+            _ = try? HVMPaths.ensure(qemuLogsDir)
+            let url = qemuLogsDir.appendingPathComponent("qemu-stderr.log")
+            try? FileManager.default.removeItem(at: url)
+            stderrLog = url
+        } else {
+            stderrLog = nil
+        }
 
         // 4. 启动 QEMU 子进程. 桥接 (vmnet) 路径已下线; 当前仅支持 NAT, 不需要 fd 透传.
         let runner = QemuProcessRunner(
@@ -285,7 +293,8 @@ public enum QemuHostEntry {
                 deadlineSec: HVMTimeout.qmpConnect
             )
             guard let client else {
-                fputs("HVMHost(qemu): QMP 连接失败 (15s 超时); 查看 \(stderrLog.path)\n", stderr)
+                let logHint = stderrLog?.path ?? "(日志开关已关, 无 stderr 落盘)"
+                fputs("HVMHost(qemu): QMP 连接失败 (15s 超时); 查看 \(logHint)\n", stderr)
                 runner.forceKill()
                 QemuHostState.shared.tearDown(exitCode: 23)
             }
@@ -442,13 +451,20 @@ public enum QemuHostEntry {
 
         // 2. 路径准备: state dir 持久 (留 bundle, TPM NVRAM 表征属 VM 自身) /
         //    socket+pid 运行时 (HVM/run) / log 全局 (HVM/logs/<displayName>-<uuid8>/)
+        // 日志开关关闭 → swtpm.log / swtpm-stderr.log 全部跳过, 不创建 vmLogsDir 子目录.
         let stateDir = BundleLayout.tpmStateDir(bundleURL)
         try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         let sockPath = HVMPaths.swtpmSocketPath(for: config.id).path
         let pidPath = HVMPaths.swtpmPidPath(for: config.id)
-        let swtpmLogsDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id)
-        _ = try? HVMPaths.ensure(swtpmLogsDir)
-        let logFile = swtpmLogsDir.appendingPathComponent("swtpm.log")
+        let swtpmLoggingEnabled = LoggingPreferences.readEnabledFromDefaults()
+        let logFile: URL?
+        if swtpmLoggingEnabled {
+            let swtpmLogsDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id)
+            _ = try? HVMPaths.ensure(swtpmLogsDir)
+            logFile = swtpmLogsDir.appendingPathComponent("swtpm.log")
+        } else {
+            logFile = nil
+        }
         // 清残留 socket / pid (上次崩溃留的会让 swtpm bind 失败 / 误以为已在跑)
         FSCleanup.removeQuietly(atPath: sockPath, context: "stale swtpm socket")
         FSCleanup.removeQuietly(at: pidPath,      context: "stale swtpm pid file")
@@ -470,8 +486,15 @@ public enum QemuHostEntry {
             stdinHandle = inj.pipeReadHandle
             injector = inj
         }
-        let stderrLog = swtpmLogsDir.appendingPathComponent("swtpm-stderr.log")
-        try? FileManager.default.removeItem(at: stderrLog)
+        let stderrLog: URL?
+        if let lf = logFile {
+            // logFile 非 nil 表示日志开启 — swtpm-stderr.log 与 swtpm.log 同目录
+            let url = lf.deletingLastPathComponent().appendingPathComponent("swtpm-stderr.log")
+            try? FileManager.default.removeItem(at: url)
+            stderrLog = url
+        } else {
+            stderrLog = nil
+        }
         let runner = SwtpmRunner(binary: swtpmBin, args: swtpmArgs,
                                  ctrlSocketPath: sockPath, stderrLog: stderrLog,
                                  stdinHandle: stdinHandle)
@@ -503,7 +526,9 @@ public enum QemuHostEntry {
             switch runner.state {
             case .exited, .crashed:
                 fputs("HVMHost(qemu): ✗ swtpm 启动后立即退出 state=\(runner.state)\n", stderr)
-                fputs("  详见 \(stderrLog.path) 与 \(logFile.path)\n", stderr)
+                let hint = (stderrLog?.path).map { "详见 \($0)" }
+                    ?? "(日志开关已关, 无 swtpm-stderr.log / swtpm.log 落盘)"
+                fputs("  \(hint)\n", stderr)
                 lock.release()
                 exit(32)
             default: break

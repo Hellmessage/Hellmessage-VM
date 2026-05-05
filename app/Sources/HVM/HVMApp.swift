@@ -277,8 +277,10 @@ final class HVMAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// 读 bundle/meta/thumbnail.png. 走 ThumbnailCache (LRU + mtime 失效),
-    /// 多 VM 时 popover 弹出零 IO 抖动.
+    /// 多 VM 时 popover 弹出零 IO 抖动. 缩略图开关关闭 → 直接返 nil, 让 popover
+    /// 走占位图标分支 (即使 .png 还存在也不展示).
     private func thumbnailForVM(_ item: AppModel.VMListItem) -> NSImage? {
+        guard ThumbnailPreferences.readEnabledFromDefaults() else { return nil }
         let url = item.bundleURL
             .appendingPathComponent(BundleLayout.metaDirName)
             .appendingPathComponent(BundleLayout.thumbnailName)

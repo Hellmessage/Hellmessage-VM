@@ -766,8 +766,10 @@ public final class AppModel {
 
     /// QEMU 后端 (外部进程) 启动. 派生 self binary 走 --host-mode-bundle,
     /// 子进程进 main.swift if 分支 → HVMHostEntry.run → QemuHostEntry.run.
-    /// stdout/stderr 落全局 ~/Library/Application Support/HVM/logs/<displayName>-<uuid8>/host-<date>.log
-    /// (与 hvm-cli StartCommand 一致).
+    /// 日志开 → stdout/stderr 落全局
+    /// ~/Library/Application Support/HVM/logs/<displayName>-<uuid8>/host-<date>.log
+    /// (与 hvm-cli StartCommand 一致); 日志关 → stdout/stderr 重定向 /dev/null,
+    /// 不创建 vmLogsDir 子目录.
     private func spawnExternalHost(bundleURL: URL,
                                     displayName: String,
                                     id: UUID,
@@ -775,16 +777,22 @@ public final class AppModel {
         guard let exec = Bundle.main.executableURL else {
             throw HVMError.backend(.vzInternal(description: "无法定位 HVM.app 二进制"))
         }
-        let logURL = try makeHostLogURL(displayName: displayName, id: id)
-        let handle = try FileHandle(forWritingTo: logURL)
-        try handle.seekToEnd()
         let proc = Process()
         proc.executableURL = exec
         // --gui-embedded: 告诉 host 子进程它是被 GUI 主进程派生的, 跳过自己装
         // menu bar status item (GUI 主进程已有, 避免重复图标).
         proc.arguments = ["--host-mode-bundle", bundleURL.path, "--gui-embedded"]
-        proc.standardOutput = handle
-        proc.standardError = handle
+        if LoggingPreferences.readEnabledFromDefaults() {
+            let logURL = try makeHostLogURL(displayName: displayName, id: id)
+            let handle = try FileHandle(forWritingTo: logURL)
+            try handle.seekToEnd()
+            proc.standardOutput = handle
+            proc.standardError = handle
+        } else {
+            let devNull = FileHandle(forWritingAtPath: "/dev/null")
+            proc.standardOutput = devNull
+            proc.standardError = devNull
+        }
         // 加密 VM (password 非空) 走 stdin Pipe 透传; 明文 VM (password nil) close stdin EOF.
         let stdinPipe = Pipe()
         proc.standardInput = stdinPipe
@@ -795,8 +803,8 @@ public final class AppModel {
         try? stdinPipe.fileHandleForWriting.close()
     }
 
-    /// host-<date>.log 路径准备. 与 HostLauncher.makeHostLogURL 等价 (二者属不同模块,
-     /// 各自实现避免 UI ↔ hvm-cli 互相依赖).
+    /// host-<date>.log 路径准备. 仅日志开启时调用. 与 HostLauncher.makeHostLogURL 等价
+    /// (二者属不同模块, 各自实现避免 UI ↔ hvm-cli 互相依赖).
     private func makeHostLogURL(displayName: String, id: UUID) throws -> URL {
         let dir = HVMPaths.vmLogsDir(displayName: displayName, id: id)
         try HVMPaths.ensure(dir)
