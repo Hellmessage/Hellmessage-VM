@@ -919,11 +919,15 @@ struct StoppedContentView: View {
             .help("从此 VM 克隆出一台独立 VM (APFS clonefile, 几乎零空间)")
 
             // 危险操作 (Delete) 放最右, 走 ConfirmDialog 弹窗确认避免误触.
-            Button(role: .destructive) { deleteAction() } label: {
-                Text("Delete")
+            // ephemeral VM (用户拖入的 .hvmz) 不显示 Delete — 避免误删用户原始 bundle;
+            // 该类项靠"2min 无操作 / 启动后停下"自动从 list 消失, bundle 留原位置不动.
+            if !model.isEphemeral(item) {
+                Button(role: .destructive) { deleteAction() } label: {
+                    Text("Delete")
+                }
+                .buttonStyle(GhostButtonStyle(destructive: true))
+                .help("将虚拟机 bundle 移到废纸篓")
             }
-            .buttonStyle(GhostButtonStyle(destructive: true))
-            .help("将虚拟机 bundle 移到废纸篓")
         }
     }
 

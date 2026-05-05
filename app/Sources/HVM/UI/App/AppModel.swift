@@ -69,6 +69,12 @@ public final class AppModel {
     /// runState=running 时 insert, 后续探到 stopped 且已 in started → 清掉 ephemeralBundles + ephemeralStarted.
     /// 状态机原因: 区分 "刚拖入未启动" vs "启动后又停了" 两种 stopped.
     private var ephemeralStarted: Set<URL> = []
+    /// 每个未启动的 ephemeral bundle 最后一次"用户活动"时间. 拖入时 set, 用户 selectedID
+    /// 切到该 VM 时 refreshList 续命; 超过 ephemeralIdleTTLSeconds (2min) 没启动 (未 in started)
+    /// 自动清掉 — 防止用户拖入后忘了, sidebar 永远占着无关项.
+    private var ephemeralLastTouch: [URL: Date] = [:]
+    /// ephemeral VM 在 "拖入但没启动 + 没操作" 状态下保留多久 (秒). 超时自动从 list 消失.
+    private let ephemeralIdleTTLSeconds: TimeInterval = 120
     /// 当前 GUI 进程内运行中的 VM, 按 config.id 索引
     public var sessions: [UUID: VMSession] = [:]
     /// refreshList 的 mtime 缓存: bundlePath → (config.json mtime, item).
@@ -390,14 +396,17 @@ public final class AppModel {
 
         // ephemeral bundles (用户拖入的 .hvmz, 不在 vmsRoot 下) 也合进 list.
         // 状态机: runState=running → ephemeralStarted.insert; 已 in started 又 stopped → 清掉.
+        // 没启动过 + selected 续命已超时 (ephemeralIdleTTLSeconds, 默认 2min) → 清掉.
         // 路径用 standardized form 比对 vmsRoot 已扫到的, 同 bundle 重复 (用户拖了 vmsRoot 下的)
         // 直接跳过 ephemeral, 复用 vmsRoot 那份.
         let scannedPaths = Set(items.map { $0.bundleURL.standardizedFileURL.path })
+        let now = Date()
         for url in Array(ephemeralBundles) {
             let std = url.standardizedFileURL
             if scannedPaths.contains(std.path) {
                 ephemeralBundles.remove(url)
                 ephemeralStarted.remove(url)
+                ephemeralLastTouch.removeValue(forKey: url)
                 continue
             }
             let busy = BundleLock.isBusy(bundleURL: std)
@@ -405,7 +414,17 @@ public final class AppModel {
             if ephemeralStarted.contains(url), runState == "stopped" {
                 ephemeralBundles.remove(url)
                 ephemeralStarted.remove(url)
+                ephemeralLastTouch.removeValue(forKey: url)
                 continue
+            }
+            // 没启动过 + 没操作 (selected 续命超时) → 清
+            if !ephemeralStarted.contains(url), runState == "stopped" {
+                let last = ephemeralLastTouch[url] ?? now
+                if now.timeIntervalSince(last) > ephemeralIdleTTLSeconds {
+                    ephemeralBundles.remove(url)
+                    ephemeralLastTouch.removeValue(forKey: url)
+                    continue
+                }
             }
             if runState == "running" {
                 ephemeralStarted.insert(url)
@@ -425,10 +444,13 @@ public final class AppModel {
                     item = VMListItem(bundleURL: std, routing: routing, runState: runState)
                 }
                 items.append(item)
+                // selected 续命: 用户在看 → 不算 idle
+                if selectedID == item.id { ephemeralLastTouch[url] = now }
             } else {
                 guard let cfg = try? BundleIO.load(from: std) else { continue }
                 let item = VMListItem(bundleURL: std, config: cfg, runState: runState)
                 items.append(item)
+                if selectedID == item.id { ephemeralLastTouch[url] = now }
             }
         }
 
@@ -501,9 +523,15 @@ public final class AppModel {
             id = cfg.id
         }
         ephemeralBundles.insert(std)
+        ephemeralLastTouch[std] = Date()
         refreshList()
         selectedID = id
         return id
+    }
+
+    /// 用户拖入的临时 bundle 判定. UI 据此隐藏 "Delete" 按钮 (避免误删用户原始 .hvmz).
+    public func isEphemeral(_ item: VMListItem) -> Bool {
+        ephemeralBundles.contains(item.bundleURL.standardizedFileURL)
     }
 
     /// 自动锁定扫描: 30s 由 autoLockTimer 触发. 末次活动 > unlockedTTLSeconds 的 VM
