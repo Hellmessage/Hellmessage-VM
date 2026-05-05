@@ -29,7 +29,7 @@ final class DetachedVMWindowController: NSWindowController, NSWindowDelegate {
     private let fanout: QemuFanoutSession
     /// 这个独立窗口里的 framebuffer view. fanout subscriber, 不当 resize master.
     private var fbView: FramebufferHostView?
-    private var toolbarHost: NSHostingView<DetachedVMToolbar>?
+    private var toolbarHost: DraggableHostingView<DetachedVMToolbar>?
     private var observationTask: Task<Void, Never>?
 
     /// 默认窗口尺寸 / 最小尺寸. 独立窗口主要用来在副屏全屏看 guest, 给个 1024x768
@@ -61,12 +61,12 @@ final class DetachedVMWindowController: NSWindowController, NSWindowDelegate {
         // 黑底跟嵌入路径视觉一致 (CLAUDE.md: 主窗口不跟随系统主题, 走深色)
         window.backgroundColor = NSColor.black
         window.appearance = NSAppearance(named: .darkAqua)
-        // borderless 拖动: isMovableByWindowBackground=true 让 background NSView
-        // (即 toolbar 区, 因为 toolbar 是 SwiftUI HStack 的 background 不接 mouseDown)
-        // 触发 window 拖. FramebufferHostView 自己 override mouseDown 给 InputForwarder,
-        // 不会 propagate 到 window, 所以拖 framebuffer 不会拖窗口. ✓
+        // borderless 拖动: 仅自家 toolbar (28px 高的 chrome 条) 能拖窗 — 用
+        // DraggableHostingView 子类 override mouseDown 调 performDrag, SwiftUI 按钮自己
+        // 接住事件不会 propagate 到 hosting view. isMovableByWindowBackground=false 防止
+        // framebuffer / 边框等其他空白区被拖 (用户期望与标准 macOS 窗口一致, 只标题栏拖).
         window.isMovable = true
-        window.isMovableByWindowBackground = true
+        window.isMovableByWindowBackground = false
         // 整 contentView 圆角 (跟标准 macOS 窗口视觉一致)
         window.contentView?.wantsLayer = true
         window.contentView?.layer?.cornerRadius = 10
@@ -178,7 +178,9 @@ final class DetachedVMWindowController: NSWindowController, NSWindowDelegate {
         // sharedErrors 在 HVMAppDelegate 启动时注入; 兜底用一个 detached 自己的
         // ErrorPresenter (报错只会写自己的 queue, DialogOverlay 看不到 — 但保证不崩).
         let errors = model.sharedErrors ?? ErrorPresenter()
-        let toolbar = NSHostingView(rootView: DetachedVMToolbar(
+        // DraggableHostingView 替代 NSHostingView: SwiftUI 按钮自己接 mouseDown 走按钮 action,
+        // 透明区落到 hosting view 自身 → mouseDown override 调 window.performDrag 拖窗.
+        let toolbar = DraggableHostingView(rootView: DetachedVMToolbar(
             model: model, errors: errors, item: item
         ))
         toolbar.translatesAutoresizingMaskIntoConstraints = false
@@ -464,6 +466,18 @@ private struct TrafficLights: View {
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - DraggableHostingView
+//
+// borderless 窗口自家 chrome 条用. SwiftUI 按钮 (NSHostingView 内部子 view) 自己接住
+// mouseDown 走 button action; 透明区落到本 NSHostingView 自身 → mouseDown override 调
+// window.performDrag 拖窗. 跟 macOS 标准 titlebar 行为一致 — 只这一条窄区能拖, 不会
+// 因为点 framebuffer / 边框等其他空白被误拖.
+final class DraggableHostingView<Content: View>: NSHostingView<Content> {
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
     }
 }
 
