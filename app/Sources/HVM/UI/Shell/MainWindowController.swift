@@ -24,6 +24,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let model: AppModel
     private let errors: ErrorPresenter
     private let confirms: ConfirmPresenter
+    /// observeDialogActivity 同步把 dialogActive 推进 detail 容器, 让 QEMU 嵌入 view
+    /// 让出 inputCapture (NSCursor.unhide), 否则 modal 上看不到鼠标光标. weak 防 retain cycle.
+    private weak var detailContainer: DetailContainerView?
 
     /// 用户点 window 关闭按钮时被调. 由 AppDelegate 注入回调切到 menu bar 模式.
     var onCloseRequested: (() -> Void)?
@@ -107,6 +110,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
         // AppKit detail 容器
         let detail = DetailContainerView(model: model, errors: errors, confirms: confirms)
+        self.detailContainer = detail
 
         // Dialog overlay 最顶层. 必须用 PassthroughHostingView, 否则透明区域吞所有点击
         let overlay = PassthroughHostingView(rootView: DialogOverlay(model: model, errors: errors, confirms: confirms))
@@ -187,6 +191,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             for session in model.sessions.values {
                 session.attachment.view.inputSuspended = active
             }
+            // QEMU 嵌入 view 的 NSCursor.hide() 不走 inputSuspended, 走 inputCaptureEnabled,
+            // 由 DetailContainerView 内部合并 detached + dialogActive 决定. 这里只推 dialogActive.
+            self.detailContainer?.dialogActive = active
         } onChange: { [weak self, weak overlay] in
             Task { @MainActor in
                 guard let self, let overlay else { return }

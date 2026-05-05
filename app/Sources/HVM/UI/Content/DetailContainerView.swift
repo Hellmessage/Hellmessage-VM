@@ -189,13 +189,23 @@ final class DetailContainerView: NSView {
         syncEmbeddedInputCapture()
     }
 
+    /// 主窗口前台是否有 dialog (Create wizard / EditConfig / 错误对话框 等). MainWindowController
+    /// 在 observeDialogActivity 同步设进来. dialog 在前 → QEMU 嵌入 view 让出 inputCapture
+    /// (跟 detached 同等处理), 让 host 鼠标光标在 dialog 上正常显示, 不被 NSCursor.hide() 隐藏.
+    public var dialogActive: Bool = false {
+        didSet {
+            guard dialogActive != oldValue else { return }
+            syncEmbeddedInputCapture()
+        }
+    }
+
     /// 主窗口的 QEMU 嵌入 view, 当对应 VM 已弹出独立窗口时, 主窗口让出 mouse/key
-    /// 捕获 — 让用户操作完全发生在独立窗口里.
+    /// 捕获 — 让用户操作完全发生在独立窗口里. dialog active 时同样让出 (避免 dialog 上看不见鼠标).
     private func syncEmbeddedInputCapture() {
         guard let view = currentQemuFanoutView,
               let id = currentQemuFanoutVMID else { return }
         let detached = model.detachedQemuVMs.contains(id)
-        view.inputCaptureEnabled = !detached
+        view.inputCaptureEnabled = !detached && !dialogActive
     }
 
     /// 比较两份 VMConfig, 忽略 `networks` 字段. 用于 refresh() 决定是否需要重建 stopped host:
