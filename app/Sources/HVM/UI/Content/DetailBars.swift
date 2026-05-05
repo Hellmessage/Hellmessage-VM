@@ -196,6 +196,51 @@ struct DetailBottomBar: View {
     }
 }
 
+// MARK: - 详情页内嵌 "网络" 区块
+//
+// 复用 EditConfigDialog 同款 VMSettingsNetworkSection (TerminalSection("网络") + 多 NIC
+// 卡片 + vmnet daemon 安装面板), 用本地 draft 承接编辑 + .onChange 自动持久化到 yaml.
+//
+// 调用方 (StoppedContentView) 必须保证 item.config != nil; 加密未解锁的 VM 不进 StoppedContentView,
+// 走 UnlockPanel.
+//
+// .id(item.id) 由父视图给, 切 VM 时 SwiftUI 重建本 View 让 @State draft 重新从新的 item.config 初始化.
+// VM 必须 stopped (本视图仅在 StoppedContentView 下渲染; saveConfig requireStopped=true 兜底).
+struct InlineNetworksSection: View {
+    @Bindable var model: AppModel
+    @Bindable var errors: ErrorPresenter
+    let item: AppModel.VMListItem
+
+    @State private var draft: VMConfig
+
+    init(model: AppModel, errors: ErrorPresenter, item: AppModel.VMListItem) {
+        guard let cfg = item.config else {
+            preconditionFailure("InlineNetworksSection 仅在 item.config != nil 时可用 (StoppedContentView 已保证)")
+        }
+        self._model = Bindable(model)
+        self._errors = Bindable(errors)
+        self.item = item
+        self._draft = State(initialValue: cfg)
+    }
+
+    var body: some View {
+        VMSettingsNetworkSection(draft: $draft, item: item)
+            .onChange(of: draft.networks) { _, new in
+                persist(new)
+            }
+    }
+
+    private func persist(_ networks: [NetworkSpec]) {
+        do {
+            try model.saveConfig(item: item) { cfg in
+                cfg.networks = networks
+            }
+        } catch {
+            errors.present(error)
+        }
+    }
+}
+
 // MARK: - Stopped 整片内容
 
 struct StoppedContentView: View {
@@ -212,6 +257,10 @@ struct StoppedContentView: View {
                 titleBlock
                 resourcesSection
                 metadataSection
+                if item.config != nil {
+                    InlineNetworksSection(model: model, errors: errors, item: item)
+                        .id(item.id)
+                }
                 if (item.config?.engine ?? .qemu) == .qemu, item.config != nil {
                     sharingSection
                 }
