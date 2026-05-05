@@ -198,6 +198,11 @@ public final class AppModel {
     /// 加密 VM 改 config 必须重密 .yaml.enc → 需要 sub.config key. master KEK / password 仍不缓存.
     /// 跟 unlockedConfigs 生命周期一致, 主动 lock / auto-lock / 进程退出同步清.
     public private(set) var unlockedSubKeys: [UUID: EncryptionKDF.SubKeySet] = [:]
+    /// 已解锁加密 VM 的密码缓存 — 让用户解锁查看配置后, 点 Start 不需要再输一次密码.
+    /// 安全: 仅 process 内存, 不落盘 / 不打 log; 跟 unlockedSubKeys 同生命周期 (主动 lock / 5min
+    /// auto-lock / 进程退出全部清). 边际风险等同已存在的 unlockedSubKeys (sub keys 派生自
+    /// password, 拿到 sub keys 等于拿到 password 解密能力).
+    public private(set) var unlockedPasswords: [UUID: String] = [:]
     /// 解锁中状态 (避免重复点 / 显示 spinner). vmId → 进行中.
     public private(set) var unlockingIDs: Set<UUID> = []
     /// 每个已解锁 VM 的最后活动时间. selectedID 持续指向某 unlocked VM 时, refreshList
@@ -532,6 +537,11 @@ public final class AppModel {
     public func requestStartWithPasswordIfNeeded(_ item: VMListItem,
                                                   errors: ErrorPresenter) {
         if item.isEncrypted {
+            // 已通过 sidebar 右键 / UnlockPanel 解锁过 → 复用缓存密码直启, 不弹 prompt.
+            if let cached = unlockedPasswords[item.id] {
+                startWithEncryptedPassword(item, password: cached, errors: errors)
+                return
+            }
             // 弹密码 modal. 用户输入 → onSubmit 在 EncryptionPasswordDialog 内被调用,
             // 进 startWithEncryptedPassword 异步跑 start() + 错密码 inline 显示.
             startPasswordRequest = StartPasswordRequest(item: item)
@@ -592,6 +602,8 @@ public final class AppModel {
 
         unlockedConfigs[id] = result.config
         unlockedSubKeys[id] = result.subKeys
+        // 缓存密码字符串 — 后续点 Start 复用, 不再弹密码 prompt. lock / auto-lock 同步清.
+        unlockedPasswords[id] = password
         // 解锁瞬间也算一次活动 — 给 5 min 倒计时起始点
         unlockedAt[id] = Date()
         // 触发 list 重建 — refreshCache 走 routing mtime 不会自动失效, 强制清掉自己这条
@@ -620,9 +632,11 @@ public final class AppModel {
 
     /// 主动锁定 — 把 unlockedConfigs[id] 移除, 详情页回到 UnlockPanel 状态.
     /// 用户主动点 "锁定" 按钮 / checkAutoLockExpired 5 min 自动 / 进程退出自然清.
+    /// 同步清缓存密码 (unlockedPasswords) — 锁定后再次启动重新弹密码 prompt.
     public func lockEncryptedConfig(id: UUID) {
         guard unlockedConfigs.removeValue(forKey: id) != nil else { return }
         unlockedSubKeys.removeValue(forKey: id)
+        unlockedPasswords.removeValue(forKey: id)
         unlockedAt.removeValue(forKey: id)
         // 同样要让 cache 失效, 否则 refreshList 拿 cached.item 仍带 config
         if let item = list.first(where: { $0.id == id }) {

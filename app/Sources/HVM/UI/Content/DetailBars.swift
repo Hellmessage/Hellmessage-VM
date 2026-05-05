@@ -302,6 +302,23 @@ struct StoppedContentView: View {
                 }
             }
             Spacer()
+            // 加密 + 已解锁 → "锁定" 按钮: 立即清 unlockedConfigs/SubKeys/Passwords, 详情页回到 UnlockPanel
+            // (auto-lock 5min 兜底). 缓存密码同步清, 下次启动重新弹 prompt.
+            if item.isEncrypted {
+                Button {
+                    model.lockEncryptedConfig(id: item.id)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "lock.fill")
+                            .font(HVMFont.small)
+                        Text("锁定")
+                    }
+                }
+                .buttonStyle(GhostButtonStyle())
+                .help("立即锁回加密 VM — 详情页恢复 UnlockPanel, 缓存密码同步清, 下次启动重新输密码")
+                .hvmProbe(id: "detail.titlebar.button.lock", label: "Lock",
+                           action: .button { model.lockEncryptedConfig(id: item.id) })
+            }
             Button {
                 NSWorkspace.shared.activateFileViewerSelecting([item.bundleURL])
             } label: {
