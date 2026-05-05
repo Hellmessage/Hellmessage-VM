@@ -28,6 +28,9 @@ struct SidebarView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(HVMColor.bgSidebar)
+        // 整片 sidebar 接 .hvmz 临时挂载: 拖入 → ephemeralBundles + refreshList + selectedID,
+        // 不入 vmsRoot, VM 跑过又停下后自动从 sidebar 消失. 详细见 AppModel.dropEphemeralBundle.
+        .onDrop(of: [.fileURL], delegate: BundleDropDelegate(model: model, errors: errors))
     }
 
     // MARK: - section header
@@ -185,6 +188,38 @@ private struct Row: View {
         .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.1), value: hover)
         .animation(.easeOut(duration: 0.15), value: isSelected)
+    }
+}
+
+// MARK: - 拖入 .hvmz 临时启动 DropDelegate
+//
+// 接 Finder 拖来的 file URL, 仅识别 .hvmz 路径. 命中 → AppModel.dropEphemeralBundle,
+// 错误抛 errors.present. 非 .hvmz / 不存在 → 拒绝.
+private struct BundleDropDelegate: DropDelegate {
+    let model: AppModel
+    let errors: ErrorPresenter
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.fileURL])
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let providers = info.itemProviders(for: [.fileURL])
+        guard !providers.isEmpty else { return false }
+        for provider in providers {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                guard url.pathExtension.lowercased() == "hvmz" else { return }
+                DispatchQueue.main.async {
+                    do {
+                        try model.dropEphemeralBundle(url)
+                    } catch {
+                        errors.present(error)
+                    }
+                }
+            }
+        }
+        return true
     }
 }
 

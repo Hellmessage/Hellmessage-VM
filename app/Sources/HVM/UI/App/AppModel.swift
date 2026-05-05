@@ -60,6 +60,15 @@ public final class AppModel {
 
     public var list: [VMListItem] = []
     public var selectedID: UUID?
+    /// 用户拖拽 .hvmz 进 sidebar 后的临时 bundle 集合 (process 内, 不持久化).
+    /// refreshList 每轮把这些 bundle 也 load 进 list, 让用户在 sidebar 看到该项, 选中 → 详情 → Start.
+    /// VM 启动过又停下后 (见 ephemeralStarted 状态机) 自动从 list 移除.
+    /// 路径已 standardized + resolveSymlinks, 防同 bundle 不同写法重复加.
+    public var ephemeralBundles: Set<URL> = []
+    /// 跟踪 ephemeralBundles 中每个 url 是否曾经处于 running 态. refreshList 在该 url
+    /// runState=running 时 insert, 后续探到 stopped 且已 in started → 清掉 ephemeralBundles + ephemeralStarted.
+    /// 状态机原因: 区分 "刚拖入未启动" vs "启动后又停了" 两种 stopped.
+    private var ephemeralStarted: Set<URL> = []
     /// 当前 GUI 进程内运行中的 VM, 按 config.id 索引
     public var sessions: [UUID: VMSession] = [:]
     /// refreshList 的 mtime 缓存: bundlePath → (config.json mtime, item).
@@ -369,6 +378,50 @@ public final class AppModel {
             newCache[u.path] = (mtime, item)
         }
 
+        // ephemeral bundles (用户拖入的 .hvmz, 不在 vmsRoot 下) 也合进 list.
+        // 状态机: runState=running → ephemeralStarted.insert; 已 in started 又 stopped → 清掉.
+        // 路径用 standardized form 比对 vmsRoot 已扫到的, 同 bundle 重复 (用户拖了 vmsRoot 下的)
+        // 直接跳过 ephemeral, 复用 vmsRoot 那份.
+        let scannedPaths = Set(items.map { $0.bundleURL.standardizedFileURL.path })
+        for url in Array(ephemeralBundles) {
+            let std = url.standardizedFileURL
+            if scannedPaths.contains(std.path) {
+                ephemeralBundles.remove(url)
+                ephemeralStarted.remove(url)
+                continue
+            }
+            let busy = BundleLock.isBusy(bundleURL: std)
+            let runState = busy ? "running" : "stopped"
+            if ephemeralStarted.contains(url), runState == "stopped" {
+                ephemeralBundles.remove(url)
+                ephemeralStarted.remove(url)
+                continue
+            }
+            if runState == "running" {
+                ephemeralStarted.insert(url)
+            }
+            if let scheme = EncryptedBundleIO.detectScheme(at: std) {
+                let routingURL: URL
+                switch scheme {
+                case .qemuPerfile:    routingURL = RoutingJSON.locationForQemuBundle(std)
+                case .vzSparsebundle: routingURL = RoutingJSON.locationForSparsebundle(std)
+                }
+                guard let routing = try? RoutingJSON.read(from: routingURL) else { continue }
+                let item: VMListItem
+                if let unlocked = unlockedConfigs[routing.vmId] {
+                    item = VMListItem(bundleURL: std, config: unlocked, runState: runState,
+                                       encryptionScheme: routing.scheme)
+                } else {
+                    item = VMListItem(bundleURL: std, routing: routing, runState: runState)
+                }
+                items.append(item)
+            } else {
+                guard let cfg = try? BundleIO.load(from: std) else { continue }
+                let item = VMListItem(bundleURL: std, config: cfg, runState: runState)
+                items.append(item)
+            }
+        }
+
         self.refreshCache = newCache
         // 用户自定义顺序: 走 SidebarOrder (~/Library/Application Support/HVM/sidebar-order.json),
         // 文件中已知 ID 按存储顺序排前面, 未记录的新 VM 按 displayName 排后面追加. 文件不存在 → 退化
@@ -406,6 +459,41 @@ public final class AppModel {
         var byID: [UUID: VMListItem] = [:]
         for it in list { byID[it.id] = it }
         self.list = newOrder.compactMap { byID[$0] }
+    }
+
+    /// 用户从 Finder 拖 .hvmz 进 sidebar 的回调. bundle 路径不复制不入 vmsRoot, 仅在
+    /// process 内挂到 ephemeralBundles 让 sidebar 显示一项 — 用户可在详情页手动 Start
+    /// (加密走密码 prompt). VM 启动后又停下 → refreshList 自动从 list 移除.
+    ///
+    /// 校验失败 (路径不是有效 bundle) 抛 HVMError, 调用方负责 errors.present.
+    /// 重复拖入同一 bundle 直接选中已存在的 list 项, 不抛错.
+    /// bundle 已在 vmsRoot 下 (用户从 Finder 拖了已托管的 VM) 直接选中, 不做 ephemeral 处理.
+    @discardableResult
+    public func dropEphemeralBundle(_ url: URL) throws -> UUID {
+        let std = url.resolvingSymlinksInPath().standardizedFileURL
+        // 已在 vmsRoot 扫到 → 选中即可, 不当作 ephemeral
+        if let existing = list.first(where: { $0.bundleURL.standardizedFileURL.path == std.path }) {
+            selectedID = existing.id
+            return existing.id
+        }
+        // 校验是 bundle: 加密 detect 或明文 load
+        let id: UUID
+        if let scheme = EncryptedBundleIO.detectScheme(at: std) {
+            let routingURL: URL
+            switch scheme {
+            case .qemuPerfile:    routingURL = RoutingJSON.locationForQemuBundle(std)
+            case .vzSparsebundle: routingURL = RoutingJSON.locationForSparsebundle(std)
+            }
+            let routing = try RoutingJSON.read(from: routingURL)
+            id = routing.vmId
+        } else {
+            let cfg = try BundleIO.load(from: std)
+            id = cfg.id
+        }
+        ephemeralBundles.insert(std)
+        refreshList()
+        selectedID = id
+        return id
     }
 
     /// 自动锁定扫描: 30s 由 autoLockTimer 触发. 末次活动 > unlockedTTLSeconds 的 VM
