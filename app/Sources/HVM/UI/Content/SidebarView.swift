@@ -1,10 +1,21 @@
 // SidebarView.swift
 // 左栏: VM 列表卡片化. 顶部 section header (Virtual Machines + 计数), 列表项 = guest icon + 名 + 状态.
+//
+// 拖动重排:
+//   - LazyVStack 不支持原生 .onMove (那是 List 专属), 所以走 .onDrag / .onDrop 手动实现
+//   - drag payload = "hvm-vm-row:<uuid>" 字符串 (走 .text UTType, 不必声明自家 UTType)
+//   - drop 解 payload, 检查 "hvm-vm-row:" 前缀防外部文本误触发
+//   - drop 落在某行 → 把 source 移动到 target 之前 (尾部 sentinel 行处理"放到末尾"的情况)
+//   - 落到 sentinel (LazyVStack 末尾) 当作"放到末尾"
 
 import SwiftUI
+import UniformTypeIdentifiers
 import HVMBundle
 import HVMCore
 import HVMGuiProbe
+
+/// 内部 reorder payload 前缀: 防外部 text drop 误触发. 完整 payload = prefix + uuid 字符串.
+private let reorderPayloadPrefix = "hvm-vm-row:"
 
 struct SidebarView: View {
     @Bindable var model: AppModel
@@ -56,7 +67,23 @@ struct SidebarView: View {
                             .hvmProbe(id: "sidebar.vmRow.\(item.displayName)",
                                        label: item.displayName,
                                        action: .button { model.selectedID = captured })
+                            .onDrag {
+                                let payload = reorderPayloadPrefix + captured.uuidString
+                                return NSItemProvider(object: payload as NSString)
+                            }
+                            .onDrop(of: [.text], delegate: RowReorderDropDelegate(
+                                target: captured,
+                                model: model
+                            ))
                     }
+                    // 末尾 sentinel: 占满剩余宽度 + 24pt 高度, 接 drop 当作 "放到末尾"
+                    Color.clear
+                        .frame(height: 24)
+                        .frame(maxWidth: .infinity)
+                        .onDrop(of: [.text], delegate: RowReorderDropDelegate(
+                            target: nil,
+                            model: model
+                        ))
                 }
                 .padding(.horizontal, HVMSpace.sm)
                 .padding(.bottom, HVMSpace.md)
@@ -158,5 +185,54 @@ private struct Row: View {
         .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.1), value: hover)
         .animation(.easeOut(duration: 0.15), value: isSelected)
+    }
+}
+
+// MARK: - 拖动重排 DropDelegate
+//
+// target == nil 表示 drop 落到末尾 sentinel; target 非 nil 表示 drop 落在某行 (插到该行前面).
+// performDrop 解 NSItemProvider 拿 source UUID, 调 model.reorderList 落盘 + 同步 list.
+private struct RowReorderDropDelegate: DropDelegate {
+    let target: UUID?
+    let model: AppModel
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.text])
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let providers = info.itemProviders(for: [.text])
+        guard let provider = providers.first else { return false }
+        provider.loadObject(ofClass: NSString.self) { obj, _ in
+            guard let s = obj as? String,
+                  s.hasPrefix(reorderPayloadPrefix),
+                  let source = UUID(uuidString: String(s.dropFirst(reorderPayloadPrefix.count))) else { return }
+            DispatchQueue.main.async {
+                self.applyReorder(source: source)
+            }
+        }
+        return true
+    }
+
+    private func applyReorder(source: UUID) {
+        var ids = model.list.map { $0.id }
+        guard let from = ids.firstIndex(of: source) else { return }
+        ids.remove(at: from)
+        if let target {
+            // 落到 target 行之前. target 跟 source 同一项 → 撤回插入位置 (no-op)
+            if source == target {
+                ids.insert(source, at: from)
+                return
+            }
+            guard let to = ids.firstIndex(of: target) else {
+                ids.insert(source, at: from)
+                return
+            }
+            ids.insert(source, at: to)
+        } else {
+            // sentinel: 放末尾
+            ids.append(source)
+        }
+        model.reorderList(ids)
     }
 }

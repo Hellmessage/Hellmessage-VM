@@ -370,7 +370,10 @@ public final class AppModel {
         }
 
         self.refreshCache = newCache
-        self.list = items.sorted { $0.displayName.lowercased() < $1.displayName.lowercased() }
+        // 用户自定义顺序: 走 SidebarOrder (~/Library/Application Support/HVM/sidebar-order.json),
+        // 文件中已知 ID 按存储顺序排前面, 未记录的新 VM 按 displayName 排后面追加. 文件不存在 → 退化
+        // 成纯 displayName 排序 (与之前行为一致).
+        self.list = SidebarOrder.apply(items, idOf: { $0.id }, nameOf: { $0.displayName })
 
         // 选中项若已不存在, 清选
         if let sel = selectedID, !list.contains(where: { $0.id == sel }) {
@@ -394,6 +397,15 @@ public final class AppModel {
             return item.runState != "running"
         }
         for id in staleFanoutIDs { tearDownQemuFanout(id: id) }
+    }
+
+    /// 用户在 sidebar 拖动重排后的回调. newOrder 是当前 list 完整 ID 顺序 (含未变化的项).
+    /// 落 SidebarOrder.json + 同步 self.list. 不调 refreshList 防止跟用户拖动的临时态打架.
+    public func reorderList(_ newOrder: [UUID]) {
+        SidebarOrder.save(newOrder)
+        var byID: [UUID: VMListItem] = [:]
+        for it in list { byID[it.id] = it }
+        self.list = newOrder.compactMap { byID[$0] }
     }
 
     /// 自动锁定扫描: 30s 由 autoLockTimer 触发. 末次活动 > unlockedTTLSeconds 的 VM
