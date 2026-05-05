@@ -122,6 +122,15 @@ public enum IPCOp: String, Sendable {
     /// virtio-serial port org.qemu.guest_agent.0 (chardev qga). 不依赖 keyboard typing
     /// (避 IME 字符替换) / OCR (避识别误差) / GUI mouse (避 USB tablet 坐标问题).
     case dbgExecGuest    = "dbg.exec.guest"
+    /// host → guest 单文件 push (复制本地文件到 guest 内). args: localPath, remotePath,
+    /// timeoutSec? (默认 600). 走 qemu-guest-agent guest-file-* API, 不依赖 9p / virtiofs.
+    /// VMHost 直接 open(2) localPath (HVM 是 sandboxless app, 子进程同样可读用户文件) →
+    /// 1 MiB chunk base64 经 qga unix socket → guest qemu-ga 写入 remotePath.
+    /// 设计稿: docs/v3/FILE_COPY.md
+    case dbgFilePush     = "dbg.file.push"
+    /// guest → host 单文件 pull. args: remotePath, localPath, timeoutSec? (默认 600).
+    /// 与 dbgFilePush 反向, 同款协议. 本地走 .hvm-tmp + atomic rename 防中断半成品.
+    case dbgFilePull     = "dbg.file.pull"
     /// host (GUI) 通知 VMHost 改 guest 显示分辨率, args.width/height. VMHost 持有
     /// 持久 vdagent socket, 通过 vdagent VDAgentMonitorsConfig 转给 guest spice-vdagent.
     /// 取代老的"GUI 直连 vdagent socket"路径 — vdagent socket 是 single-client,
@@ -165,6 +174,17 @@ public struct IPCDbgExecPayload: Codable, Sendable {
         self.exitCode = exitCode
         self.stdoutBase64 = stdoutBase64
         self.stderrBase64 = stderrBase64
+    }
+}
+
+/// dbg.file.push / dbg.file.pull 响应 — 文件传输结果摘要. 进度反馈走 client 端
+/// 字节计数 (v1 不走 IPC stream, 见 docs/v3/FILE_COPY.md D4).
+public struct IPCDbgFileTransferPayload: Codable, Sendable {
+    public let bytesTransferred: Int64
+    public let durationMs: Int64
+    public init(bytesTransferred: Int64, durationMs: Int64) {
+        self.bytesTransferred = bytesTransferred
+        self.durationMs = durationMs
     }
 }
 

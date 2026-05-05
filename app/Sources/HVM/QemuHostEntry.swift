@@ -745,6 +745,8 @@ final class QemuHostState {
         case IPCOp.dbgDisplayInfo.rawValue:   return await handleDbgDisplayInfo(req: req)
         case IPCOp.dbgDisplayResize.rawValue: return await handleDbgDisplayResize(req: req)
         case IPCOp.dbgExecGuest.rawValue:     return await handleDbgExecGuest(req: req)
+        case IPCOp.dbgFilePush.rawValue:      return await handleDbgFilePush(req: req)
+        case IPCOp.dbgFilePull.rawValue:      return await handleDbgFilePull(req: req)
         case IPCOp.displaySetMonitors.rawValue:  return handleDisplaySetMonitors(req: req)
         case IPCOp.clipboardSetEnabled.rawValue: return handleClipboardSetEnabled(req: req)
 
@@ -1079,6 +1081,92 @@ final class QemuHostState {
             return .encoded(id: req.id, payload: payload, kind: "exec result")
         } catch {
             return .failure(id: req.id, code: "qga.exec_failed", message: "\(error)")
+        }
+    }
+
+    /// dbg.file.push — 通过 qemu-guest-agent guest-file-* API 把 host 文件复制到 guest.
+    /// args: localPath (host 绝对路径), remotePath (guest 绝对路径), timeoutSec? (默认 600)
+    /// VMHost 子进程是 sandboxless, 直接 open(2) localPath 即可 (用户文件权限只看 user perms,
+    /// 不需要 NSOpenPanel security-scoped URL 跨进程传递).
+    private func handleDbgFilePush(req: IPCRequest) async -> IPCResponse {
+        guard let localPath = req.args["localPath"], !localPath.isEmpty else {
+            return .failure(id: req.id, code: "ipc.bad_args", message: "dbg.file.push 需要 args.localPath")
+        }
+        guard let remotePath = req.args["remotePath"], !remotePath.isEmpty else {
+            return .failure(id: req.id, code: "ipc.bad_args", message: "dbg.file.push 需要 args.remotePath")
+        }
+        let timeoutSec = Int(req.args["timeoutSec"] ?? "600") ?? 600
+        guard let configID = config?.id else {
+            return .failure(id: req.id, code: "backend.no_vm", message: "VM config 未就绪")
+        }
+        guard FileManager.default.fileExists(atPath: localPath) else {
+            return .failure(id: req.id, code: "file.local_not_found",
+                            message: "host 本地文件不存在: \(localPath)")
+        }
+        let qgaSocketPath = HVMPaths.qgaSocketPath(for: configID).path
+        guard FileManager.default.fileExists(atPath: qgaSocketPath) else {
+            return .failure(id: req.id, code: "qga.socket_not_found",
+                            message: "qga socket 缺 (\(qgaSocketPath)); VM 未运行或 qga chardev 未启 (cold restart 让 argv 生效)")
+        }
+        let started = Date()
+        do {
+            let bytes = try await QgaFile.push(
+                socketPath: qgaSocketPath,
+                srcLocal: URL(fileURLWithPath: localPath),
+                dstRemote: remotePath,
+                timeoutSec: timeoutSec,
+                progress: nil
+            )
+            let payload = IPCDbgFileTransferPayload(
+                bytesTransferred: bytes,
+                durationMs: Int64(Date().timeIntervalSince(started) * 1000)
+            )
+            return .encoded(id: req.id, payload: payload, kind: "file push")
+        } catch {
+            return .failure(id: req.id, code: "qga.file_failed", message: "\(error)")
+        }
+    }
+
+    /// dbg.file.pull — 反向, guest → host. 本地走 .hvm-tmp + atomic rename 防中断半成品.
+    private func handleDbgFilePull(req: IPCRequest) async -> IPCResponse {
+        guard let remotePath = req.args["remotePath"], !remotePath.isEmpty else {
+            return .failure(id: req.id, code: "ipc.bad_args", message: "dbg.file.pull 需要 args.remotePath")
+        }
+        guard let localPath = req.args["localPath"], !localPath.isEmpty else {
+            return .failure(id: req.id, code: "ipc.bad_args", message: "dbg.file.pull 需要 args.localPath")
+        }
+        let timeoutSec = Int(req.args["timeoutSec"] ?? "600") ?? 600
+        guard let configID = config?.id else {
+            return .failure(id: req.id, code: "backend.no_vm", message: "VM config 未就绪")
+        }
+        let qgaSocketPath = HVMPaths.qgaSocketPath(for: configID).path
+        guard FileManager.default.fileExists(atPath: qgaSocketPath) else {
+            return .failure(id: req.id, code: "qga.socket_not_found",
+                            message: "qga socket 缺 (\(qgaSocketPath)); VM 未运行或 qga chardev 未启")
+        }
+        // 本地父目录必须存在 (FileManager.replaceItemAt / moveItem 不会自动 mkdir)
+        let dstURL = URL(fileURLWithPath: localPath)
+        let parentDir = dstURL.deletingLastPathComponent().path
+        guard FileManager.default.fileExists(atPath: parentDir) else {
+            return .failure(id: req.id, code: "file.local_parent_missing",
+                            message: "host 本地父目录不存在: \(parentDir)")
+        }
+        let started = Date()
+        do {
+            let bytes = try await QgaFile.pull(
+                socketPath: qgaSocketPath,
+                srcRemote: remotePath,
+                dstLocal: dstURL,
+                timeoutSec: timeoutSec,
+                progress: nil
+            )
+            let payload = IPCDbgFileTransferPayload(
+                bytesTransferred: bytes,
+                durationMs: Int64(Date().timeIntervalSince(started) * 1000)
+            )
+            return .encoded(id: req.id, payload: payload, kind: "file pull")
+        } catch {
+            return .failure(id: req.id, code: "qga.file_failed", message: "\(error)")
         }
     }
 
