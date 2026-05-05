@@ -40,6 +40,9 @@ public actor LogSink {
 
     private var started = false
     private var pollTask: Task<Void, Never>?
+    /// 全局日志输出开关 — 受 LoggingPreferences 控制. 默认 true.
+    /// false 时 pollOnce 仅推 lastPosition 不写文件, 关 fileHandle.
+    private var enabled: Bool = true
 
     /// 当前正在写的文件
     private var fileHandle: FileHandle?
@@ -78,7 +81,12 @@ public actor LogSink {
     private init() {}
 
     /// 启动 sink. 幂等. 由 HVMLog.logger() 触发, 用户不必直接调.
-    public func start() {
+    /// initialEnabled 由调用方 (HVMLog.logger) 从 LoggingPreferences.shared.enabled 读出
+    /// 传进来 — LogSink 是 actor, 不直接读 @MainActor 的 LoggingPreferences.
+    public func start(initialEnabled: Bool = true) {
+        if !started {
+            enabled = initialEnabled
+        }
         guard !started else { return }
         started = true
 
@@ -106,6 +114,19 @@ public actor LogSink {
         pollTask = nil
     }
 
+    /// 由 LoggingPreferences.setEnabled 调过来 — 切换全局日志开关.
+    /// 关闭: 关 fileHandle, pollOnce 仅推 lastPosition 不写文件.
+    /// 开启: 下次 pollOnce 自然回到 writeLine 路径, 文件随 entry 写入时按需 rotate 重开.
+    public func setEnabled(_ value: Bool) {
+        guard value != enabled else { return }
+        enabled = value
+        if !value {
+            try? fileHandle?.synchronize()
+            try? fileHandle?.close()
+            fileHandle = nil
+        }
+    }
+
     // MARK: - 轮询
 
     nonisolated private func runLoop() async {
@@ -117,6 +138,12 @@ public actor LogSink {
 
     private func pollOnce() async {
         guard let store, let pos = lastPosition else { return }
+        // 全局开关关闭: 跳过 fetch + write, 仅把 lastPosition 推到 now, 防止开启后回放
+        // 关闭期间堆积的全部历史日志.
+        if !enabled {
+            lastPosition = store.position(date: Date())
+            return
+        }
         // 过滤 subsystem == HVMLog.subsystem
         let predicate = NSPredicate(format: "subsystem == %@", HVMLog.subsystem)
 

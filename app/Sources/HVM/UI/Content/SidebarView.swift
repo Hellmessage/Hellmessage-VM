@@ -37,13 +37,6 @@ struct SidebarView: View {
 
     private var header: some View {
         HStack(spacing: HVMSpace.sm) {
-            Text("Virtual Machines")
-                .font(HVMFont.label)
-                .foregroundStyle(HVMColor.textTertiary)
-            Text("\(model.list.count)")
-                .font(HVMFont.small.weight(.semibold))
-                .foregroundStyle(HVMColor.textTertiary)
-                .monospacedDigit()
             Spacer()
             // 刷新 + New VM (原顶部 HVMToolbar 已废弃, 入口移到 sidebar header)
             Button(action: { model.refreshList() }) {
@@ -58,6 +51,8 @@ struct SidebarView: View {
                     Image(systemName: "plus")
                         .font(HVMFont.smallBold)
                     Text("New VM")
+                        .lineLimit(1)
+                        .fixedSize()
                 }
             }
             .buttonStyle(PillAccentButtonStyle())

@@ -19,8 +19,10 @@ public enum HVMLog {
     public static func logger(_ category: String) -> Logger {
         // LogSink 是 actor (非 MainActor), start 跑在 cooperative pool 不阻塞主线程.
         // 任意线程都能 spawn 这个 Task, await 自动 hop 到 actor executor.
+        // initialEnabled 走 LoggingPreferences.readEnabledFromDefaults() (nonisolated 静态读).
+        let initialEnabled = LoggingPreferences.readEnabledFromDefaults()
         Task {
-            await LogSink.shared.start()
+            await LogSink.shared.start(initialEnabled: initialEnabled)
         }
         return Logger(subsystem: subsystem, category: category)
     }
