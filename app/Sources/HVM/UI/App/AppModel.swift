@@ -219,6 +219,27 @@ public final class AppModel {
     /// 自动锁定检查间隔: 太频繁浪费 CPU, 太稀释延迟到自动锁; 30s 让最坏延迟 ≤ TTL+30s
     private static let autoLockCheckIntervalSec: TimeInterval = 30
 
+    /// 文件传输请求载体: VM + 方向 + host URL (push: 已选源; pull: 已选目标保存路径).
+    /// 设计稿 docs/v3/FILE_COPY.md PR-D.
+    public var fileTransferRequest: FileTransferRequest? = nil
+
+    public struct FileTransferRequest: Identifiable, Sendable {
+        public let id: UUID
+        public let item: VMListItem
+        public let direction: Direction
+        public let hostURL: URL
+        /// 默认建议远端 path (push: 基于 guestOS + 文件 basename; pull: 空让用户填)
+        public let suggestedRemotePath: String
+        public init(item: VMListItem, direction: Direction, hostURL: URL, suggestedRemotePath: String) {
+            self.id = UUID()
+            self.item = item
+            self.direction = direction
+            self.hostURL = hostURL
+            self.suggestedRemotePath = suggestedRemotePath
+        }
+        public enum Direction: String, Sendable { case push, pull }
+    }
+
     /// 扩容请求载体: VM 引用 + 磁盘 id (主盘 "main" / 数据盘 uuid8) + 当前 GiB
     public struct DiskResizeRequest: Identifiable, Sendable {
         public let id: UUID
@@ -255,6 +276,7 @@ public final class AppModel {
             || encryptItem != nil
             || decryptItem != nil
             || rekeyItem != nil
+            || fileTransferRequest != nil
             || errors.current != nil
             || confirms.current != nil
     }
@@ -902,6 +924,62 @@ public final class AppModel {
             }
         }
         refreshList()
+    }
+
+    // MARK: - 文件传输 (qemu-guest-agent guest-file-* API)
+
+    /// 跑一次 host ↔ guest 单文件传输. 设计稿 docs/v3/FILE_COPY.md PR-D.
+    /// VM 必须 running + qga socket 存在; 调用方 (FileTransferDialog) 在按钮 disabled
+    /// 态已挡掉绝大多数前置错误.
+    /// IPC 走 Task.detached (SocketClient.request 是 sync, 长事务 600s 不能阻 main).
+    /// 返 (bytesTransferred, durationMs); 错误抛 HVMError.ipc.
+    public func runFileTransfer(
+        item: VMListItem,
+        direction: FileTransferRequest.Direction,
+        hostURL: URL,
+        remotePath: String,
+        timeoutSec: Int = 600
+    ) async throws -> (bytes: Int64, durationMs: Int64) {
+        guard let holder = BundleLock.inspect(bundleURL: item.bundleURL),
+              !holder.socketPath.isEmpty else {
+            throw HVMError.ipc(.socketNotFound(path: "(inspect 失败 — VM 未运行?)"))
+        }
+        let socketPath = holder.socketPath
+        let op: IPCOp = (direction == .push) ? .dbgFilePush : .dbgFilePull
+        let args: [String: String] = direction == .push
+            ? ["localPath": hostURL.path, "remotePath": remotePath, "timeoutSec": "\(timeoutSec)"]
+            : ["remotePath": remotePath, "localPath": hostURL.path, "timeoutSec": "\(timeoutSec)"]
+        let req = IPCRequest(op: op.rawValue, args: args)
+
+        let resp: IPCResponse = try await Task.detached(priority: .userInitiated) {
+            try SocketClient.request(socketPath: socketPath, request: req,
+                                     timeoutSec: timeoutSec + 30)
+        }.value
+
+        guard resp.ok else {
+            throw HVMError.ipc(.remoteError(
+                code: resp.error?.code ?? "qga.file_failed",
+                message: resp.error?.message ?? "file transfer failed"
+            ))
+        }
+        guard let json = resp.data?["payload"],
+              let data = json.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(IPCDbgFileTransferPayload.self, from: data) else {
+            throw HVMError.ipc(.decodeFailed(reason: "file transfer payload"))
+        }
+        return (payload.bytesTransferred, payload.durationMs)
+    }
+
+    /// 给 push 建议默认远端 path. Win → `C:\Users\Public\Downloads\<basename>`;
+    /// Linux/macOS → `/tmp/<basename>`. 用户在 dialog 内可改.
+    public static func suggestPushRemotePath(hostURL: URL, guestOS: GuestOSType?) -> String {
+        let base = hostURL.lastPathComponent
+        switch guestOS {
+        case .windows:
+            return "C:\\Users\\Public\\Downloads\\\(base)"
+        case .linux, .macOS, .none:
+            return "/tmp/\(base)"
+        }
     }
 
     // MARK: - macOS guest 装机

@@ -17,6 +17,35 @@ import HVMEncryption
 import HVMGuiProbe
 import HVMStorage
 
+// MARK: - 文件传输 picker (StoppedContentView Sharing 区 + DetailTopBar 图标按钮共用)
+
+/// host → guest push: 弹 NSOpenPanel 选源文件 → 落 fileTransferRequest 让 DialogOverlay 渲染.
+@MainActor
+func presentFilePushPicker(model: AppModel, item: AppModel.VMListItem) {
+    let panel = NSOpenPanel()
+    panel.title = "选择要传到 \(item.displayName) 的文件"
+    panel.canChooseFiles = true
+    panel.canChooseDirectories = false
+    panel.allowsMultipleSelection = false
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    let suggested = AppModel.suggestPushRemotePath(hostURL: url, guestOS: item.config?.guestOS)
+    model.fileTransferRequest = AppModel.FileTransferRequest(
+        item: item, direction: .push, hostURL: url, suggestedRemotePath: suggested
+    )
+}
+
+/// guest → host pull: 弹 NSSavePanel 选保存位置 → 落 fileTransferRequest.
+@MainActor
+func presentFilePullPicker(model: AppModel, item: AppModel.VMListItem) {
+    let panel = NSSavePanel()
+    panel.title = "选择 \(item.displayName) 文件保存位置"
+    panel.nameFieldStringValue = "from-vm.bin"
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    model.fileTransferRequest = AppModel.FileTransferRequest(
+        item: item, direction: .pull, hostURL: url, suggestedRemotePath: ""
+    )
+}
+
 // MARK: - 状态徽章
 
 struct StatusBadge: View {
@@ -106,6 +135,32 @@ struct DetailTopBar: View {
                 }
                 .buttonStyle(IconButtonStyle())
                 .help(liveOn ? "剪贴板共享: 开 (点击关闭)" : "剪贴板共享: 关 (点击开启)")
+            }
+            // 文件传输 (push / pull): 仅 QEMU 后端 + running. qga 必须 VM 在跑才能连;
+            // 设计稿 docs/v3/FILE_COPY.md. stopped 态入口在 StoppedContentView.sharingSection.
+            if engineIsQemu, displayState == .running {
+                Button {
+                    presentFilePushPicker(model: model, item: item)
+                } label: {
+                    Image(systemName: "arrow.up.doc")
+                        .foregroundStyle(HVMColor.textSecondary)
+                }
+                .buttonStyle(IconButtonStyle())
+                .help("传文件到 VM (qemu-guest-agent)")
+                .hvmProbe(id: "topbar.button.pushFile",
+                          label: "传文件到 VM",
+                          action: .button { presentFilePushPicker(model: model, item: item) })
+                Button {
+                    presentFilePullPicker(model: model, item: item)
+                } label: {
+                    Image(systemName: "arrow.down.doc")
+                        .foregroundStyle(HVMColor.textSecondary)
+                }
+                .buttonStyle(IconButtonStyle())
+                .help("从 VM 取文件 (qemu-guest-agent)")
+                .hvmProbe(id: "topbar.button.pullFile",
+                          label: "从 VM 取文件",
+                          action: .button { presentFilePullPicker(model: model, item: item) })
             }
             // QEMU 后端独立窗口 toggle: 仅 .qemu engine + running 时显示.
             // 共存式 (CLAUDE.md / 设计决策): 主窗口嵌入 + detached 独立窗口可同时存在.
@@ -471,11 +526,52 @@ struct StoppedContentView: View {
                     ),
                     help: "UTF-8 文本双向同步, 走 vdagent virtio-serial. 运行中可即时切换"
                 )
+
+                fileTransferRow
             }
             .padding(HVMSpace.md)
             .frame(maxWidth: .infinity, alignment: .leading)
             .hvmCard()
         }
+    }
+
+    /// 文件传输 (qemu-guest-agent guest-file-* API). VM 必须 running. QEMU 后端专属
+    /// (VZ 后端不接 QGA, 推后单独提案 — 设计稿 docs/v3/FILE_COPY.md D3).
+    @ViewBuilder
+    private var fileTransferRow: some View {
+        let isQemuBackend = item.config?.engine == .qemu
+        let isRunning = item.runState == "running"
+        let canTransfer = isQemuBackend && isRunning
+
+        VStack(alignment: .leading, spacing: HVMSpace.xs) {
+            HStack(spacing: HVMSpace.sm) {
+                Button("传文件到 VM…") { presentFilePushPicker(model: model, item: item) }
+                    .buttonStyle(GhostButtonStyle())
+                    .disabled(!canTransfer)
+                    .hvmProbe(id: "detail.sharing.button.pushFile",
+                              label: "传文件到 VM",
+                              action: .button { presentFilePushPicker(model: model, item: item) })
+                Button("从 VM 取文件…") { presentFilePullPicker(model: model, item: item) }
+                    .buttonStyle(GhostButtonStyle())
+                    .disabled(!canTransfer)
+                    .hvmProbe(id: "detail.sharing.button.pullFile",
+                              label: "从 VM 取文件",
+                              action: .button { presentFilePullPicker(model: model, item: item) })
+            }
+            Text(fileTransferHint(isQemuBackend: isQemuBackend, isRunning: isRunning))
+                .font(HVMFont.small)
+                .foregroundStyle(HVMColor.textTertiary)
+        }
+    }
+
+    private func fileTransferHint(isQemuBackend: Bool, isRunning: Bool) -> String {
+        if !isQemuBackend {
+            return "文件传输仅 QEMU 后端支持 (VZ 后端走 SharedDirectory, 推后接入)"
+        }
+        if !isRunning {
+            return "VM 必须 running 且 qemu-ga 服务已启动 (Win 由 UTM Guest Tools 自动装)"
+        }
+        return "走 qemu-guest-agent, 单文件传输; 1-10 MB/s, 适合 < 100 MiB 偶发场景"
     }
 
     // MARK: encryption (PR-11e)

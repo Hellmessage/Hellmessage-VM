@@ -63,6 +63,9 @@ struct DialogOverlay: View {
             if let item = model.rekeyItem {
                 RekeyVMDialog(model: model, errors: errors, item: item)
             }
+            if let req = model.fileTransferRequest {
+                FileTransferDialog(model: model, errors: errors, request: req)
+            }
             // 加密 VM 启动期密码 modal (PR-11b)
             if let req = model.startPasswordRequest {
                 EncryptionPasswordDialog(

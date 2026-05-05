@@ -395,6 +395,25 @@ private struct DetachedVMToolbar: View {
                     .help(on ? "剪贴板共享: 开 (点击关闭)" : "剪贴板共享: 关 (点击开启)")
             }
 
+            // 文件传输 push / pull (仅 QEMU 后端 + running). 设计稿 docs/v3/FILE_COPY.md
+            if (item.config?.engine ?? .qemu) == .qemu, sessionState == .running {
+                Button {
+                    presentFilePushPicker(model: model, item: item)
+                } label: {
+                    Image(systemName: "arrow.up.doc")
+                        .foregroundStyle(HVMColor.textSecondary)
+                }
+                    .buttonStyle(IconButtonStyle())
+                    .help("传文件到 VM (qemu-guest-agent)")
+                Button {
+                    presentFilePullPicker(model: model, item: item)
+                } label: {
+                    Image(systemName: "arrow.down.doc")
+                        .foregroundStyle(HVMColor.textSecondary)
+                }
+                    .buttonStyle(IconButtonStyle())
+                    .help("从 VM 取文件 (qemu-guest-agent)")
+            }
         }
         .padding(.leading, HVMSpace.md)
         .padding(.trailing, HVMSpace.md)
