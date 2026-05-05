@@ -91,10 +91,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window?.setContentSize(HVMWindow.mainStopped)
 
         // SwiftUI 子视图
-        let toolbar = NSHostingView(rootView: HVMToolbar(model: model, errors: errors))
-        toolbar.translatesAutoresizingMaskIntoConstraints = false
-        toolbar.sizingOptions = .minSize
-
+        // 顶部 HVMToolbar (品牌 / breadcrumb / 刷新 / New VM) 已废弃 — 刷新 + New VM 已并入
+        // SidebarView header. macOS 系统 titlebar 显示 window.title="HVM". 用户期望最大化
+        // 横向空间, 不再保留独立 chrome 条.
         let sidebar = NSHostingView(rootView: SidebarView(model: model, errors: errors))
         sidebar.translatesAutoresizingMaskIntoConstraints = false
         sidebar.sizingOptions = .minSize
@@ -103,8 +102,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         statusBar.translatesAutoresizingMaskIntoConstraints = false
         statusBar.sizingOptions = .minSize
 
-        // 细边分隔
-        let topDivider = makeHDivider()
+        // 细边分隔 (顶部分隔条已随 HVMToolbar 一起去掉)
         let bottomDivider = makeHDivider()
         let vDivider = makeVDivider()
 
@@ -123,8 +121,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
         observeDialogActivity(overlay: overlay)
 
-        contentView.addSubview(toolbar)
-        contentView.addSubview(topDivider)
         contentView.addSubview(sidebar)
         contentView.addSubview(vDivider)
         contentView.addSubview(detail)
@@ -133,17 +129,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         contentView.addSubview(overlay)
 
         NSLayoutConstraint.activate([
-            // Toolbar 顶部全宽
-            toolbar.topAnchor.constraint(equalTo: contentView.topAnchor),
-            toolbar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            toolbar.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            toolbar.heightAnchor.constraint(equalToConstant: HVMBar.toolbarHeight),
-
-            topDivider.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
-            topDivider.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            topDivider.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            topDivider.heightAnchor.constraint(equalToConstant: 1),
-
             // StatusBar 底部全宽
             statusBar.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
             statusBar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
@@ -156,19 +141,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             bottomDivider.heightAnchor.constraint(equalToConstant: 1),
 
             // Sidebar 左侧 240pt
-            sidebar.topAnchor.constraint(equalTo: topDivider.bottomAnchor),
+            sidebar.topAnchor.constraint(equalTo: contentView.topAnchor),
             sidebar.bottomAnchor.constraint(equalTo: bottomDivider.topAnchor),
             sidebar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             sidebar.widthAnchor.constraint(equalToConstant: 240),
 
             // 垂直分隔线
-            vDivider.topAnchor.constraint(equalTo: topDivider.bottomAnchor),
+            vDivider.topAnchor.constraint(equalTo: contentView.topAnchor),
             vDivider.bottomAnchor.constraint(equalTo: bottomDivider.topAnchor),
             vDivider.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
             vDivider.widthAnchor.constraint(equalToConstant: 1),
 
             // Detail 右侧
-            detail.topAnchor.constraint(equalTo: topDivider.bottomAnchor),
+            detail.topAnchor.constraint(equalTo: contentView.topAnchor),
             detail.bottomAnchor.constraint(equalTo: bottomDivider.topAnchor),
             detail.leadingAnchor.constraint(equalTo: vDivider.trailingAnchor),
             detail.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),

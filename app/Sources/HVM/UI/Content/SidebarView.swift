@@ -40,14 +40,35 @@ struct SidebarView: View {
             Text("Virtual Machines")
                 .font(HVMFont.label)
                 .foregroundStyle(HVMColor.textTertiary)
-            Spacer()
             Text("\(model.list.count)")
                 .font(HVMFont.small.weight(.semibold))
                 .foregroundStyle(HVMColor.textTertiary)
                 .monospacedDigit()
+            Spacer()
+            // 刷新 + New VM (原顶部 HVMToolbar 已废弃, 入口移到 sidebar header)
+            Button(action: { model.refreshList() }) {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(IconButtonStyle())
+            .help("刷新 (Cmd+R)")
+            .keyboardShortcut("r", modifiers: [.command])
+
+            Button(action: { model.showCreateWizard = true }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "plus")
+                        .font(HVMFont.smallBold)
+                    Text("New VM")
+                }
+            }
+            .buttonStyle(PillAccentButtonStyle())
+            .help("新建 VM (Cmd+N)")
+            .keyboardShortcut("n", modifiers: [.command])
+            .hvmProbe(id: "toolbar.button.newVM",
+                       label: "New VM",
+                       action: .button { model.showCreateWizard = true })
         }
-        .padding(.horizontal, HVMSpace.lg)
-        .padding(.top, HVMSpace.lg)
+        .padding(.horizontal, HVMSpace.sm)
+        .padding(.top, HVMSpace.md)
         .padding(.bottom, HVMSpace.sm)
     }
 

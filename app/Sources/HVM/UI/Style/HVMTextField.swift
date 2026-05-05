@@ -207,13 +207,59 @@ private struct NoIMESecureTextField: NSViewRepresentable {
             focused = false
         }
 
-        // Return / Tab 走 SwiftUI .onSubmit / .keyboardShortcut 链路, 不在这里拦
+        // Tab / Shift+Tab: NSSecureTextField 自家不在 SwiftUI nextKeyView 链上, 默认
+        // 行为是回到 window 第一个 focusable (Name 字段). 拦下来手动遍历 contentView
+        // view tree 找当前 focusable 列表的下一个 / 上一个, 让焦点在 SwiftUI 的姐妹
+        // TextField 间正常切换. Return 不拦, 走 SwiftUI .onSubmit / .keyboardShortcut.
         func control(_ control: NSControl,
                      textView: NSTextView,
                      doCommandBy commandSelector: Selector) -> Bool {
-            // 让 NSTextView 默认处理回车 / tab — SwiftUI .onSubmit 仍能收到 (来自
-            // .keyboardShortcut(.return)). 返回 false 不拦.
+            guard let tf = control as? NSTextField,
+                  let window = tf.window else { return false }
+            if commandSelector == #selector(NSResponder.insertTab(_:)) {
+                let next = Self.findFocusable(after: tf, in: window.contentView)
+                DispatchQueue.main.async { window.makeFirstResponder(next ?? tf) }
+                return true
+            }
+            if commandSelector == #selector(NSResponder.insertBacktab(_:)) {
+                let prev = Self.findFocusable(before: tf, in: window.contentView)
+                DispatchQueue.main.async { window.makeFirstResponder(prev ?? tf) }
+                return true
+            }
             return false
+        }
+
+        /// 遍历 root 子树, 收齐所有可 become firstResponder + canBecomeKeyView 的 NSView,
+        /// 按 view tree 顺序排列, 取 view 之后的第一个; 末尾环绕回头.
+        @MainActor
+        static func findFocusable(after view: NSView, in root: NSView?) -> NSView? {
+            guard let root else { return nil }
+            var all: [NSView] = []
+            collect(root, into: &all)
+            guard let idx = all.firstIndex(of: view), all.count > 1 else { return nil }
+            let next = (idx + 1) % all.count
+            return all[next]
+        }
+
+        /// findFocusable 的反向 — Shift+Tab 用.
+        @MainActor
+        static func findFocusable(before view: NSView, in root: NSView?) -> NSView? {
+            guard let root else { return nil }
+            var all: [NSView] = []
+            collect(root, into: &all)
+            guard let idx = all.firstIndex(of: view), all.count > 1 else { return nil }
+            let prev = (idx - 1 + all.count) % all.count
+            return all[prev]
+        }
+
+        @MainActor
+        private static func collect(_ view: NSView, into out: inout [NSView]) {
+            if view.acceptsFirstResponder, view.canBecomeKeyView {
+                out.append(view)
+            }
+            for sub in view.subviews {
+                collect(sub, into: &out)
+            }
         }
     }
 }
