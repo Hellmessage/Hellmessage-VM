@@ -121,6 +121,20 @@ struct DetailTopBar: View {
                 .buttonStyle(IconButtonStyle())
                 .help(detached ? "关闭独立窗口" : "弹出到独立窗口")
             }
+            // 查看配置按钮: running 期入口 (stopped 期走详情页 Resources stat 卡 / 网络区).
+            // 加密未解锁 (config nil) → disabled, 提示先在 sidebar 右键解锁
+            // (启动 VM 输的密码不会自动解 config.yaml.enc, 两条通路独立).
+            // EditConfigDialog 内部对 isBusy 时 disable 保存按钮 + 顶部红字提示.
+            Button {
+                if item.config != nil { model.editConfigItem = item }
+            } label: {
+                Image(systemName: "gearshape")
+            }
+            .buttonStyle(IconButtonStyle())
+            .disabled(item.config == nil)
+            .help(item.config == nil
+                  ? "加密 VM 未解锁: 请先在 sidebar 右键 \"配置...\" 输入密码解锁"
+                  : "查看 / 编辑 VM 配置 (运行中部分字段不可改)")
         }
         .padding(.horizontal, HVMSpace.xl)
         .padding(.vertical, HVMSpace.md)

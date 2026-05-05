@@ -32,19 +32,31 @@ struct EditConfigDialog: View {
         self._draft = State(initialValue: cfg)
     }
 
+    /// VM 是否运行中 — running 期允许打开本 dialog 查看配置, 但保存按钮 disable.
+    private var isRunning: Bool {
+        BundleLock.isBusy(bundleURL: item.bundleURL)
+    }
+
     var body: some View {
         HVMModal(
-            title: "Edit Configuration",
+            title: isRunning ? "查看配置" : "Edit Configuration",
             icon: .info,
             width: 560,
             closeAction: { close() }
         ) {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: HVMSpace.lg) {
-                    Text("修改 \(item.displayName) 的资源配置. 必须 VM 停止. Engine (\(item.config?.engine.rawValue ?? "—")) 不可改.")
-                        .font(HVMFont.caption)
-                        .foregroundStyle(HVMColor.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if isRunning {
+                        Text("VM 运行中 — 字段仅查看, 修改需先停止 VM. (剪贴板共享在详情顶栏可即时切换)")
+                            .font(HVMFont.caption)
+                            .foregroundStyle(HVMColor.statusPaused)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("修改 \(item.displayName) 的资源配置. 必须 VM 停止. Engine (\(item.config?.engine.rawValue ?? "—")) 不可改.")
+                            .font(HVMFont.caption)
+                            .foregroundStyle(HVMColor.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
 
                     HStack(spacing: HVMSpace.md) {
                         VStack(alignment: .leading, spacing: HVMSpace.xs) {
@@ -76,13 +88,17 @@ struct EditConfigDialog: View {
                 .padding(.vertical, HVMSpace.xs)
             }
             .frame(maxHeight: 560)
+            // VM 运行中: 整个表单 disabled (字段灰显, 用户能看不能改)
+            .disabled(isRunning)
         } footer: {
             HVMModalFooter {
-                Button("取消") { close() }
+                Button(isRunning ? "关闭" : "取消") { close() }
                     .buttonStyle(GhostButtonStyle())
-                Button("保存") { save() }
-                    .buttonStyle(PrimaryButtonStyle())
-                    .keyboardShortcut(.return, modifiers: [.command])
+                if !isRunning {
+                    Button("保存") { save() }
+                        .buttonStyle(PrimaryButtonStyle())
+                        .keyboardShortcut(.return, modifiers: [.command])
+                }
             }
         }
     }
