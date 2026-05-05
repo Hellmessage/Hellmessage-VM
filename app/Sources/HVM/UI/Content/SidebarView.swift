@@ -34,37 +34,50 @@ struct SidebarView: View {
     }
 
     // MARK: - section header
+    //
+    // 视觉: 跟 macOS Finder/Mail sidebar 同款节奏 — 紧凑高度 (38pt), 左侧细 VMs 计数,
+    // 右侧两个图标按钮 (Ghost 风格, 灰底无 accent), 整片底有 1px 分隔线跟下方 list 划开.
+    // 不再用 PillAccent 蓝色按钮 — 在窄 sidebar 里太突兀.
 
     private var header: some View {
-        HStack(spacing: HVMSpace.sm) {
-            Spacer()
-            // 刷新 + New VM (原顶部 HVMToolbar 已废弃, 入口移到 sidebar header)
-            Button(action: { model.refreshList() }) {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(IconButtonStyle())
-            .help("刷新 (Cmd+R)")
-            .keyboardShortcut("r", modifiers: [.command])
+        VStack(spacing: 0) {
+            HStack(spacing: HVMSpace.sm) {
+                // 左侧 VM 计数 (低对比度小字, 跟 macOS sidebar header 风格一致)
+                Text("\(model.list.count)")
+                    .font(HVMFont.small.weight(.semibold))
+                    .foregroundStyle(HVMColor.textSecondary)
+                    .monospacedDigit()
+                Text(model.list.count == 1 ? "VM" : "VMs")
+                    .font(HVMFont.small)
+                    .foregroundStyle(HVMColor.textTertiary)
+                Spacer()
+                // 刷新 (Cmd+R) + 新建 (Cmd+N) — 都走 IconButtonStyle 灰底, 视觉权重一致
+                Button(action: { model.refreshList() }) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(HVMFont.smallBold)
+                }
+                .buttonStyle(IconButtonStyle())
+                .help("刷新 (Cmd+R)")
+                .keyboardShortcut("r", modifiers: [.command])
 
-            Button(action: { model.showCreateWizard = true }) {
-                HStack(spacing: 4) {
+                Button(action: { model.showCreateWizard = true }) {
                     Image(systemName: "plus")
                         .font(HVMFont.smallBold)
-                    Text("New VM")
-                        .lineLimit(1)
-                        .fixedSize()
                 }
+                .buttonStyle(IconButtonStyle())
+                .help("新建 VM (Cmd+N)")
+                .keyboardShortcut("n", modifiers: [.command])
+                .hvmProbe(id: "toolbar.button.newVM",
+                           label: "New VM",
+                           action: .button { model.showCreateWizard = true })
             }
-            .buttonStyle(PillAccentButtonStyle())
-            .help("新建 VM (Cmd+N)")
-            .keyboardShortcut("n", modifiers: [.command])
-            .hvmProbe(id: "toolbar.button.newVM",
-                       label: "New VM",
-                       action: .button { model.showCreateWizard = true })
+            .padding(.horizontal, HVMSpace.md)
+            .frame(height: 38)
+            // 细分隔线 — 跟下方 list / 主窗口其他区块视觉边界一致 (HVMColor.border)
+            Rectangle()
+                .fill(HVMColor.border)
+                .frame(height: 1)
         }
-        .padding(.horizontal, HVMSpace.sm)
-        .padding(.top, HVMSpace.md)
-        .padding(.bottom, HVMSpace.sm)
     }
 
     // MARK: - list
