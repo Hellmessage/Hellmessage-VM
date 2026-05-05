@@ -162,9 +162,14 @@ final class DetailContainerView: NSView {
         // stopped 状态额外检测 config 是否变化 (iso 切换 / cpu/mem 编辑 / boot-from-disk 等
         // 都改 config 不改 ShowState). stopped view 持有的是 init 时的 immutable snapshot,
         // SwiftUI 不会自动响应外部改动 → 必须 host rebuild.
+        //
+        // 例外: networks 字段变化不触发 rebuild. 网卡编辑由 InlineNetworksSection 内嵌
+        // VMSettingsNetworkSection 自行承接 (本地 draft + auto-save), SwiftUI 子树已经持有
+        // 最新值. 重建反而会清掉 VMSettingsNetworkSection 的 @State expandedNICs (折叠状态)
+        // 让 NIC 卡片每次保存都自动收起, 用户体验差.
         if !needsRebuild, case .stopped(let id) = newState,
            let curConfig = model.list.first(where: { $0.id == id })?.config,
-           curConfig != shownStoppedConfig {
+           !Self.configEqualIgnoringNetworks(curConfig, shownStoppedConfig) {
             needsRebuild = true
         }
 
@@ -191,6 +196,16 @@ final class DetailContainerView: NSView {
               let id = currentQemuFanoutVMID else { return }
         let detached = model.detachedQemuVMs.contains(id)
         view.inputCaptureEnabled = !detached
+    }
+
+    /// 比较两份 VMConfig, 忽略 `networks` 字段. 用于 refresh() 决定是否需要重建 stopped host:
+    /// 网卡变化由 SwiftUI 子树内的 draft 自行承接 + 落 yaml, 不需要外层 host rebuild.
+    /// shownStoppedConfig == nil (首次显示) 一律返回 false → 触发 rebuild.
+    private static func configEqualIgnoringNetworks(_ a: VMConfig, _ b: VMConfig?) -> Bool {
+        guard let b else { return false }
+        var an = a; an.networks = []
+        var bn = b; bn.networks = []
+        return an == bn
     }
 
     private func computeState() -> ShowState {
