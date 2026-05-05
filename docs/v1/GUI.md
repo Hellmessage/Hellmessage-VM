@@ -105,6 +105,7 @@ App 级合规 modal 栈容器, 同一时刻只渲染一个 modal, 队列排队:
 | `VirtioWinFetchDialog` | Win VM 创建时按需下载 virtio-win 驱动 ISO |
 | `UtmGuestToolsFetchDialog` | Win VM 装 UTM Guest Tools ISO 进度 |
 | `InstallDialog` | macOS / Linux / Windows 装机进度 |
+| `FileTransferDialog` | host ↔ guest 单文件传输 (form / running / done 三态; 走 qemu-guest-agent guest-file-* API; 详情页 Sharing 区按钮触发; 仅 QEMU 后端 + running VM) |
 
 ## 自绘组件清单 (CLAUDE.md UI 控件约束)
 
@@ -163,6 +164,17 @@ QEMU 后端 `FramebufferHostView` 默认 `macStyleShortcuts = true` (跟 `VMConf
 - 走 `lastWrittenChangeCount` 去抖, 避免环回
 - detached 窗口 toolbar 有 clipboard toggle 控制开关; IPC `clipboard.setEnabled` 可远程切换
 - macOS guest 直接走 Apple Virtualization 自带 pasteboard 通道, 无需此桥
+
+## 文件传输 (Sharing 区按钮)
+
+详情页 Sharing 区在剪贴板 toggle 下方有两按钮 [传文件到 VM…] / [从 VM 取文件…], 走 qemu-guest-agent `guest-file-*` API 单文件传输. 设计稿 [docs/v3/FILE_COPY.md](../v3/FILE_COPY.md), 协议层 [HVMQemu/QgaFile.swift](../../app/Sources/HVMQemu/QgaFile.swift).
+
+- 仅 QEMU 后端 + VM running 时按钮可用; 其它态 disabled + 灰文案说明 (VZ 后端 / VM 未运行 / qga 未启)
+- 点击 → NSOpenPanel (push) / NSSavePanel (pull) → 落 `model.fileTransferRequest` → DialogOverlay 展开 `FileTransferDialog`
+- Push 默认远端路径基于 guestOS: Win → `C:\Users\Public\Downloads\<basename>`, Linux/macOS → `/tmp/<basename>`; 用户在 dialog 内 `HVMTextField` 改
+- 三态: form (用户编辑) / running (closeAction = nil 不可关 + ProgressView spinner) / done (显字节数 + MB/s + [关闭] 按钮)
+- 取消语义 (D5): form / done 态点 X 或 Cancel 关闭; running 期间 X 隐藏不可关 (chunk 循环跑完才退). 关闭后 transferTask 仍 cancel — 但 `QgaFile.push/pull` 内部仅 `Task.checkCancellation()` 在 chunk 边界响应, 已发出的 IPC 不会中断 (设计 v1 可接受)
+- hvmProbe ID: `detail.sharing.button.{push,pull}File` / `dialog.fileTransfer.{input.remotePath,button.{start,cancel,close}}`
 
 ## ErrorDialog 与错误队列
 

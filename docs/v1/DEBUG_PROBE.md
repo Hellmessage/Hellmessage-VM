@@ -78,6 +78,8 @@ hvm-dbg boot-progress <vm>                                  启动阶段 (bios/b
 hvm-dbg console <vm> --read [--since-bytes N] | --write     串口请求 / 响应模型
 hvm-dbg exec <vm> [--user U --password-from-stdin] -- <cmd> 通过 console 自动登录 + 跑命令 (Linux 需 hvc0 / ttyAMA0 起 getty)
 hvm-dbg exec-guest <vm> [--path | --ps | --cmd] [--args ...] 通过 qemu-guest-agent 跑命令 (Windows guest 必备)
+hvm-dbg file push <vm> --src /local --dst 'C:\path'         host → guest 单文件 (qga guest-file-* API, 1-10 MB/s)
+hvm-dbg file pull <vm> --src 'C:\path' --dst /local         guest → host 单文件 (本地 .hvm-tmp + atomic rename)
 hvm-dbg display-info <vm>                                   guest 真实 framebuffer 尺寸 (验证 dynamic resize)
 hvm-dbg display-resize <vm> --width W --height H            host → guest dynamic resize (HDP RESIZE_REQUEST + vdagent MONITORS_CONFIG)
 hvm-dbg qemu-launch <vm> [--dry-run] [--shutdown-timeout N] 调试: 直接拉起 QEMU 后端 (绕过 hvm-cli start 主流程)
@@ -113,6 +115,20 @@ hvm-dbg console foo --write-stdin                host stdin 流式
 ```
 
 QEMU 后端走 ARM virt PL011 串口到 unix socket (`run/<vm-id>.console.sock`); Linux ARM 默认 `serial-getty@ttyAMA0.service` 可登录。
+
+### `file push` / `file pull`
+
+通过 qemu-guest-agent `guest-file-open / write / read / close / seek` API 在 host ↔ guest 之间复制单文件, **绕开 9p / virtiofs / SMB**, 与 `exec-guest` 同款 chardev qga + virtio-serial port `org.qemu.guest_agent.0` 通路, **零 guest-side 改动** (Win UTM Guest Tools 自动装 qemu-ga; Linux 走 `apt install qemu-guest-agent`).
+
+实现入口: [app/Sources/HVMQemu/QgaFile.swift](../../app/Sources/HVMQemu/QgaFile.swift), 设计稿 [docs/v3/FILE_COPY.md](../v3/FILE_COPY.md).
+
+约束:
+- VM 必须 running, qga socket fileExists (旧 bundle 没启 qga chardev 需 cold restart)
+- 软警告 100 MiB / 硬上限 4 GiB (单文件)
+- 性能 1-10 MB/s (base64 + JSON + Unix socket 1 MiB chunk); 大文件慢, 走 timeoutSec 兜底 (默认 600s, `--timeout-sec` 可调)
+- push 写入非原子 (中断留半成品 dst); pull 本地走 `.hvm-tmp.<hex8>` + atomic rename, 中断不留残留
+- 不递归: 文件夹用户 `zip` 后 push, guest 内 unzip
+- VZ 后端不支持 (没接 QGA, 推后单独提案)
 
 ### `exec` vs `exec-guest`
 
