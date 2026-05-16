@@ -34,11 +34,15 @@ final class HVMPopupPanel {
     ///       传值时若大于 anchor 宽度, 按 `rightAligned` 决定水平对齐 (默认左对齐到 anchor.minX).
     ///   - rightAligned: 仅在 preferredWidth > anchor.width 时生效, true → panel 右边贴齐 anchor.maxX
     ///       (锚点贴右边时用, 避免 popup 跑出屏幕). HVMFormSelect 默认 false.
+    ///   - preferAbove: false → 优先 anchor 下方弹 (HVMFormSelect 这种 trigger 在 dialog 中部场景);
+    ///       true → 优先 anchor 上方弹 (状态栏按钮在窗口最底边场景, 默认下方会出窗口底进 dock 区域).
+    ///       任一模式下若首选方向不够屏幕空间, 自动翻另一侧.
     func present<Content: View>(
         anchor: NSView,
         maxHeight: CGFloat,
         preferredWidth: CGFloat? = nil,
         rightAligned: Bool = false,
+        preferAbove: Bool = false,
         @ViewBuilder content: () -> Content,
         onDismiss: @escaping () -> Void
     ) {
@@ -66,14 +70,26 @@ final class HVMPopupPanel {
             // 锚点贴右边: panel 右边贴齐 anchor 右边
             originX = triggerOnScreen.maxX - width
         }
-        var origin = NSPoint(
-            x: originX,
-            y: triggerOnScreen.minY - panelHeight
-        )
-        // 屏幕底部空间不够时翻到 anchor 上方紧贴
-        if let screen = parentWindow.screen, origin.y < screen.visibleFrame.minY + 4 {
-            origin.y = triggerOnScreen.maxY
+        // 计算 above / below 两个候选 y 位置 (panel 左下角 NSScreen 坐标)
+        let yAbove = triggerOnScreen.maxY            // panel 底贴 anchor 顶 → panel 整体在 anchor 之上
+        let yBelow = triggerOnScreen.minY - panelHeight  // panel 顶贴 anchor 底 → panel 整体在 anchor 之下
+        let visible = parentWindow.screen?.visibleFrame
+        // 候选位置在屏幕安全区内是否塞得下
+        func fitsAbove() -> Bool {
+            guard let visible else { return true }
+            return yAbove + panelHeight <= visible.maxY - 4
         }
+        func fitsBelow() -> Bool {
+            guard let visible else { return true }
+            return yBelow >= visible.minY + 4
+        }
+        let originY: CGFloat
+        if preferAbove {
+            originY = fitsAbove() ? yAbove : (fitsBelow() ? yBelow : yAbove)
+        } else {
+            originY = fitsBelow() ? yBelow : (fitsAbove() ? yAbove : yBelow)
+        }
+        let origin = NSPoint(x: originX, y: originY)
 
         let panel = NSPanel(
             contentRect: NSRect(origin: origin, size: panelSize),

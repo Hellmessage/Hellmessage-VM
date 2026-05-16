@@ -101,6 +101,7 @@ struct HVMStatusBarVmnetButton: View {
             maxHeight: 260,
             preferredWidth: 320,
             rightAligned: true,
+            preferAbove: true,  // 状态栏按钮在窗口最底边, 必须往上弹, 否则进 dock 区用户看不到
             content: {
                 StatusBarVmnetPopup(model: model) { _ in
                     // 安装/卸载完成后让外层按钮重渲, 拉新 sockets 状态
