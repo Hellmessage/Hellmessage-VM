@@ -28,9 +28,17 @@ final class HVMPopupPanel {
 
     /// 弹出. anchor 是 trigger view (一般在 trigger .background 挂的不可见 NSView),
     /// panel 紧贴 anchor 下边缘. content 高度由 NSHostingView fittingSize 决定 (clamp 到 maxHeight).
+    ///
+    /// - Parameters:
+    ///   - preferredWidth: 显式指定 panel 宽度. nil → 跟 anchor 等宽 (HVMFormSelect 默认行为).
+    ///       传值时若大于 anchor 宽度, 按 `rightAligned` 决定水平对齐 (默认左对齐到 anchor.minX).
+    ///   - rightAligned: 仅在 preferredWidth > anchor.width 时生效, true → panel 右边贴齐 anchor.maxX
+    ///       (锚点贴右边时用, 避免 popup 跑出屏幕). HVMFormSelect 默认 false.
     func present<Content: View>(
         anchor: NSView,
         maxHeight: CGFloat,
+        preferredWidth: CGFloat? = nil,
+        rightAligned: Bool = false,
         @ViewBuilder content: () -> Content,
         onDismiss: @escaping () -> Void
     ) {
@@ -43,8 +51,8 @@ final class HVMPopupPanel {
         // 转 screen 坐标 (同样 bottom-up)
         let triggerOnScreen = parentWindow.convertToScreen(triggerInWindow)
 
-        // 自适应高度: 让 hosting view 在固定宽度 (= trigger 宽度) 下回报 fittingSize
-        let width = triggerOnScreen.width
+        // 自适应高度: 让 hosting view 在固定宽度下回报 fittingSize
+        let width = preferredWidth ?? triggerOnScreen.width
         let hosting = NSHostingView(rootView: AnyView(content().frame(width: width)))
         hosting.layoutSubtreeIfNeeded()
         let fitting = hosting.fittingSize
@@ -53,8 +61,13 @@ final class HVMPopupPanel {
 
         // panel 紧贴 anchor 下边: anchor.bottom_screenY - panelHeight
         // (NSPanel origin 是 panel 左下角, screen y 越小越往下)
+        var originX = triggerOnScreen.minX
+        if let _ = preferredWidth, rightAligned, width > triggerOnScreen.width {
+            // 锚点贴右边: panel 右边贴齐 anchor 右边
+            originX = triggerOnScreen.maxX - width
+        }
         var origin = NSPoint(
-            x: triggerOnScreen.minX,
+            x: originX,
             y: triggerOnScreen.minY - panelHeight
         )
         // 屏幕底部空间不够时翻到 anchor 上方紧贴

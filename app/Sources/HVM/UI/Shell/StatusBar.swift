@@ -50,6 +50,10 @@ struct HVMStatusBar: View {
 
             Spacer()
 
+            // vmnet daemon 快捷入口: 点击弹 popover (状态 + 安装/卸载按钮),
+            // 安装时 bridged 集合自动汇总 model.list 所有 VM. 见 StatusBarVmnet.swift.
+            HVMStatusBarVmnetButton(model: model)
+
             // 缩略图开关: 关闭后 VZ / QEMU 抓帧定时器 short-circuit, 不再写
             // bundle/meta/thumbnail.png; 状态栏 popover 显示占位图标. 已有 .png 不主动删.
             Button(action: { toggleThumbnails() }) {
