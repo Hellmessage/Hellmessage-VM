@@ -9,6 +9,16 @@
 #   - 由 GUI VMnetSupervisor 通过 osascript "with administrator privileges" 拉起
 #     (Touch ID / 密码框), 不再走 Terminal sudo bash
 #
+# 幂等性 (v2):
+#   install_one 先把 desired plist 写到 tmp, 跟 on-disk 现有 plist 字节比对,
+#   完全一致 + daemon 还在 launchctl 视图 + socket 还在 → 直接跳过, 不 bootout.
+#   这条是修 "点 VM B 的 [安装/更新 daemon], 跑着的 VM A 全掉网" BUG 的关键 —
+#   bootout + rm socket + bootstrap 会切断所有已连的 QEMU stream-netdev (QEMU
+#   不会自动重连). 必须只在真正需要重建时才走破坏性路径.
+#
+#   note: brew upgrade socket_vmnet 后 plist 内容不变, 不会自动 refresh 已跑的
+#   daemon. 需要走 "卸载全部" → "安装" 强制重启. v1 不做自动检测.
+#
 # 用法:
 #   sudo scripts/install-vmnet-daemons.sh              # 装 shared + host
 #   sudo scripts/install-vmnet-daemons.sh en0          # + bridged(en0)
@@ -102,23 +112,13 @@ install_one() {
     done
     args_xml+="    <string>$sock</string>"
 
-    # 旧 daemon 残留必须彻底清掉, 否则 launchctl bootstrap 偶发 "Bootstrap failed: 5:
-    # Input/output error" — launchd database 内 stale 引用未清, 由 plist file 仍存
-    # 在 / 老 service handle 还没被 GC 触发. 历史 BUG: 用户撞 "shared 缺失 + host 装好 +
-    # 想加 bridged.en8" 这种部分状态, 直接点安装就 error 5; 必须先 "卸载全部" 再装.
-    # 这里强化清理路径: by-label bootout + by-plist bootout (新形式更可靠) + 删 plist 文件,
-    # 让 bootstrap 跑前 launchd 视图里这个 label 不存在任何痕迹.
-    launchctl bootout "system/$label" 2>/dev/null || true
-    if [ -f "$plist" ]; then
-        # bootout 接 plist 路径 (Big Sur+) 比 by-label 更彻底, 顺手清掉 launchd 缓存
-        launchctl bootout system "$plist" 2>/dev/null || true
-    fi
-    rm -f "$plist"
-    # 短延迟给 launchd async unload + KeepAlive teardown 一点时间. 实测 bootout 返 0
-    # 不代表 service 真死, 200ms 经验值够覆盖 SIGTERM → exit 路径.
-    sleep 0.2
-
-    cat > "$plist" <<EOF
+    # desired plist 先落到 tmp, 跟 on-disk 做 byte-by-byte diff. 一致 + daemon 还
+    # 在 launchctl 视图 + socket 还在 → 幂等跳过 (不 bootout / 不删 socket /
+    # 不打断已连接的 VM). 这是修 "点了某台 VM 的 [安装/更新], 别的 VM 全掉网"
+    # BUG 的核心: bootout 会 SIGTERM daemon, 已连的 QEMU stream-netdev 会断且不重连.
+    local tmp_plist
+    tmp_plist=$(mktemp -t hvm-vmnet-plist) || tmp_plist="/tmp/hvm-vmnet-plist.$$.${suffix}"
+    cat > "$tmp_plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -142,6 +142,36 @@ $args_xml
 </dict>
 </plist>
 EOF
+
+    if [ -f "$plist" ] \
+        && [ -S "$sock" ] \
+        && cmp -s "$tmp_plist" "$plist" \
+        && launchctl print "system/$label" >/dev/null 2>&1
+    then
+        rm -f "$tmp_plist"
+        echo "    = $label 已就绪, 跳过 (socket=$sock)"
+        return 0
+    fi
+
+    # 走到这里说明: plist 内容变了 / daemon 不在 / socket 丢了 — 必须重装 (破坏性).
+    # 旧 daemon 残留必须彻底清掉, 否则 launchctl bootstrap 偶发 "Bootstrap failed: 5:
+    # Input/output error" — launchd database 内 stale 引用未清, 由 plist file 仍存
+    # 在 / 老 service handle 还没被 GC 触发. 历史 BUG: 用户撞 "shared 缺失 + host 装好 +
+    # 想加 bridged.en8" 这种部分状态, 直接点安装就 error 5; 必须先 "卸载全部" 再装.
+    # 这里强化清理路径: by-label bootout + by-plist bootout (新形式更可靠) + 删 plist 文件,
+    # 让 bootstrap 跑前 launchd 视图里这个 label 不存在任何痕迹.
+    echo "    ↻ $label 需要 (重新) 安装"
+    launchctl bootout "system/$label" 2>/dev/null || true
+    if [ -f "$plist" ]; then
+        # bootout 接 plist 路径 (Big Sur+) 比 by-label 更彻底, 顺手清掉 launchd 缓存
+        launchctl bootout system "$plist" 2>/dev/null || true
+    fi
+    rm -f "$plist"
+    # 短延迟给 launchd async unload + KeepAlive teardown 一点时间. 实测 bootout 返 0
+    # 不代表 service 真死, 200ms 经验值够覆盖 SIGTERM → exit 路径.
+    sleep 0.2
+
+    mv "$tmp_plist" "$plist"
     chmod 644 "$plist"
     chown root:wheel "$plist"
 
