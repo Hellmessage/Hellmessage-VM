@@ -108,6 +108,7 @@ GUI 通过 `app/Sources/HVM/Services/VMnetSupervisor.swift` 拉脚本:
 public enum VMnetSupervisor {
     public static func installAllDaemons(extraBridgedInterfaces: [String] = []) async throws
     public static func uninstallAllDaemons() async throws
+    public static func restartAllDaemons() async throws    // bootout + bootstrap 强制重起内核态
 }
 ```
 
@@ -149,8 +150,36 @@ osascript -e 'do shell script "/bin/bash <script> <args>" with administrator pri
 
 ### 入口
 
-- GUI: `编辑配置 → 网络区块 → vmnet daemon 面板` → "安装 / 更新 daemon" / "卸载全部" 按钮
-- CLI: `sudo scripts/install-vmnet-daemons.sh [iface ...]` / `sudo scripts/install-vmnet-daemons.sh --uninstall`
+- GUI: `编辑配置 → 网络区块 → vmnet daemon 面板` → "安装 / 更新 daemon" / "重启 daemon" / "卸载全部" 按钮
+- 状态栏: 主窗口右下角 "vmnet" 状态按钮 → popup → 同上 3 个动作
+- CLI:
+  - 装: `sudo scripts/install-vmnet-daemons.sh [iface ...]`
+  - 重起: `sudo scripts/install-vmnet-daemons.sh --restart` (plist 留, 仅 bootout+bootstrap 内核态)
+  - 卸: `sudo scripts/install-vmnet-daemons.sh --uninstall`
+
+### "重启 daemon" 为什么单独存在 (vs install)
+
+`install` 是**幂等**的: 如果 plist 字节完全匹配 + daemon 在 launchctl 视图 + socket 在, 就跳过, 不动 daemon. 这条幂等性是 `9ea4c08` 修的 — 避免"用户点 VM B 的 [安装/更新], 跑着的 VM A 全掉网"那个 bug.
+
+但幂等性的代价: `vmnet.framework` 内核侧 bridge attach 进入"半死"状态 (daemon 进程在 + socket 在 + write 不报错, 但帧根本不到物理 iface) 时, install 不修. 实测 2026-05-23 撞过这条:
+
+- tcpdump en10 30 秒, 0 帧 from guest MAC
+- guest enp1s0 carrier UP, 但 DHCP 拿不到 offer
+- `sudo launchctl bootout` + `bootstrap` 一次, 1 秒内 DHCP 完成
+
+所以 `--restart` 是**无条件破坏性**重起 — 必然断已连 VM 的网络, 跟 install 走完全不同的路径. 用户撞到 "VM 没拿 DHCP / 桥不通" 时优先用这条.
+
+### 启 VM 前的轻量 probe
+
+`HVMQemu/QemuHostEntry` 在每张 `vmnetBridged` NIC 起 QEMU 前调 `VMnetBridgeProbe.probe(socketPath:)` (~200ms), 抓:
+
+- socket 文件不存在 → `noSocket` (argv 构造会兜底报错)
+- connect 失败 → `connectFailed` (daemon 进程死, socket 孤儿)
+- 写入失败 / daemon 立刻 hangup → `writeFailed` / `daemonHangup` (协议错配, daemon 异常)
+
+**不抓** silent-bridge-死 (实测纯 user-space 无法可靠区分 — socket_vmnet 不把入向 bridge 帧转给被动 client, 而 sudo tcpdump 物理 iface 不适合放主进程). 这种故障由用户从 VM 没网络感知, 走 [重启 daemon] 自救.
+
+probe 失败**只 warn 不阻断**启动 (argv 构造里 `SocketPaths.isReady` 仍是硬门, probe 是软提示).
 
 ### 安全约束
 

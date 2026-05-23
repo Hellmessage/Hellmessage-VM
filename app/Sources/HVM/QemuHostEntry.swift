@@ -233,6 +233,28 @@ public enum QemuHostEntry {
         }
         QemuHostState.shared.consoleSocketURL = consoleSocketURL
 
+        // 2.9 vmnet bridged 模式: 启 QEMU 前 ~200ms 探测 daemon 响应性. 抓 socket 孤儿 /
+        //     daemon 协议错配 / daemon 异常拒绝. **不抓** "bridge attach silent 死" 那条
+        //     (user-space 无法可靠区分, 见 VMnetBridgeProbe.swift / docs/v3/VMNET_DAEMON_HEALTH.md R5).
+        //     仅 warn, 不阻断启动 — argv 构造里的 SocketPaths.isReady 仍是硬门.
+        //     shared / host 模式不探 (没物理桥, 这类故障路径不一样).
+        for (idx, net) in config.networks.enumerated() {
+            guard net.enabled, net.mode == .vmnetBridged else { continue }
+            guard let sock = net.effectiveSocketPath else { continue }
+            switch VMnetBridgeProbe.probe(socketPath: sock) {
+            case .ok:
+                fputs("HVMHost(qemu): ✔ vmnet daemon probe NIC#\(idx) (\(sock)) 响应正常\n", stderr)
+            case .noSocket:
+                fputs("HVMHost(qemu): ⚠ vmnet daemon probe NIC#\(idx) socket 不存在 (\(sock)) — argv 构造会兜底报错\n", stderr)
+            case .connectFailed(let e):
+                fputs("HVMHost(qemu): ⚠ vmnet daemon probe NIC#\(idx) connect 失败 errno=\(e) (sock=\(sock)) — daemon 可能已死\n", stderr)
+            case .writeFailed(let e):
+                fputs("HVMHost(qemu): ⚠ vmnet daemon probe NIC#\(idx) 探测帧写入失败 errno=\(e) (sock=\(sock)) — 协议错配?\n", stderr)
+            case .daemonHangup:
+                fputs("HVMHost(qemu): ⚠ vmnet daemon probe NIC#\(idx) (\(sock)) daemon 写完帧立刻断开 — daemon 异常, 试试 [状态栏 vmnet → 重启 daemon]\n", stderr)
+            }
+        }
+
         // 3. stderr 落全局 ~/Library/.../HVM/logs/<displayName>-<uuid8>/qemu-stderr.log
         // (truncate, 不累积老错误). 日志开关关闭 → stderrLog=nil, runner 丢弃 stderr,
         // 不创建 vmLogsDir 子目录.

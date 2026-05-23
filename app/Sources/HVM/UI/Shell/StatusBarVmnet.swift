@@ -175,21 +175,35 @@ private struct StatusBarVmnetPopup: View {
                 Spacer(minLength: 0)
             }
 
-            // 操作按钮
+            // 操作按钮 (三个: 安装/更新 · 重启 · 卸载全部; 全部共享 busy 状态)
             HStack(spacing: HVMSpace.sm) {
                 Button(action: { Task { await installVmnet() } }) {
                     HStack(spacing: 4) {
                         Image(systemName: "lock.shield")
                             .font(HVMFont.label)
-                        Text(busy ? "正在安装…" : "安装 / 更新 daemon")
+                        Text(busy ? "处理中…" : "安装 / 更新")
                             .font(HVMFont.caption)
                     }
                 }
                 .buttonStyle(GhostButtonStyle())
                 .disabled(busy)
                 .hvmProbe(id: "popover.vmnet.button.install",
-                           label: busy ? "Installing" : "Install",
+                           label: busy ? "Working" : "Install",
                            action: .button { Task { await installVmnet() } })
+
+                Button(action: { Task { await restartVmnet() } }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.clockwise.circle")
+                            .font(HVMFont.label)
+                        Text("重启 daemon").font(HVMFont.caption)
+                    }
+                }
+                .buttonStyle(GhostButtonStyle())
+                .disabled(busy)
+                .help("daemon 看起来好但 bridge 死了时用 — 会断所有已连 VM 的网络")
+                .hvmProbe(id: "popover.vmnet.button.restart",
+                           label: "Restart",
+                           action: .button { Task { await restartVmnet() } })
 
                 Button(action: { Task { await uninstallVmnet() } }) {
                     HStack(spacing: 4) {
@@ -281,6 +295,21 @@ private struct StatusBarVmnetPopup: View {
             onChange(true)
         } catch {
             errorText = "卸载失败: \(error.localizedDescription)"
+            onChange(false)
+        }
+    }
+
+    @MainActor
+    private func restartVmnet() async {
+        busy = true
+        errorText = nil
+        defer { busy = false }
+        do {
+            try await VMnetSupervisor.restartAllDaemons()
+            refreshToken &+= 1
+            onChange(true)
+        } catch {
+            errorText = "重启失败: \(error.localizedDescription)"
             onChange(false)
         }
     }

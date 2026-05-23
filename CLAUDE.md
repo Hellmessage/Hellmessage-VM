@@ -165,6 +165,10 @@ QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场�
   - **共存检测**: 跟 hell-vm 同款**不**做共存检测 — 用户若已装 lima/colima 的 socket_vmnet daemon, install-vmnet-daemons.sh 会 unlink 别家 socket 重建. 用户需先卸别家
   - VZ 后端 `vmnetBridged` 走 Apple `VZBridgedNetworkDeviceAttachment` (依赖 `com.apple.vm.networking` entitlement, 申请中); `vmnetShared / vmnetHost` 在 VZ 上退化到 NAT
   - 卸载所有 HVM 装的 daemon: `sudo scripts/install-vmnet-daemons.sh --uninstall` (或 GUI 网络面板 "卸载全部" 按钮)
+  - **daemon 在 ≠ bridge 在** (重要陷阱, 2026-05-23 实测撞过): vmnet.framework 内核侧 bridge attach 可能进入"半死"状态 — daemon 进程在跑, socket 文件在, launchctl 视图正常, QEMU 能连上 socket, 但帧根本不打到物理 iface (tcpdump 0 帧 from guest MAC). 多次 bootout/bootstrap 残留是已知触发. **idempotent install 跳过修不了**这条 (它的幂等检查正好绕开破坏性重启). **唯一可靠的修复**: bootout + bootstrap 强制重起 daemon (会断已连 VM 的网络, 不可避免). 入口:
+    - GUI: 状态栏 vmnet popup / VM 设置网络面板的 **[重启 daemon]** 按钮 (走 osascript admin)
+    - CLI: `sudo scripts/install-vmnet-daemons.sh --restart` (跟 `--uninstall` 区别: plist 保留, 仅重起内核态)
+    - 启 VM 前 `HVMQemu/VMnetBridgeProbe` 做 ~200ms 响应性轻探, 抓 socket 孤儿 / 协议错配 / daemon 拒服务; **不抓** silent-bridge-死 (实测 user-space 无法可靠区分, 见 `docs/v3/VMNET_DAEMON_HEALTH.md` R5)
 
 ## 第三方二进制 / Helper 脚本约束 **必须遵守**
 

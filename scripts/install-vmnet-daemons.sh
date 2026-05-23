@@ -78,6 +78,69 @@ if [ "${1:-}" = "--uninstall" ]; then
     exit 0
 fi
 
+# ---------- 重启 ----------
+# 用途: vmnet.framework 内核侧 bridge attach 状态死掉 (daemon 进程在跑 / socket 在 /
+# launchctl 视图也有, 但帧根本不打到物理 iface) 时, 强制 bootout + bootstrap 把
+# vmnet 内核态彻底重建.
+#
+# 跟 --uninstall 区别: plist 文件保留, daemon 配置不变, 只重起内核态.
+# 跟默认 install 区别: install 是 idempotent 的, plist 字节匹配就跳过 (设计为不打断
+# 已连 VM); restart 是无条件破坏性重启 — 必然断开所有已连 VM 的网络.
+#
+# 重启路径走跟 install_one 完全一致的 bootout 双语法 + sleep + err5 retry, 减少
+# 维护两条相似逻辑的成本.
+restart_all() {
+    shopt -s nullglob
+    local restarted=0
+    local failed=0
+    for plist in "$PLIST_DIR"/${LABEL_PREFIX}.*.plist; do
+        local label suffix sock
+        label=$(basename "$plist" .plist)
+        suffix=${label#"${LABEL_PREFIX}."}
+        # 路径推导跟 install_one 同款: shared 不带后缀, 其余都是 base + . + suffix
+        if [ "$suffix" = "shared" ]; then
+            sock="$SOCKET_BASE"
+        else
+            sock="${SOCKET_BASE}.${suffix}"
+        fi
+        echo "==> 重启 $label"
+        # bootout 两种语法都试 (Big Sur+ by-plist 比 by-label 更彻底清 launchd 缓存)
+        launchctl bootout "system/$label" 2>/dev/null || true
+        launchctl bootout system "$plist" 2>/dev/null || true
+        # 给 launchd async unload + KeepAlive teardown 一点时间. 200ms 经验值同 install_one.
+        sleep 0.2
+        # 旧残留 socket 清掉, 防 socket_vmnet 拒绝 bind
+        rm -f "$sock"
+        # bootstrap 第一次失败兜底重试 (跟 install_one 同款 err5 处理)
+        if ! launchctl bootstrap system "$plist" 2>/tmp/hvm-vmnet-bootstrap.err; then
+            local err1
+            err1=$(cat /tmp/hvm-vmnet-bootstrap.err 2>/dev/null || true)
+            echo "    ⚠ bootstrap 第 1 次失败: ${err1:-unknown}, 强制清理后重试 ..."
+            launchctl bootout "system/$label" 2>/dev/null || true
+            launchctl bootout system "$plist" 2>/dev/null || true
+            sleep 0.5
+            if ! launchctl bootstrap system "$plist"; then
+                echo "    ✗ $label bootstrap 二次仍失败 — 请运行 '$0 --uninstall' 后重装" >&2
+                failed=$((failed + 1))
+                continue
+            fi
+        fi
+        rm -f /tmp/hvm-vmnet-bootstrap.err
+        launchctl enable "system/$label" 2>/dev/null || true
+        echo "    ✓ $label  →  $sock"
+        restarted=$((restarted + 1))
+    done
+    echo "==> 共重启 $restarted 个 daemon (失败 $failed 个)"
+    if [ "$failed" -gt 0 ]; then
+        return 1
+    fi
+}
+
+if [ "${1:-}" = "--restart" ]; then
+    restart_all
+    exit $?
+fi
+
 # ---------- 安装 ----------
 SOCKET_VMNET="$(find_socket_vmnet)" || {
     cat <<'EOF'

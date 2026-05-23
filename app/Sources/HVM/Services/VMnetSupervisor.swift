@@ -61,6 +61,17 @@ public enum VMnetSupervisor {
         try await runWithAdminPrivileges(args: [script, "--uninstall"])
     }
 
+    /// 强制重启全部已装的 vmnet daemon (bootout + bootstrap), plist 文件保留.
+    ///
+    /// 用途: vmnet.framework 内核侧 bridge attach 状态死掉 (daemon 进程在跑 / socket 在 /
+    /// launchctl 视图也正常, 但帧根本不打到物理 iface), idempotent install 跳过不修.
+    /// 这条路径无条件破坏性重启, 必然断开所有已连接 VM 的网络 (跟老版 install 一样).
+    /// 详见 docs/v3/VMNET_DAEMON_HEALTH.md.
+    public static func restartAllDaemons() async throws {
+        let script = try scriptPath()
+        try await runWithAdminPrivileges(args: [script, "--restart"])
+    }
+
     // MARK: - 内部: 脚本定位 + 提权执行
 
     public enum VMnetError: LocalizedError {

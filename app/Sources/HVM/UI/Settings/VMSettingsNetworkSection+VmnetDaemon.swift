@@ -51,6 +51,17 @@ extension VMSettingsNetworkSection {
                     .buttonStyle(GhostButtonStyle())
                     .disabled(vmnetBusy)
 
+                    Button(action: { Task { await restartVmnet() } }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.clockwise.circle")
+                                .font(HVMFont.label)
+                            Text(vmnetBusy ? "处理中…" : "重启 daemon").font(HVMFont.caption)
+                        }
+                    }
+                    .buttonStyle(GhostButtonStyle())
+                    .disabled(vmnetBusy)
+                    .help("daemon 看起来好但 bridge 死了时用 — 会断已连 VM 的网络")
+
                     Button(action: { Task { await uninstallVmnet() } }) {
                         HStack(spacing: 4) {
                             Image(systemName: "trash")
@@ -103,6 +114,19 @@ extension VMSettingsNetworkSection {
             vmnetRefreshToken &+= 1
         } catch {
             vmnetError = "卸载失败: \(error.localizedDescription)"
+        }
+    }
+
+    @MainActor
+    private func restartVmnet() async {
+        vmnetBusy = true
+        vmnetError = nil
+        defer { vmnetBusy = false }
+        do {
+            try await VMnetSupervisor.restartAllDaemons()
+            vmnetRefreshToken &+= 1
+        } catch {
+            vmnetError = "重启失败: \(error.localizedDescription)"
         }
     }
 }
