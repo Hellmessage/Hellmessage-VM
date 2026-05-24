@@ -260,6 +260,20 @@ public final class AppModel {
         return t
     }
 
+    /// 共享目录添加弹窗请求 (NSOpenPanel 选完目录后置, dialog 让用户起 name + 选 ro/rw)
+    public var sharedFolderAddRequest: SharedFolderAddRequest? = nil
+
+    public struct SharedFolderAddRequest: Identifiable {
+        public let id: UUID
+        public let item: VMListItem
+        public let hostURL: URL
+        public init(item: VMListItem, hostURL: URL) {
+            self.id = UUID()
+            self.item = item
+            self.hostURL = hostURL
+        }
+    }
+
     /// 扩容请求载体: VM 引用 + 磁盘 id (主盘 "main" / 数据盘 uuid8) + 当前 GiB
     public struct DiskResizeRequest: Identifiable, Sendable {
         public let id: UUID
@@ -297,6 +311,7 @@ public final class AppModel {
             || decryptItem != nil
             || rekeyItem != nil
             || fileTransferRequest != nil
+            || sharedFolderAddRequest != nil
             || errors.current != nil
             || confirms.current != nil
     }
@@ -994,6 +1009,25 @@ public final class AppModel {
         }
         try saveConfig(item: item, requireStopped: true) { c in
             c.sharedFolders.removeAll { $0.name == name }
+        }
+        refreshList()
+    }
+
+    /// 切换 read-only ↔ rw. 同样要求 stopped (chardev 不支持热挂).
+    public func setSharedFolderReadOnly(item: VMListItem, name: String, readOnly: Bool) throws {
+        guard let cfg = item.config else {
+            throw HVMError.config(.missingField(name: "VM config 未解锁"))
+        }
+        guard cfg.sharedFolders.contains(where: { $0.name == name }) else {
+            throw HVMError.config(.missingField(name: "共享目录 name 不存在: \(name)"))
+        }
+        guard item.runState == "stopped" else {
+            throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
+        }
+        try saveConfig(item: item, requireStopped: true) { c in
+            for idx in c.sharedFolders.indices where c.sharedFolders[idx].name == name {
+                c.sharedFolders[idx].readOnly = readOnly
+            }
         }
         refreshList()
     }

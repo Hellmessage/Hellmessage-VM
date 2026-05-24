@@ -567,9 +567,22 @@ struct StoppedContentView: View {
                 ForEach(Array(folders.enumerated()), id: \.offset) { idx, sf in
                     HStack(spacing: HVMSpace.sm) {
                         Text(sf.name).font(HVMFont.body)
-                        Text(sf.readOnly ? "[只读]" : "[可写]")
-                            .font(HVMFont.small)
-                            .foregroundStyle(HVMColor.textSecondary)
+                        // 点 [只读] / [可写] 切换 (要求 stopped + qemu)
+                        Button(sf.readOnly ? "[只读]" : "[可写]") {
+                            toggleSharedFolderReadOnly(name: sf.name, current: sf.readOnly)
+                        }
+                        .buttonStyle(.plain)
+                        .font(HVMFont.small)
+                        .foregroundStyle(sf.readOnly ? HVMColor.textSecondary : HVMColor.accent)
+                        .disabled(!canEdit)
+                        .help(canEdit
+                              ? "点击切换 只读 ↔ 可写"
+                              : "需 VM stopped + QEMU 后端才能改")
+                        .hvmProbe(id: "detail.sharing.sharedFolder.button.toggleRO.\(idx)",
+                                  label: sf.readOnly ? "切到可写" : "切到只读",
+                                  action: .button {
+                                      toggleSharedFolderReadOnly(name: sf.name, current: sf.readOnly)
+                                  })
                         Text(sf.hostPath)
                             .font(HVMFont.monoSmall)
                             .foregroundStyle(HVMColor.textTertiary)
@@ -619,19 +632,21 @@ struct StoppedContentView: View {
         panel.title = "选择 host 共享目录"
         panel.prompt = "选择"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        // 取目录名作默认 name
-        let defaultName = SharedFolderSpec.sanitizeName(url.lastPathComponent)
-        let spec = SharedFolderSpec(hostPath: url.path, name: defaultName, readOnly: true)
-        do {
-            try model.addSharedFolder(item: item, spec: spec)
-        } catch {
-            errors.present(error)
-        }
+        // 弹 SharedFolderDialog (HVMModal) 让用户起 name + 选 ro/rw, 再落盘
+        model.sharedFolderAddRequest = AppModel.SharedFolderAddRequest(item: item, hostURL: url)
     }
 
     private func removeSharedFolder(name: String) {
         do {
             try model.removeSharedFolder(item: item, name: name)
+        } catch {
+            errors.present(error)
+        }
+    }
+
+    private func toggleSharedFolderReadOnly(name: String, current: Bool) {
+        do {
+            try model.setSharedFolderReadOnly(item: item, name: name, readOnly: !current)
         } catch {
             errors.present(error)
         }
