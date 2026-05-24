@@ -717,19 +717,34 @@ public struct WebDavHandler {
     }
 
     private func propfindRoots(depth1: Bool) -> HTTPResponse {
+        // Win WebDAV mini-redirector 挂载时第一查 root /, 没 quota 会按 "free=0" 直接拒所有 PUT
+        // (报 "File Too Large for destination file system" 即便文件只有几 KB). 必须给 root
+        // 自身 + 每个子 root 都挂 quota. 用 roots 中第一个的卷作 root 自身的 quota 来源
+        // (root / 是虚拟集合, 没对应 host 路径; 取任意 root 的 fs 给 Win 知道总量).
+        let rootQuota: (Int64, Int64)
+        if let first = roots.first {
+            rootQuota = Self.quotaForFilesystem(at: first.url)
+        } else {
+            rootQuota = (1 << 40, 0)
+        }
         var xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
         xml += "<D:multistatus xmlns:D=\"DAV:\">\n"
         // 根自身
         xml += "<D:response><D:href>/</D:href><D:propstat><D:prop>"
         xml += "<D:displayname></D:displayname>"
         xml += "<D:resourcetype><D:collection/></D:resourcetype>"
+        xml += "<D:quota-available-bytes>\(rootQuota.0)</D:quota-available-bytes>"
+        xml += "<D:quota-used-bytes>\(rootQuota.1)</D:quota-used-bytes>"
         xml += "</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>\n"
         if depth1 {
             for root in roots {
                 let href = "/" + percentEncode(root.name) + "/"
+                let (avail, used) = Self.quotaForFilesystem(at: root.url)
                 xml += "<D:response><D:href>\(xmlEscape(href))</D:href><D:propstat><D:prop>"
                 xml += "<D:displayname>\(xmlEscape(root.name))</D:displayname>"
                 xml += "<D:resourcetype><D:collection/></D:resourcetype>"
+                xml += "<D:quota-available-bytes>\(avail)</D:quota-available-bytes>"
+                xml += "<D:quota-used-bytes>\(used)</D:quota-used-bytes>"
                 xml += "</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>\n"
             }
         }
