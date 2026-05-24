@@ -2,9 +2,10 @@
 // stopped 视图里点 cpu / memory 卡片弹出的编辑面板. 套 HVMModal.
 // 必须 VM stopped (BundleLock.isBusy 检测; 等价 hvm-cli config set).
 //
-// 网络区块走 VMSettingsNetworkSection (hell-vm 同款多 NIC 卡片 + 自绘下拉 + 集成 daemon
-// 安装面板, 提权用 VMnetSupervisor osascript admin Touch ID).
+// 网络管理已不在此弹窗 (走状态栏 vmnet popup + 详情页 NIC 卡片). 本弹窗专注
+// 资源 + 剪贴板 + 共享文件 (SPICE WebDAV).
 
+import AppKit
 import SwiftUI
 import HVMBundle
 import HVMCore
@@ -83,7 +84,10 @@ struct EditConfigDialog: View {
                         )
                     }
 
-                    VMSettingsNetworkSection(draft: $draft, item: item)
+                    // 共享文件配置 (SPICE WebDAV). 仅 QEMU 后端可加 — VZ 推后.
+                    if item.config?.engine == .qemu {
+                        sharedFolderSection
+                    }
                 }
                 .padding(.vertical, HVMSpace.xs)
             }
@@ -130,13 +134,99 @@ struct EditConfigDialog: View {
             try model.saveConfig(item: item) { config in
                 config.cpuCount = cpuInt
                 config.memoryMiB = memGiB * 1024
-                config.networks = draft.networks
+                // 网络仍随源 config 不动 (本弹窗不再管 networks)
                 config.clipboardSharingEnabled = draft.clipboardSharingEnabled
                 config.macStyleShortcuts = draft.macStyleShortcuts
+                config.sharedFolders = draft.sharedFolders
             }
             close()
         } catch {
             errors.present(error)
         }
+    }
+
+    // MARK: - 共享文件 (SPICE WebDAV) 子区
+
+    private var sharedFolderSection: some View {
+        VStack(alignment: .leading, spacing: HVMSpace.sm) {
+            HStack {
+                Text("共享文件 (SPICE WebDAV)").font(HVMFont.bodyBold)
+                Spacer()
+            }
+            if draft.sharedFolders.isEmpty {
+                Text("(无 — 点下面按钮添加 host 目录, 启动 VM 后 guest 内自动可见)")
+                    .font(HVMFont.small)
+                    .foregroundStyle(HVMColor.textTertiary)
+            } else {
+                ForEach(draft.sharedFolders.indices, id: \.self) { idx in
+                    sharedFolderRow(idx: idx)
+                }
+            }
+            HStack {
+                Button("+ 添加共享目录…") { presentAddSharedFolder() }
+                    .buttonStyle(GhostButtonStyle())
+                Spacer()
+            }
+            Text("Win guest: \\\\localhost\\dav\\<name>; Linux: GVFS davs://localhost/<name>. 改动重启 VM 生效.")
+                .font(HVMFont.small)
+                .foregroundStyle(HVMColor.textTertiary)
+        }
+    }
+
+    @ViewBuilder
+    private func sharedFolderRow(idx: Int) -> some View {
+        let sf = draft.sharedFolders[idx]
+        HStack(spacing: HVMSpace.sm) {
+            Text(sf.name)
+                .font(HVMFont.body)
+                .lineLimit(1)
+            // 切换 ro/rw — 直接改 draft, [保存] 才落盘 (与 cpu/mem 一致)
+            Button(sf.readOnly ? "[只读]" : "[可写]") {
+                draft.sharedFolders[idx].readOnly.toggle()
+            }
+            .buttonStyle(.plain)
+            .font(HVMFont.small)
+            .foregroundStyle(sf.readOnly ? HVMColor.textSecondary : HVMColor.accent)
+            .help("点击切换 只读 ↔ 可写 (保存后生效)")
+
+            Text(sf.hostPath)
+                .font(HVMFont.monoSmall)
+                .foregroundStyle(HVMColor.textTertiary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer()
+
+            Button {
+                draft.sharedFolders.remove(at: idx)
+            } label: {
+                Image(systemName: "trash").font(HVMFont.small)
+            }
+            .buttonStyle(IconButtonStyle())
+            .help("移除")
+        }
+    }
+
+    /// NSOpenPanel 选目录 → 自动按 basename 派生 name → append 到 draft (默认 ro).
+    /// 重名时追加 -2 / -3. 仅修内存 draft, [保存] 后落盘.
+    private func presentAddSharedFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.title = "选择 host 共享目录"
+        panel.prompt = "选择"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let base = SharedFolderSpec.sanitizeName(url.lastPathComponent)
+        var name = base
+        var suffix = 2
+        let existing = Set(draft.sharedFolders.map { $0.name })
+        while existing.contains(name) {
+            name = "\(base)-\(suffix)"
+            suffix += 1
+        }
+        draft.sharedFolders.append(
+            SharedFolderSpec(hostPath: url.path, name: name, readOnly: true)
+        )
     }
 }

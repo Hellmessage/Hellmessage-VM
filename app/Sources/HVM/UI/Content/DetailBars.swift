@@ -199,6 +199,11 @@ struct DetailTopBar: View {
             .help(item.config == nil
                   ? "加密 VM 未解锁: 请先在 sidebar 右键 \"配置...\" 输入密码解锁"
                   : "查看 / 编辑 VM 配置 (运行中部分字段不可改)")
+            .hvmProbe(id: "detail.titlebar.button.editConfig",
+                      label: "查看配置",
+                      action: .button {
+                          if item.config != nil { model.editConfigItem = item }
+                      })
         }
         .padding(.horizontal, HVMSpace.xl)
         .padding(.vertical, HVMSpace.md)
@@ -446,6 +451,9 @@ struct StoppedContentView: View {
                     }
                     .buttonStyle(.plain)
                     .help("点击编辑 CPU 核数")
+                    .hvmProbe(id: "detail.button.editConfig",
+                              label: "查看配置",
+                              action: .button { model.editConfigItem = item })
 
                     Button { model.editConfigItem = item } label: {
                         statCard(label: "Memory", value: "\(cfg.memoryMiB / 1024)", unit: "GB", tint: HVMColor.statMemory)
