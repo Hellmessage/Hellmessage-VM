@@ -16,6 +16,7 @@
 | [VMNET_DAEMON_HEALTH.md](VMNET_DAEMON_HEALTH.md) | vmnet daemon 一键重启 + 启 VM 前响应性 probe (silent-bridge 自救路径) | **代码已合入** 2026-05-23 |
 | [RESOURCE_MONITOR.md](RESOURCE_MONITOR.md) | 详情页 inline sparkline (CPU/MEM/IO, 60s 1Hz, host + QGA guest 双源) | **设计稿** 2026-05-24 |
 | [SHARED_FOLDER.md](SHARED_FOLDER.md) | QEMU 共享目录 (SPICE WebDAV, Win + Linux 统一; Swift 原生 WebDAV server) | **代码已合入** 2026-05-24 (PR-0~7 一晚一次性落; 协议层 e2e 验过, 真机 guest 安装步留给用户) |
+| [INPUT_CAPTURE.md](INPUT_CAPTURE.md) | 键盘捕获 / 释放重构 (UTM 风格): modifier 镜像修卡键 + 左右键区分 + Cmd+Opt captured 双态 + CGS 全局热键禁用 | **代码已合入** 2026-05-24 (一次性 PR, hotfix 性质; 真机 e2e 留给用户) |
 | [TODO.md](TODO.md) | QEMU 加密 BUG / 遗漏清单 + 工具链 | **TODO 清单 v1**, 大多已 Done; 仍存的低优项已挪 [../v1/ROADMAP.md](../v1/ROADMAP.md) "残余项指引" |
 
 ## 与 v1 / CHANGELOG 的关系
@@ -39,4 +40,4 @@
 
 ---
 
-**最后更新**: 2026-05-24 (SHARED_FOLDER 代码已合入; RESOURCE_MONITOR 仍设计稿待评审)
+**最后更新**: 2026-05-24 (SHARED_FOLDER + INPUT_CAPTURE 代码已合入; RESOURCE_MONITOR 仍设计稿待评审)

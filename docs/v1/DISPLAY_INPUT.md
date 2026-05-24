@@ -78,11 +78,11 @@ SwiftUI `NSViewRepresentable` 直接交出 `HVMView`, 不再包中间 container 
 ### 键盘 first responder 与 release
 
 - 鼠标进入 view → first responder, 键盘事件给 VZ
-- **`Cmd + Control`** combo 释放键盘捕获, 后续按键给 host
+- **`Cmd + Opt`** combo 释放键盘捕获, 后续按键给 host (跟 QEMU 后端统一; 老的 `Cmd+Ctrl` 因跟 macOS 系统快捷键冲突已废弃, 详见 [v3/INPUT_CAPTURE.md](../v3/INPUT_CAPTURE.md))
 - 再次点画面回到 VZ
 - 鼠标走绝对坐标 (`VZUSBScreenCoordinatePointingDevice`), **没有 grab 概念**, 鼠标随时可移出 view
 
-实现 `HVMView.flagsChanged`: 检测 `[.command, .control]` → `window.makeFirstResponder(nil)` + 调 `onReleaseCapture`.
+实现 `HVMView.flagsChanged`: 检测 `[.command, .option]` → `window.makeFirstResponder(nil)` + 调 `onReleaseCapture`. VZ 后端**不**实现独立 modifier 镜像 (VZ framework 自己管, `capturesSystemKeys = true` 已经把 cmd+tab 等转给 guest), 也**不**做 captured 双态.
 
 ### Caps Lock 同步
 
@@ -220,6 +220,36 @@ QMP `input-send-event` 命令:
 - 关闭 → 退回老逻辑 `cmd → meta_l` (Win 键)
 - view-instance 级开关, **不持久化到 host 子进程**, 改完无须重启 VM
 
+### 输入捕获双态 (`released` / `captured`)
+
+`FramebufferHostView` 维护 `isCaptured: Bool`, **`Cmd + Opt`** toggle. 详细决策见 [v3/INPUT_CAPTURE.md](../v3/INPUT_CAPTURE.md).
+
+| 模式 | 行为 |
+|---|---|
+| `released` (默认) | view 接收键鼠, 但 macOS 系统快捷键 (cmd+tab / cmd+space / Mission Control / 截图) 仍归 macOS, 不进 guest |
+| `captured` | 通过 `CGSSetGlobalHotKeyOperatingMode(.disable)` (Skylight 私有 API, `HVMDisplayQemu/CGSPrivate.swift`) 禁用 macOS 全局热键, **所有键**送 guest. 右上角显示 `⌘⌥ 退出捕获` overlay |
+
+进入 / 退出由 `flagsChanged` 内检测 `[.command, .option]` 同时按下触发. 鼠标行为不切换 (QEMU `usb-tablet` 只支持 abs 坐标).
+
+**自动退出 captured 的场景** (避免系统热键留在 disable 状态):
+
+- 用户再按 Cmd+Opt
+- `inputCaptureEnabled = false` (detached / dialog 期主嵌入让出)
+- `resignFirstResponder()` (用户点 toolbar 或别的 view)
+- `viewWillMove(toWindow: nil)` (view 销毁)
+
+### 修饰键状态镜像 (`lastModifiers` + `pressedModifierQcodes`)
+
+`FramebufferHostView` 内维护两套状态防止 modifier 卡键:
+
+- `lastModifiers: NSEvent.ModifierFlags` — host 最后一次 modifier 全量
+- `pressedModifierQcodes: Set<String>` — 已发给 guest `keyDown` 但还没发 `keyUp` 的 modifier qcode 集合 (例如 `{"shift", "ctrl_r"}`)
+- `pressedNormalKeyQcodes: Set<String>` — 同上, 非修饰键
+
+`flagsChanged` 用 `syncModifiersToGuest(_:)` 算 set diff 双向发. `becomeFirstResponder` 立即 sync 当前实时 `NSEvent.modifierFlags` (修 "按住 cmd 点 view 再按字符, cmd+xxx 失效" 的老 bug). `resignFirstResponder` / `viewWillMove(toWindow:nil)` / 进出 captured 模式时, `releaseAllPressedKeys()` 一并 keyUp + clear (修 "shift / cmd 一直按着" 的老 bug).
+
+**左右修饰键独立** (跟 UTM 同款): NSEvent.ModifierFlags 公开 API 不区分左右, 用 raw bit (`leftShift = 0x2`, `rightShift = 0x4` 等, 跟 Carbon `Events.h` 同源) 区分, 分别映射到 qcode `shift` vs `shift_r`, `ctrl` vs `ctrl_r`, `alt` vs `alt_r`, `meta_l` vs `meta_r`. 合成事件 (`NSEvent.keyEvent(with:...)`) 通常只设 `.shift` 不设 left/right bit, 兜底走左侧.
+
 ### 截屏 (`HVMQemu/QemuScreenshot`)
 
 走 QMP `screendump`:
@@ -302,4 +332,4 @@ VMConfig 字段: `clipboardSharingEnabled: Bool` (默认 true). 运行中可通�
 
 ---
 
-**最后更新**: 2026-05-04
+**最后更新**: 2026-05-24 (输入捕获双态 + 修饰键状态镜像; 释放快捷键 Cmd+Ctrl → Cmd+Opt)

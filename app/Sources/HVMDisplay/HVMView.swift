@@ -77,10 +77,12 @@ public final class HVMView: VZVirtualMachineView {
         // VZVirtualMachineView 内部自己管理 CAMetalLayer, 外部设置会让 Metal drawable 失效 → 黑屏
     }
 
-    /// 检测 Cmd+Control combo 进入"释放"状态. 直到 mouseDown 回 VZ view 为止.
+    /// 检测 Cmd+Opt combo 进入"释放"状态. 直到 mouseDown 回 VZ view 为止.
+    /// 跟 QEMU 后端的 FramebufferHostView 保持一致的快捷键 (UTM 同款), 老的
+    /// Cmd+Ctrl 跟 macOS 系统快捷键 (Mission Control / 截图) 严重冲突, 已废弃.
     ///
     /// 关键: 即使触发了 combo 也要 super.flagsChanged 转发. 否则 VZ 的 modifier 状态会卡在
-    /// "Cmd/Ctrl 按着" — 因为 Cmd 先按下时已经走过 super (那时 combo 还不成立),
+    /// "Cmd/Opt 按着" — 因为 Cmd 先按下时已经走过 super (那时 combo 还不成立),
     /// 而 combo 命中那一刻拦掉 super, 后续松键又被 inputBlocked 屏蔽 → VZ 永远收不到松开,
     /// 重捕获后所有按键都被当成 Cmd+xxx 快捷键, guest 看不到字符. 让 VZ 始终有准确的
     /// modifier 镜像即可, 那期间 keyDown 反正被屏蔽不会有副作用.
@@ -95,7 +97,7 @@ public final class HVMView: VZVirtualMachineView {
             emitCapsLockToggle()
         }
 
-        let combo: NSEvent.ModifierFlags = [.command, .control]
+        let combo: NSEvent.ModifierFlags = [.command, .option]
         if event.modifierFlags.intersection(combo) == combo {
             captureReleased = true
             onReleaseCapture?()

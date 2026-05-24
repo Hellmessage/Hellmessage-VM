@@ -91,6 +91,13 @@
   - dialog 三态: form / running (closeAction = nil 不可关) / done; 取消语义 v1 不支持中断 chunk 循环
   - IPC 走 `Task.detached` 跑 `SocketClient.request` (长事务 600s 不能阻 main)
   - VZ 后端走 `VZSharedDirectory` + virtiofs 的方案推后单独提案
+- **键盘捕获 / 释放快捷键** (UTM 风格, 设计稿 `docs/v3/INPUT_CAPTURE.md`):
+  - **统一 `Cmd+Opt`** 切换捕获 (VZ + QEMU 两后端一致). 老的 `Cmd+Ctrl` 因跟 macOS 系统快捷键 (Mission Control / 截图 / 第三方 app) 严重冲突已废弃, **禁止**再用
+  - **QEMU 后端 captured 模式**: `CGSSetGlobalHotKeyOperatingMode(.disable)` (Skylight 私有 API, `HVMDisplayQemu/CGSPrivate.swift`) 禁用 macOS 全局热键, cmd+tab / cmd+space 也送 guest. 右上角 `⌘⌥ 退出捕获` overlay 显式提示
+  - **退出 captured 闭环**: `viewWillMove(toWindow:nil)` / `resignFirstResponder` / `inputCaptureEnabled=false` 必须查 `if isCaptured { releaseCapture() }`, 否则系统热键留在 disable 状态用户无法 cmd+tab 切别 app — **体验灾难**
+  - **修饰键状态镜像** (修 "shift/cmd 一直按着" 老 bug): `FramebufferHostView` 维护 `lastModifiers` + `pressedModifierQcodes` + `pressedNormalKeyQcodes` 三件套; `flagsChanged` 用 set diff 双向发, `becomeFirstResponder` sync 当前实时 modifier, `resignFirstResponder` / `viewWillMove(toWindow:nil)` / 进出 captured 时 `releaseAllPressedKeys()` 一并清光. **禁止**只清 normal key 不清 modifier
+  - **左右修饰键独立映射**: NSEvent.ModifierFlags raw bit (`leftShift = 0x2`, `rightShift = 0x4` 等) → qcode `shift` / `shift_r` 等. 合成事件兜底走左侧
+  - **VZ 后端**只统一释放快捷键 (Cmd+Opt), **不**加 captured 双态 (VZ framework 已经 `capturesSystemKeys = true` 把 cmd+tab 转 guest), **不**做 modifier 镜像 (VZ 自己管)
 
 ## UI 控件使用约束 **必须遵守**
 

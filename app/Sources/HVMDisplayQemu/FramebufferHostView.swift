@@ -12,6 +12,25 @@
 //
 // 由上层 (DetailContainerView 在 Phase 3) 创建并 attach DisplayChannel +
 // InputForwarder + FramebufferRenderer 三件套.
+//
+// ---- 键盘捕获双态 (UTM 风格, 详见 docs/v3/INPUT_CAPTURE.md 草案) ----
+//
+//   released (默认): view 接收键鼠事件, 但 macOS 系统快捷键 (Cmd+Tab / Cmd+Space /
+//                    Mission Control / 截图) 仍由 macOS 处理, 不进 guest.
+//                    用户常用模式 (操作 host menubar / 切窗口体验正常).
+//
+//   captured:        Cmd+Opt 切换进入. 通过 CGSSetGlobalHotKeyOperatingMode(.disable)
+//                    禁用 macOS 全局热键, 所有键 (包括 cmd+tab) 全部送 guest.
+//                    再按 Cmd+Opt 退回 released.
+//
+// 修饰键卡键防护 (老 bug "shift / cmd 一直按着" 的根治):
+//   * lastModifiers — NSEvent.ModifierFlags 镜像, flagsChanged 用 set diff 算
+//     新按下 / 新松开. 跟 UTM VMMetalView.lastModifiers 同款做法.
+//   * pressedModifierQcodes — 实际已发给 guest keyDown 未发对应 keyUp 的 modifier
+//     qcode 集合. resignFirstResponder / viewWillMove(toWindow:nil) / 切 captured
+//     模式时全部 keyUp + clear.
+//   * pressedNormalKeyQcodes — 同上, 跟踪非修饰键. 老逻辑只清这个不清 modifier,
+//     用户 cmd+tab 切走再回来 guest 卡在 cmd down → 此次重构修复.
 
 import Foundation
 import AppKit
@@ -41,15 +60,18 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
     /// 回传延迟造成的双重 toggle race.
     private var expectedGuestCaps: Bool = false
 
-    /// 上一次 NSEvent.modifierFlags 全量, 用于 flagsChanged 算 diff (修饰键 down/up)
-    private var lastHostFlags: NSEvent.ModifierFlags = []
+    /// 上一次 NSEvent.modifierFlags 全量, flagsChanged 用 set diff 算 down/up.
+    /// 进/出 captured 模式 + 失焦时 reset 为 [].
+    private var lastModifiers: NSEvent.ModifierFlags = []
 
-    /// 当前已发给 guest 的 keyDown 但未发对应 keyUp 的 qcode 集合.
-    /// 用途: 当 view 失去 first responder (例如用户按 Cmd+Ctrl 触发 release-capture
-    /// 快捷键, 或主动切到别的 window) 时, AppKit 不再把后续 keyUp 事件送给本 view,
-    /// guest 会卡在 "key 一直按下" 状态 → keyboard auto-repeat 让用户看到 Tab 一直
-    /// 切焦点 / 字母一直输入这种灵异现象. 释放焦点前必须遍历此集合一次性补发 keyUp.
-    private var pressedKeys: Set<String> = []
+    /// 已发给 guest keyDown 但还没发 keyUp 的 modifier qcode 集合
+    /// (例如 {"shift", "ctrl_r"}). resignFirstResponder / 失焦 / toggle capture
+    /// 时一并 keyUp + clear, 防 guest 卡键.
+    private var pressedModifierQcodes: Set<String> = []
+
+    /// 已发给 guest keyDown 但还没发 keyUp 的非修饰键 qcode 集合
+    /// (例如 {"a", "tab"}). 跟 pressedModifierQcodes 平行管理, 相同时机清理.
+    private var pressedNormalKeyQcodes: Set<String> = []
 
     /// NSEvent local monitor (process-global hook), 专治"按住 cmd 时字符键 keyUp 不送 view"
     /// 这个 macOS 已知行为. UTM 同款做法: 在 keyUp + modifierFlags.contains(.command)
@@ -82,19 +104,15 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
     ///   - mouse/key/scroll 处理函数全部直接 return, 不发 forwarder
     ///   - 不隐藏 host 鼠标 (mouseEntered 跳过 hide); 切 false 瞬间立即还原
     ///   - 立即释放当前 first responder, 防止键盘事件残留 routing 到本 view
+    ///   - 如果当前 captured, 自动 releaseCapture (退回 released)
     /// 主用途: 同 VM 有独立窗口 (detached) 时, 主窗口的嵌入 view 让出输入,
     /// 用户操作完全在独立窗口里完成, 避免主窗口意外抢 mouse/key 焦点.
-    /// macOS 风格快捷键: host `cmd` 当 guest `ctrl` 转发 (cmd+c → ctrl+c). 默认 true.
-    /// 副作用: 失去发 Win/super 键的能力 (Win11 开始菜单要鼠标点). 关闭后回到老逻辑
-    /// (cmd → meta_l/Win 键, 用户用 control+c 复制).
-    /// 由 caller (DetailContainerView / DetachedVMWindowController) 在 view 创建后按
-    /// VMConfig.macStyleShortcuts 设置.
-    public var macStyleShortcuts: Bool = true
-
     public var inputCaptureEnabled: Bool = true {
         didSet {
             guard oldValue != inputCaptureEnabled else { return }
             if !inputCaptureEnabled {
+                if isCaptured { releaseCapture() }
+                releaseAllPressedKeys()
                 if window?.firstResponder === self {
                     window?.makeFirstResponder(nil)
                 }
@@ -105,6 +123,36 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
             }
         }
     }
+
+    /// macOS 风格快捷键: host `cmd` 当 guest `ctrl` 转发 (cmd+c → ctrl+c).
+    /// 默认 true. 副作用: 失去发 Win/super 键的能力 (Win11 开始菜单要鼠标点).
+    /// 关闭后回到老逻辑 (cmd → meta_l/Win 键, 用户用 control+c 复制).
+    /// 由 caller (DetailContainerView / DetachedVMWindowController) 在 view 创建后按
+    /// VMConfig.macStyleShortcuts 设置.
+    public var macStyleShortcuts: Bool = true
+
+    // MARK: - 键盘捕获双态
+
+    /// captured 模式标记 (false = released, 默认).
+    ///
+    /// **进入 captured** (Cmd+Opt toggle):
+    ///   1. CGSSetGlobalHotKeyOperatingMode(.disable) — macOS 全局热键失效, cmd+tab /
+    ///      cmd+space 等全部送进 first responder (本 view) → guest
+    ///   2. 显示 capture overlay 提示 "按 Cmd+Opt 退出捕获"
+    ///   3. 清光所有 pressed keys (Cmd+Opt 本身不送 guest, 当 meta 用)
+    ///
+    /// **退出 captured** (再按 Cmd+Opt, 或 inputCaptureEnabled=false, 或失焦):
+    ///   1. CGSSetGlobalHotKeyOperatingMode(.enable) — 还原系统热键
+    ///   2. 隐藏 overlay
+    ///   3. 清光所有 pressed keys (避免 modifier 卡键)
+    ///
+    /// **不**改变鼠标行为 (始终 abs 模式, host 鼠标位置 = guest 鼠标位置),
+    /// 因为 QEMU usb-tablet 只支持 abs. captured 仅控制键盘抢占程度.
+    public private(set) var isCaptured: Bool = false
+
+    /// captured 时显示的右上角小标签. 由 setupCaptureOverlay 创建, captureInput /
+    /// releaseCapture 切显示态.
+    private var captureOverlay: NSView?
 
     /// MTKView 必须直接是嵌入主窗口的 view, 不能放在普通 NSView 内 — 否则
     /// AppKit 在 NSHostingView 的 layout 切换中触发 viewWillMoveToWindow /
@@ -129,6 +177,7 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
         preferredFramesPerSecond = 60
         isPaused = false
         delegate = self
+        setupCaptureOverlay()
     }
 
     @available(*, unavailable)
@@ -224,7 +273,14 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
     // MARK: - first responder
 
     public override var acceptsFirstResponder: Bool { inputCaptureEnabled }
-    public override func becomeFirstResponder() -> Bool { inputCaptureEnabled }
+    public override func becomeFirstResponder() -> Bool {
+        guard inputCaptureEnabled else { return false }
+        // 重获焦点时立即 sync 当前实时 modifier 状态:
+        // 用户在失焦期间按/松了某些 modifier (例如按住 cmd 切回来), view 内部 lastModifiers
+        // 是过期的, 不 sync 的话 guest 端 cmd 永远没 keyDown, cmd+s 不生效.
+        syncModifiersToGuest(NSEvent.modifierFlags)
+        return true
+    }
 
     public override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -288,12 +344,14 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
 
     /// view 离开 window hierarchy 时收尾 (forwarder 生命周期由 fanout 管, 跟
     /// view 进出 window 解耦):
-    ///   1. 补发所有 stuck normal key keyUp (防 guest 卡键)
-    ///   2. 释放 first responder, 让键盘事件重新交回主 window
-    ///   3. 还原 host 鼠标 (mouseEntered 隐了之后没 mouseExited 路径会把鼠标卡死)
+    ///   1. 退出 captured (防止 macOS 全局热键留在 disable 状态)
+    ///   2. 补发所有 stuck normal key + modifier keyUp (防 guest 卡键)
+    ///   3. 释放 first responder, 让键盘事件重新交回主 window
+    ///   4. 还原 host 鼠标 (mouseEntered 隐了之后没 mouseExited 路径会把鼠标卡死)
     public override func viewWillMove(toWindow newWindow: NSWindow?) {
         super.viewWillMove(toWindow: newWindow)
         if newWindow == nil {
+            if isCaptured { releaseCapture() }
             releaseAllPressedKeys()
             if window?.firstResponder === self {
                 window?.makeFirstResponder(nil)
@@ -307,12 +365,15 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
         super.viewDidMoveToWindow()
         if window != nil {
             installCmdKeyUpMonitor()
+            layoutCaptureOverlay()
         }
     }
 
     /// AppKit 因任何原因 (用户点别处 / 别的 view 抢) 让本 view 失去 first
-    /// responder 时, 也要补发 stuck key keyUp; 否则 guest 卡键.
+    /// responder 时, 释放 capture (避免在别的 view 操作期间 macOS 全局热键仍被禁) +
+    /// 补发 stuck key keyUp.
     public override func resignFirstResponder() -> Bool {
+        if isCaptured { releaseCapture() }
         releaseAllPressedKeys()
         return super.resignFirstResponder()
     }
@@ -376,76 +437,109 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
         if event.isARepeat { return }  // 不发 repeat, guest 自己 repeat
         if let qcode = HVMQCode.qcode(forKeyCode: event.keyCode) {
             forwarder?.keyDown(qcode: qcode)
-            pressedKeys.insert(qcode)
+            pressedNormalKeyQcodes.insert(qcode)
         }
     }
     public override func keyUp(with event: NSEvent) {
         guard inputCaptureEnabled else { return }
         if let qcode = HVMQCode.qcode(forKeyCode: event.keyCode) {
             forwarder?.keyUp(qcode: qcode)
-            pressedKeys.remove(qcode)
+            pressedNormalKeyQcodes.remove(qcode)
         }
     }
 
     public override func flagsChanged(with event: NSEvent) {
         guard inputCaptureEnabled else { return }
         let cur = event.modifierFlags
-        let prev = lastHostFlags
-        lastHostFlags = cur
 
-        // VZ 风格快捷键: 同时按下 Cmd + Control → 释放 first responder,
-        // 把键盘焦点交回 window, 后续事件不再被 framebuffer 拦截 (跟 HVMView /
-        // VZVirtualMachineView 一致). 重新捕获: 点击 framebuffer 任意位置.
-        // 释放时清掉所有 stuck guest modifier 防止 guest 卡在 cmd/ctrl down 状态.
-        let release: NSEvent.ModifierFlags = [.command, .control]
-        let bothNow = cur.intersection(release) == release
-        let bothPrev = prev.intersection(release) == release
+        // Cmd+Opt toggle capture (UTM 风格释放/捕获快捷键). 跟 Cmd+Ctrl 老快捷键
+        // 不同, 后者跟 Mission Control / 截图 / 第三方 app 严重冲突.
+        // 检测条件: cmd+opt 同时刚按下 (cur 含两者, prev 不全含). prev 用 lastModifiers.
+        let toggle: NSEvent.ModifierFlags = [.command, .option]
+        let bothNow = cur.intersection(toggle) == toggle
+        let bothPrev = lastModifiers.intersection(toggle) == toggle
         if bothNow && !bothPrev {
-            // 必须先补发所有 stuck normal key (Tab / 字母 etc) keyUp, 再发 modifier
-            // keyUp, 最后释放 first responder. 顺序很关键: 先释放再发 keyUp, AppKit
-            // 会把 key event 送给新 first responder (主 window) 而不是本 view, guest
-            // 收不到 keyUp → 卡键 → user 看到 Tab 一直切焦点 / 字母一直输入.
-            releaseAllPressedKeys()
-            sendModifierUpAll(prev)
-            window?.makeFirstResponder(nil)
-            showHostCursor()  // 走 cursorHidden 计数, 防止跟 mouseExited 双调
+            if isCaptured {
+                releaseCapture()
+            } else {
+                captureInput()
+            }
+            // toggle 路径不走正常 diff (Cmd+Opt 本身不送 guest, 当 meta 用):
+            // captureInput / releaseCapture 内已经 releaseAllPressedKeys + reset
+            // lastModifiers = []. 后续用户松开 cmd 或 opt 时 set diff 自然干净.
             return
         }
 
-        // 注: CapsLock 不在 flagsChanged 里发 toggle 给 guest. 因为发了
-        // toggle 后 guest LED state 异步回传更新, 紧接着 keyDown 路径上的
-        // syncCapsLockIfNeeded 又看 host bit vs guest LED 不一致 → 重复 toggle
-        // 抵消. 单一 source: keyDown 时统一查 expectedGuestCaps 同步.
+        // Caps Lock: 不在 flagsChanged 里发 toggle 给 guest. 因为发了 toggle 后
+        // guest LED state 异步回传更新, 紧接着 keyDown 路径上的 syncCapsLockIfNeeded
+        // 又看 host bit vs guest LED 不一致 → 重复 toggle 抵消. 单一 source: keyDown
+        // 时统一查 expectedGuestCaps 同步.
 
-        // 兜底: cmd 由 down → up 时, 给所有 stuck 字符键补 keyUp.
-        // 主要靠 cmdKeyUpMonitor 把 cmd+keyUp 路由进 view (UTM 同款), 但用户极快地
-        // 先松 cmd 再松字符键时 monitor 可能已经处理过 keyUp 也可能没处理到, 双保险.
-        // releaseAllPressedKeys 内部会从 pressedKeys 移除 — monitor 已 keyUp 过的也无害
-        // (此时 pressedKeys 已不含该 qcode), 只补真正卡住的.
-        let cmdReleased = prev.contains(.command) && !cur.contains(.command)
-        if cmdReleased {
-            releaseAllPressedKeys()
+        // 正常 modifier diff. syncModifiersToGuest 内会按 left/right 拆 qcode,
+        // 维护 pressedModifierQcodes, 一并更新 lastModifiers.
+        syncModifiersToGuest(cur)
+    }
+
+    /// 把 NSEvent.ModifierFlags 转成应发给 guest 的 qcode 集合.
+    /// 左右修饰键区分: NSEvent.ModifierFlags 的 raw bit 区分左右 (0x2=leftShift,
+    /// 0x4=rightShift, 等), 跟 UTM 私有扩展 + Carbon kVK_RightShift 等对齐.
+    /// macStyleShortcuts=true 时 cmd → ctrl (左右独立), 用户期望 cmd+c=ctrl+c.
+    private func modifierQcodes(from flags: NSEvent.ModifierFlags) -> Set<String> {
+        var s: Set<String> = []
+        if flags.contains(.leftShift)    { s.insert("shift") }
+        if flags.contains(.rightShift)   { s.insert("shift_r") }
+        // 兜底: 某些 NSEvent (合成事件 / 远程键盘) 只设 .shift 不设 left/right bit
+        if flags.contains(.shift), !flags.contains(.leftShift), !flags.contains(.rightShift) {
+            s.insert("shift")
         }
 
-        // Shift / Control / Option / Command: 普通 down/up modifier.
-        // NSEvent.ModifierFlags 不区分左右, 都映射到左侧 qcode (shift/ctrl/alt/meta_l).
-        // macStyleShortcuts: host `cmd` → guest `ctrl` (cmd+c→ctrl+c 等 macOS 习惯快捷键).
-        // 关闭时回到 cmd → meta_l (Win 键). 副作用见 macStyleShortcuts 字段注释.
-        // 注: 当用户同时按 host control + host command 时, release 路径已在上面 return,
-        // 不会进到这里, 不会出现 guest ctrl 重复 down/up.
-        let cmdQcode = macStyleShortcuts ? "ctrl" : "meta_l"
-        let map: [(NSEvent.ModifierFlags, String)] = [
-            (.shift,   "shift"),
-            (.control, "ctrl"),
-            (.option,  "alt"),
-            (.command, cmdQcode),
-        ]
-        for (flag, qcode) in map {
-            let was = prev.contains(flag)
-            let now = cur.contains(flag)
-            if !was && now { forwarder?.keyDown(qcode: qcode) }
-            if  was && !now { forwarder?.keyUp(qcode: qcode) }
+        if flags.contains(.leftControl)  { s.insert("ctrl") }
+        if flags.contains(.rightControl) { s.insert("ctrl_r") }
+        if flags.contains(.control), !flags.contains(.leftControl), !flags.contains(.rightControl) {
+            s.insert("ctrl")
         }
+
+        if flags.contains(.leftOption)   { s.insert("alt") }
+        if flags.contains(.rightOption)  { s.insert("alt_r") }
+        if flags.contains(.option), !flags.contains(.leftOption), !flags.contains(.rightOption) {
+            s.insert("alt")
+        }
+
+        if flags.contains(.leftCommand) || flags.contains(.rightCommand) {
+            // macStyleShortcuts: 左右 cmd 都映射成 ctrl (用户记忆里 cmd 是"主操作键",
+            // 不区分左右). 关闭时 → meta_l (Win 键), 同样不区分.
+            // 注: 这里 set 自动去重 — 用户同时按左 cmd 和 ctrl 时, target 已含 "ctrl",
+            // 不会重复 keyDown.
+            if macStyleShortcuts {
+                s.insert("ctrl")
+            } else {
+                if flags.contains(.rightCommand) { s.insert("meta_r") } else { s.insert("meta_l") }
+            }
+        } else if flags.contains(.command),
+                  !flags.contains(.leftCommand),
+                  !flags.contains(.rightCommand) {
+            // 同上兜底
+            s.insert(macStyleShortcuts ? "ctrl" : "meta_l")
+        }
+        return s
+    }
+
+    /// 把当前 host 期望的 modifier 状态推给 guest: 当前已发 set 跟 target diff,
+    /// 多的发 keyUp, 少的发 keyDown. 同步更新 pressedModifierQcodes + lastModifiers.
+    /// forwarder 未连时不发 (但 lastModifiers 仍更新, 等 forwarder 上线后 becomeFirstResponder
+    /// 再次同步).
+    private func syncModifiersToGuest(_ flags: NSEvent.ModifierFlags) {
+        let target = modifierQcodes(from: flags)
+        if let fw = forwarder {
+            for q in pressedModifierQcodes.subtracting(target) {
+                fw.keyUp(qcode: q)
+            }
+            for q in target.subtracting(pressedModifierQcodes) {
+                fw.keyDown(qcode: q)
+            }
+            pressedModifierQcodes = target
+        }
+        lastModifiers = flags
     }
 
     /// 装 NSEvent local monitor 拦截 keyUp-with-cmd (macOS 已知行为: 按住 .command 时
@@ -473,29 +567,98 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
         }
     }
 
-    /// 释放 first responder 时给 guest 补 keyUp, 防止 stuck modifier (例如
-    /// 用户按住 ctrl 按 cmd 触发 release, 没补 keyUp 的话 guest 会卡在 ctrl down).
-    /// command 的目标 qcode 必须跟 flagsChanged 里的 cmdQcode 同步, 否则 cmd 发的 down
-    /// 跟 release 时发的 up 不平衡, guest 卡键.
-    private func sendModifierUpAll(_ flags: NSEvent.ModifierFlags) {
-        if flags.contains(.shift)   { forwarder?.keyUp(qcode: "shift") }
-        if flags.contains(.control) { forwarder?.keyUp(qcode: "ctrl") }
-        if flags.contains(.option)  { forwarder?.keyUp(qcode: "alt") }
-        if flags.contains(.command) {
-            forwarder?.keyUp(qcode: macStyleShortcuts ? "ctrl" : "meta_l")
+    /// 一次性补发所有 stuck modifier + normal key 的 keyUp + 清状态.
+    /// 在 view 即将丢 first responder / 离开 window / 进出 captured 模式时调用,
+    /// 避免 guest 看到 keyDown 没对应 keyUp → keyboard auto-repeat 卡键 (例如
+    /// Win11 OOBE 阶段 Tab 一直切焦点循环 "支持/下一步/上一步", 或者 shift 永远
+    /// 当成按下).
+    /// 老 bug 根治点: 之前只清 normal key 不清 modifier, 用户 cmd+tab 切走再回来
+    /// guest 端 cmd 永远 keyDown, 看起来就是"cmd 一直按着".
+    private func releaseAllPressedKeys() {
+        if let fw = forwarder {
+            for qcode in pressedNormalKeyQcodes {
+                fw.keyUp(qcode: qcode)
+            }
+            for qcode in pressedModifierQcodes {
+                fw.keyUp(qcode: qcode)
+            }
         }
+        pressedNormalKeyQcodes.removeAll()
+        pressedModifierQcodes.removeAll()
+        lastModifiers = []
     }
 
-    /// 给所有已 keyDown 但未 keyUp 的 normal key (Tab / Return / 字母 / 数字 etc)
-    /// 补发 keyUp + 清空状态. 在 view 即将丢 first responder / 离开 window 前调用,
-    /// 避免 guest 看到 keyDown 没对应 keyUp → keyboard auto-repeat 卡键现象 (例如
-    /// Win11 OOBE 阶段 Tab 一直切焦点循环 "支持/下一步/上一步").
-    private func releaseAllPressedKeys() {
-        guard !pressedKeys.isEmpty else { return }
-        for qcode in pressedKeys {
-            forwarder?.keyUp(qcode: qcode)
-        }
-        pressedKeys.removeAll()
+    // MARK: - 捕获双态切换
+
+    /// 进入 captured 模式: 禁用 macOS 全局热键 + 显示 overlay 提示 + 清光 pressed
+    /// keys (防止 Cmd+Opt 触发本身的两个 modifier 卡在 guest 端).
+    private func captureInput() {
+        guard !isCaptured else { return }
+        releaseAllPressedKeys()
+        HVMSetGlobalHotKeyOperatingMode(.disable)
+        isCaptured = true
+        captureOverlay?.isHidden = false
+    }
+
+    /// 退出 captured 模式: 还原 macOS 全局热键 + 隐藏 overlay + 清 pressed keys.
+    /// 任何路径 (用户再按 Cmd+Opt / view 失焦 / view 销毁 / inputCaptureEnabled=false)
+    /// 都必须经过这里, 否则系统热键留在 disable 状态用户无法 cmd+tab 切到别的 app.
+    private func releaseCapture() {
+        guard isCaptured else { return }
+        releaseAllPressedKeys()
+        HVMSetGlobalHotKeyOperatingMode(.enable)
+        isCaptured = false
+        captureOverlay?.isHidden = true
+    }
+
+    // MARK: - captured 状态视觉反馈
+
+    /// 右上角小标签 "⌘⌥ 退出捕获". captured 时显示, released 时隐藏.
+    /// 走原生 NSTextField + NSVisualEffectView (HUD 风格), 不引 SwiftUI overlay
+    /// (FramebufferHostView 是 MTKView, 直接 addSubview 更简单).
+    private func setupCaptureOverlay() {
+        let label = NSTextField(labelWithString: "⌘⌥  退出捕获")
+        label.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        label.textColor = .white
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.backgroundColor = .clear
+        label.drawsBackground = false
+
+        let bg = NSVisualEffectView()
+        bg.material = .hudWindow
+        bg.blendingMode = .withinWindow
+        bg.state = .active
+        bg.wantsLayer = true
+        bg.layer?.cornerRadius = 6
+        bg.layer?.masksToBounds = true
+        bg.translatesAutoresizingMaskIntoConstraints = false
+        bg.isHidden = true
+
+        bg.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 10),
+            label.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -10),
+            label.topAnchor.constraint(equalTo: bg.topAnchor, constant: 5),
+            label.bottomAnchor.constraint(equalTo: bg.bottomAnchor, constant: -5),
+        ])
+        addSubview(bg)
+        captureOverlay = bg
+        layoutCaptureOverlay()
+    }
+
+    /// 把 overlay pin 到右上角. 在 viewDidMoveToWindow / layoutSubtreeIfNeeded 时
+    /// 重新约束, 防止 view bounds 变化后 overlay 跑偏 (autoresizing mask 在 MTKView
+    /// 这种 layer-backed 子类有时不稳).
+    private func layoutCaptureOverlay() {
+        guard let bg = captureOverlay else { return }
+        // 移除旧约束 (constant 改了不重新 activate 也行, 但为了 bounds 变化时位置稳, 重建)
+        NSLayoutConstraint.deactivate(bg.constraints.filter {
+            $0.firstAnchor === bg.topAnchor || $0.firstAnchor === bg.trailingAnchor
+        })
+        NSLayoutConstraint.activate([
+            bg.trailingAnchor.constraint(equalTo: self.trailingAnchor, constant: -10),
+            bg.topAnchor.constraint(equalTo: self.topAnchor, constant: 10),
+        ])
     }
 
     /// CapsLock 双端同步: host 与 expectedGuestCaps 不一致时给 guest 发一次
@@ -528,4 +691,22 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
     public func draw(in view: MTKView) {
         renderer.draw(in: view)
     }
+}
+
+// MARK: - NSEvent.ModifierFlags 左右键区分扩展
+
+/// NSEvent.ModifierFlags 的公开 API 不区分左右修饰键, 但 raw bit 区分 (跟 Carbon
+/// kEventKeyModifier* 同源). UTM VMMetalView 用相同 raw bit 做左右区分, 我们照搬.
+///
+/// 各 bit 来源: Carbon `Events.h` + macOS `NSEvent.h` 私有定义, 历史稳定 (跨 macOS
+/// 10.5 ~ 15+ 都没变). 不公开是 Apple 不愿承诺 API stability, 但实际从未变过.
+private extension NSEvent.ModifierFlags {
+    static var leftShift:    NSEvent.ModifierFlags { .init(rawValue: 0x0002) }
+    static var rightShift:   NSEvent.ModifierFlags { .init(rawValue: 0x0004) }
+    static var leftControl:  NSEvent.ModifierFlags { .init(rawValue: 0x0001) }
+    static var rightControl: NSEvent.ModifierFlags { .init(rawValue: 0x2000) }
+    static var leftOption:   NSEvent.ModifierFlags { .init(rawValue: 0x0020) }
+    static var rightOption:  NSEvent.ModifierFlags { .init(rawValue: 0x0040) }
+    static var leftCommand:  NSEvent.ModifierFlags { .init(rawValue: 0x0008) }
+    static var rightCommand: NSEvent.ModifierFlags { .init(rawValue: 0x0010) }
 }
