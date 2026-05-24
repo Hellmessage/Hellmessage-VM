@@ -537,10 +537,103 @@ struct StoppedContentView: View {
                 )
 
                 fileTransferRow
+
+                sharedFolderRow
             }
             .padding(HVMSpace.md)
             .frame(maxWidth: .infinity, alignment: .leading)
             .hvmCard()
+        }
+    }
+
+    /// 共享目录 (SPICE WebDAV). 详见 docs/v3/SHARED_FOLDER.md.
+    /// 仅 QEMU 后端可加 (VZ 后端推后); 加 / 改 / 删 都需 VM stopped (chardev 不支持热插).
+    @ViewBuilder
+    private var sharedFolderRow: some View {
+        let isQemuBackend = item.config?.engine == .qemu
+        let isStopped = item.runState == "stopped"
+        let canEdit = isQemuBackend && isStopped
+        let folders = item.config?.sharedFolders ?? []
+
+        VStack(alignment: .leading, spacing: HVMSpace.xs) {
+            Text("共享目录 (SPICE WebDAV)")
+                .font(HVMFont.small)
+                .foregroundStyle(HVMColor.textSecondary)
+            if folders.isEmpty {
+                Text("(无)")
+                    .font(HVMFont.small)
+                    .foregroundStyle(HVMColor.textTertiary)
+            } else {
+                ForEach(Array(folders.enumerated()), id: \.offset) { idx, sf in
+                    HStack(spacing: HVMSpace.sm) {
+                        Text(sf.name).font(HVMFont.body)
+                        Text(sf.readOnly ? "[只读]" : "[可写]")
+                            .font(HVMFont.small)
+                            .foregroundStyle(HVMColor.textSecondary)
+                        Text(sf.hostPath)
+                            .font(HVMFont.monoSmall)
+                            .foregroundStyle(HVMColor.textTertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Button("移除") {
+                            removeSharedFolder(name: sf.name)
+                        }
+                        .buttonStyle(GhostButtonStyle())
+                        .disabled(!canEdit)
+                        .hvmProbe(id: "detail.sharing.sharedFolder.button.remove.\(idx)",
+                                  label: "移除共享目录",
+                                  action: .button { removeSharedFolder(name: sf.name) })
+                    }
+                }
+            }
+            HStack(spacing: HVMSpace.sm) {
+                Button("+ 共享目录…") { presentAddSharedFolderPicker() }
+                    .buttonStyle(GhostButtonStyle())
+                    .disabled(!canEdit)
+                    .hvmProbe(id: "detail.sharing.sharedFolder.button.add",
+                              label: "添加共享目录",
+                              action: .button { presentAddSharedFolderPicker() })
+            }
+            Text(sharedFolderHint(isQemuBackend: isQemuBackend, isStopped: isStopped))
+                .font(HVMFont.small)
+                .foregroundStyle(HVMColor.textTertiary)
+        }
+    }
+
+    private func sharedFolderHint(isQemuBackend: Bool, isStopped: Bool) -> String {
+        if !isQemuBackend {
+            return "共享目录仅 QEMU 后端支持 (VZ 走 VZSharedDirectory, 推后接入)"
+        }
+        if !isStopped {
+            return "改共享目录需 VM stopped (chardev 不支持热挂; 下次启动生效)"
+        }
+        return "走 SPICE WebDAV. Win guest: \\\\localhost\\dav 自动可见; Linux: GVFS davs://localhost"
+    }
+
+    private func presentAddSharedFolderPicker() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.title = "选择 host 共享目录"
+        panel.prompt = "选择"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        // 取目录名作默认 name
+        let defaultName = SharedFolderSpec.sanitizeName(url.lastPathComponent)
+        let spec = SharedFolderSpec(hostPath: url.path, name: defaultName, readOnly: true)
+        do {
+            try model.addSharedFolder(item: item, spec: spec)
+        } catch {
+            errors.present(error)
+        }
+    }
+
+    private func removeSharedFolder(name: String) {
+        do {
+            try model.removeSharedFolder(item: item, name: name)
+        } catch {
+            errors.present(error)
         }
     }
 

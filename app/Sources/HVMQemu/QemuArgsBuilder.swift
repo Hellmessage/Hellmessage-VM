@@ -69,6 +69,12 @@ public enum QemuArgsBuilder {
         /// Guest Tools 装包含 qemu-ga-x86_64.msi) 自动 attach. host 通过本 socket 发
         /// guest-exec JSON 跑 PowerShell / cmd, 是 hvm-dbg exec-guest 的底层通路.
         public let qgaSocketPath: String?
+        /// SPICE WebDAV virtio-serial chardev socket (host ↔ guest 共享目录).
+        /// 非 nil 时 argv 加 chardev webdav + virtserialport name=org.spice-space.webdav.0,
+        /// guest 内 spice-webdavd 服务自动 attach. host 端 SpiceWebdavServer 在此 socket
+        /// 上跑 WebDAV server. 仅 config.sharedFolders 非空 + QEMU 后端时设. 详见
+        /// docs/v3/SHARED_FOLDER.md.
+        public let webdavSocketPath: String?
 
         // ---- 加密 (qemu-perfile, docs/v3/ENCRYPTION.md v2.4) ----
         /// 加密 LUKS qcow2 主盘 / 数据盘的 secret 文件路径 (base64 ASCII passphrase).
@@ -93,6 +99,7 @@ public enum QemuArgsBuilder {
             vdagentSocketPath: String? = nil,
             utmGuestToolsISOPath: String? = nil,
             qgaSocketPath: String? = nil,
+            webdavSocketPath: String? = nil,
             qemuDiskSecretPath: String? = nil,
             qemuNvramSecretPath: String? = nil
         ) {
@@ -109,6 +116,7 @@ public enum QemuArgsBuilder {
             self.vdagentSocketPath = vdagentSocketPath
             self.utmGuestToolsISOPath = utmGuestToolsISOPath
             self.qgaSocketPath = qgaSocketPath
+            self.webdavSocketPath = webdavSocketPath
             self.qemuDiskSecretPath = qemuDiskSecretPath
             self.qemuNvramSecretPath = qemuNvramSecretPath
         }
@@ -396,10 +404,12 @@ public enum QemuArgsBuilder {
             args += ["-display", "cocoa"]
         }
 
-        // virtio-serial bus (vsp0): vdagent / qga 任一启用就加, 共用同一条 bus 防重复.
+        // virtio-serial bus (vsp0): vdagent / qga / webdav 任一启用就加, 共用同一条 bus 防重复.
         // (QEMU 不允许 -device virtio-serial-pci 加两次同 id; 也不能两个 id 各占总线
-        //  浪费 PCI slot — 一条 vsp0 挂多 port 是 spice/qga 共用模式)
-        let needsVirtioSerial = inputs.vdagentSocketPath != nil || inputs.qgaSocketPath != nil
+        //  浪费 PCI slot — 一条 vsp0 挂多 port 是 spice/qga/webdav 共用模式)
+        let needsVirtioSerial = inputs.vdagentSocketPath != nil
+                             || inputs.qgaSocketPath != nil
+                             || inputs.webdavSocketPath != nil
         if needsVirtioSerial {
             args += ["-device", "virtio-serial-pci,id=vsp0"]
         }
@@ -416,6 +426,15 @@ public enum QemuArgsBuilder {
         if let qgaSocket = inputs.qgaSocketPath {
             args += ["-chardev", "socket,id=qga,path=\(qgaSocket),server=on,wait=off"]
             args += ["-device", "virtserialport,bus=vsp0.0,chardev=qga,name=org.qemu.guest_agent.0"]
+        }
+        // SPICE WebDAV 通路 — host ↔ guest 共享目录 (docs/v3/SHARED_FOLDER.md).
+        // chardev server=on 让 QEMU listen, host 端 SpiceWebdavServer 作 client 连进来
+        // (跟 vdagent 同款 single-client 模式). guest 内 spice-webdavd 服务连虚拟串口
+        // /dev/virtio-ports/org.spice-space.webdav.0, 把本地 \\localhost\dav (Win) 或
+        // GVFS davs:// (Linux) 上的 HTTP 请求复用 mux frame 转给 host SpiceWebdavServer.
+        if let webdavSocket = inputs.webdavSocketPath {
+            args += ["-chardev", "socket,id=webdav,path=\(webdavSocket),server=on,wait=off"]
+            args += ["-device", "virtserialport,bus=vsp0.0,chardev=webdav,name=org.spice-space.webdav.0"]
         }
 
         // ---- QMP 控制 ----

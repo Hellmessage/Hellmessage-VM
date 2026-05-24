@@ -176,10 +176,12 @@ public enum QemuHostEntry {
         let qmpInputSocketURL   = HVMPaths.qmpInputSocketPath(for: config.id)
         let vdagentSocketURL    = HVMPaths.vdagentSocketPath(for: config.id)
         let qgaSocketURL        = HVMPaths.qgaSocketPath(for: config.id)
+        let webdavSocketURL     = HVMPaths.webdavSocketPath(for: config.id)
         FSCleanup.removeQuietly(at: iosurfaceSocketURL, context: "stale iosurface socket")
         FSCleanup.removeQuietly(at: qmpInputSocketURL,  context: "stale qmp-input socket")
         FSCleanup.removeQuietly(at: vdagentSocketURL,   context: "stale vdagent socket")
         FSCleanup.removeQuietly(at: qgaSocketURL,       context: "stale qga socket")
+        FSCleanup.removeQuietly(at: webdavSocketURL,    context: "stale webdav socket")
 
         // 4.5 加密 disks / nvram secret 文件准备 (启动期 0o600 临时文件, 启动后立即 unlink).
         // 走公共 LuksSecretFile (binary → base64 ASCII passphrase).
@@ -223,6 +225,9 @@ public enum QemuHostEntry {
                 vdagentSocketPath: vdagentSocketURL.path,
                 utmGuestToolsISOPath: utmGuestToolsPath,
                 qgaSocketPath: qgaSocketURL.path,
+                // SPICE WebDAV: sharedFolders 非空才注入 chardev/device argv.
+                // 空时也不起 server, 不占 socket 路径.
+                webdavSocketPath: config.sharedFolders.isEmpty ? nil : webdavSocketURL.path,
                 qemuDiskSecretPath: diskSecretFile?.path,
                 qemuNvramSecretPath: nvramSecretFile?.path
             )
@@ -358,6 +363,22 @@ public enum QemuHostEntry {
                 fputs("HVMHost(qemu): clipboard sharing 已启动 (vdagent + NSPasteboard 桥)\n", stderr)
             } else {
                 fputs("HVMHost(qemu): clipboard sharing 关闭 (config.clipboardSharingEnabled=false)\n", stderr)
+            }
+
+            // 6.4b SPICE WebDAV server (共享目录, docs/v3/SHARED_FOLDER.md):
+            // sharedFolders 非空才起. SpiceWebdavServer 跟 vdagent 一样是 single-client
+            // (-chardev server=on, HVM 主进程作 client 连入). guest 内 spice-webdavd 服务
+            // 通过 virtio-port org.spice-space.webdav.0 跟我们说 WebDAV-over-mux-frame 协议.
+            // 失败 fail-soft: server 起不来不阻塞 VM 启动 (config sharedFolders 不应让 VM 跑不起来).
+            if !config.sharedFolders.isEmpty {
+                let roots: [SpiceWebdavServer.Root] = config.sharedFolders.map { sf in
+                    .init(name: sf.name, url: URL(fileURLWithPath: sf.hostPath), readOnly: sf.readOnly)
+                }
+                let webdav = SpiceWebdavServer(socketPath: webdavSocketURL.path, roots: roots)
+                webdav.connect()
+                QemuHostState.shared.spiceWebdav = webdav
+                let modes = roots.map { "\($0.name)[\($0.readOnly ? "ro" : "rw")]" }.joined(separator: ",")
+                fputs("HVMHost(qemu): SPICE WebDAV server 已启动 (\(roots.count) roots: \(modes))\n", stderr)
             }
 
             // 6.5 console bridge: poll-wait socket 文件 + connect; 失败仅警告, 不阻塞 VM 启动
@@ -659,6 +680,9 @@ final class QemuHostState {
     var vdagent: VdagentClient?
     /// host ↔ guest 剪贴板桥. nil 表示用户关掉了 clipboard sharing.
     var pasteboardBridge: PasteboardBridge?
+    /// SPICE WebDAV server (共享目录, docs/v3/SHARED_FOLDER.md). nil = 该 VM config.sharedFolders 空.
+    /// 跟 vdagent 同款 single-client socket, 由 VMHost 唯一持有. tearDown 不需特殊清理 (deinit 自动关 fd).
+    var spiceWebdav: SpiceWebdavServer?
 
     var statusItem: NSStatusItem?
     var statusMenu: QemuStatusMenuController?

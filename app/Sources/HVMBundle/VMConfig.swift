@@ -316,6 +316,50 @@ public struct WindowsSpec: Codable, Sendable, Equatable {
     }
 }
 
+/// host ↔ guest 共享目录 (SPICE WebDAV). 一个 VM 可挂多条, v1 单条.
+/// 仅 QEMU 后端 + Linux/Windows guest 生效. 设计稿 docs/v3/SHARED_FOLDER.md.
+public struct SharedFolderSpec: Codable, Sendable, Equatable {
+    /// host 端绝对路径. 不允许相对路径 / symlink 越界 (CLI/GUI 入口校验).
+    public var hostPath: String
+    /// 用户友好名, 影响 guest WebDAV root 列表. 必须是 ASCII alnum + `-_`, 单 root v1
+    /// 固定 "code" 也行, 但留字段允许多 root 时区分.
+    public var name: String
+    /// 默认 true. dialog 可勾改成 false (RW).
+    public var readOnly: Bool
+    /// 默认 true, v1 不暴露 (留字段供未来"挂但不自动 mount").
+    public var autoMount: Bool
+
+    public init(hostPath: String, name: String, readOnly: Bool = true, autoMount: Bool = true) {
+        self.hostPath = hostPath
+        self.name = name
+        self.readOnly = readOnly
+        self.autoMount = autoMount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case hostPath, name, readOnly, autoMount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.hostPath = try c.decode(String.self, forKey: .hostPath)
+        self.name = try c.decode(String.self, forKey: .name)
+        // 老 yaml 缺 readOnly → 默认 true (保守安全)
+        self.readOnly = try c.decodeIfPresent(Bool.self, forKey: .readOnly) ?? true
+        self.autoMount = try c.decodeIfPresent(Bool.self, forKey: .autoMount) ?? true
+    }
+
+    /// 把任意字符串 sanitize 成 [a-zA-Z0-9_-]{1,32}: 非允许字符替换成 `_`, 截断到 32, 空 → "share".
+    /// CLI / GUI 给 host 路径 basename 自动派生 name 时用, 防 WebDAV URL 注入.
+    public static func sanitizeName(_ raw: String) -> String {
+        let allowed: Set<Character> = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+        var s = String(raw.map { allowed.contains($0) ? $0 : "_" })
+        if s.count > 32 { s = String(s.prefix(32)) }
+        if s.isEmpty { s = "share" }
+        return s
+    }
+}
+
 /// 整 VM 加密元信息 (schema v3 加). 设计稿 docs/v3/ENCRYPTION.md.
 /// 明文 VM 缺该字段或 enabled=false. 真正加密 VM 加密形态见 scheme.
 /// 注: KDF 参数 (salt / iterations) **不**在这里 — 它们在 routing JSON (`meta/encryption.json` /
@@ -403,6 +447,10 @@ public struct VMConfig: Codable, Sendable, Equatable {
     public var windows: WindowsSpec?
     /// 加密元信息 (schema v3 加). nil 或 enabled=false → 明文 VM. 详见 EncryptionSpec.
     public var encryption: EncryptionSpec?
+    /// host ↔ guest 共享目录 (SPICE WebDAV). 仅 QEMU 后端 + Linux/Windows guest 生效;
+    /// VZ 后端 / macOS guest 启动期 warn + 忽略 (推后单独 VZSharedDirectory 提案).
+    /// 老 yaml 缺该字段 → 解码 []. 加字段不需 schema 升级.
+    public var sharedFolders: [SharedFolderSpec]
 
     public init(
         id: UUID = UUID(),
@@ -423,7 +471,8 @@ public struct VMConfig: Codable, Sendable, Equatable {
         macOS: MacOSSpec? = nil,
         linux: LinuxSpec? = nil,
         windows: WindowsSpec? = nil,
-        encryption: EncryptionSpec? = nil
+        encryption: EncryptionSpec? = nil,
+        sharedFolders: [SharedFolderSpec] = []
     ) {
         self.schemaVersion = VMConfig.currentSchemaVersion
         self.id = id
@@ -445,13 +494,15 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.linux = linux
         self.windows = windows
         self.encryption = encryption
+        self.sharedFolders = sharedFolders
     }
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, id, createdAt, displayName, guestOS, engine,
              cpuCount, memoryMiB, disks, networks, installerISO,
              bootFromDiskOnly, windowsDriversInstalled, clipboardSharingEnabled,
-             macStyleShortcuts, displaySpec, macOS, linux, windows, encryption
+             macStyleShortcuts, displaySpec, macOS, linux, windows, encryption,
+             sharedFolders
     }
 
     /// 自定义 decode: 仅为 engine 字段提供"缺省 .vz"兜底, 其他字段沿用合成默认行为
@@ -484,6 +535,8 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.windows = try c.decodeIfPresent(WindowsSpec.self, forKey: .windows)
         // 老 v2 yaml 缺 encryption → nil. 走 ConfigMigrator v2→v3 后会写入 enabled=false.
         self.encryption = try c.decodeIfPresent(EncryptionSpec.self, forKey: .encryption)
+        // 老 yaml 缺 sharedFolders → []. 加字段不需 schema 升级 (空数组无破坏).
+        self.sharedFolders = try c.decodeIfPresent([SharedFolderSpec].self, forKey: .sharedFolders) ?? []
     }
 
     // MARK: - 显示尺寸权威读取

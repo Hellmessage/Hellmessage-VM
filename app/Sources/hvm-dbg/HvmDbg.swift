@@ -29,6 +29,8 @@ struct HvmDbg: AsyncParsableCommand {
             DisplayResizeCommand.self,
             QemuLaunchCommand.self,
             GuiCommand.self,
+            WebdavTestCommand.self,
+            WebdavServeCommand.self,
         ]
     )
 }

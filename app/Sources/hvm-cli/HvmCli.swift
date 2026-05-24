@@ -33,6 +33,7 @@ struct HvmCli: AsyncParsableCommand {
             DiskCommand.self,
             ConfigCommand.self,
             SnapshotCommand.self,
+            SharedFolderCommand.self,
             LogsCommand.self,
         ]
     )

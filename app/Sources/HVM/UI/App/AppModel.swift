@@ -946,6 +946,58 @@ public final class AppModel {
         refreshList()
     }
 
+    // MARK: - 共享目录 (SPICE WebDAV, docs/v3/SHARED_FOLDER.md)
+
+    /// 添加共享目录: 改 config.yaml (或加密 .enc). 要求 VM stopped (chardev 不支持热挂).
+    /// 重名 / 路径不存在 / 引擎不是 qemu → 抛 HVMError.
+    public func addSharedFolder(item: VMListItem, spec: SharedFolderSpec) throws {
+        // 引擎 + 状态校验跟 CLI 同款
+        guard let cfg = item.config else {
+            throw HVMError.config(.missingField(name: "VM config 未解锁"))
+        }
+        guard cfg.engine == .qemu else {
+            throw HVMError.config(.invalidEnum(field: "sharedFolder.engine",
+                                                raw: "\(cfg.engine)",
+                                                allowed: ["qemu"]))
+        }
+        guard item.runState == "stopped" else {
+            throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
+        }
+        // 路径必须绝对 + 存在 + 是目录
+        guard spec.hostPath.hasPrefix("/") else {
+            throw HVMError.config(.missingField(name: "hostPath 必须是绝对路径"))
+        }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: spec.hostPath, isDirectory: &isDir), isDir.boolValue else {
+            throw HVMError.config(.missingField(name: "hostPath 不是目录或不存在"))
+        }
+        // 重名校验
+        if cfg.sharedFolders.contains(where: { $0.name == spec.name }) {
+            throw HVMError.config(.missingField(name: "共享目录 name 已存在: \(spec.name)"))
+        }
+        try saveConfig(item: item, requireStopped: true) { c in
+            c.sharedFolders.append(spec)
+        }
+        refreshList()
+    }
+
+    /// 按 name 移除. 要求 stopped.
+    public func removeSharedFolder(item: VMListItem, name: String) throws {
+        guard let cfg = item.config else {
+            throw HVMError.config(.missingField(name: "VM config 未解锁"))
+        }
+        guard cfg.sharedFolders.contains(where: { $0.name == name }) else {
+            throw HVMError.config(.missingField(name: "共享目录 name 不存在: \(name)"))
+        }
+        guard item.runState == "stopped" else {
+            throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
+        }
+        try saveConfig(item: item, requireStopped: true) { c in
+            c.sharedFolders.removeAll { $0.name == name }
+        }
+        refreshList()
+    }
+
     // MARK: - 文件传输 (qemu-guest-agent guest-file-* API)
 
     /// 跑一次 host ↔ guest 单文件传输. 设计稿 docs/v3/FILE_COPY.md PR-D.

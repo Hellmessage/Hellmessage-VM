@@ -134,6 +134,13 @@ public enum HVMPaths {
     public static func qgaSocketPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).qga.sock")
     }
+    /// SPICE WebDAV virtio-serial chardev socket — host ↔ guest 共享目录 (docs/v3/SHARED_FOLDER.md).
+    /// QEMU 作 chardev server, HVM 主进程 SpiceWebdavServer 作 client 连入读写 mux frame.
+    /// guest 内 spice-webdavd 通过 virtio-port `org.spice-space.webdav.0` 把本地
+    /// \\localhost\dav (Win) / GVFS davs:// (Linux) HTTP 流转给 host.
+    public static func webdavSocketPath(for id: UUID) -> URL {
+        runDir.appendingPathComponent("\(id.uuidString.lowercased()).webdav.sock")
+    }
     // vmnetSocketPath / vmnetPidPath 已废弃: socket_vmnet 改成系统级 launchd daemon
     // (路径见 HVMQemu/VmnetDaemonPaths), 不再 per-VM 起 sidecar.
 

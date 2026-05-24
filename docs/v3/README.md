@@ -14,6 +14,8 @@
 | [HVM_DBG_GUI_PROTOCOL.md](HVM_DBG_GUI_PROTOCOL.md) | hvm-dbg ↔ HVM GUI 测试协议 (HDP-GUI) | **代码已合入** (PR-G1/G2/G3/G5), D-G2 走自家 ProbeRegistry 不走 NSAccessibility |
 | [FILE_COPY.md](FILE_COPY.md) | Win / Linux guest 单文件 push/pull (QGA `guest-file-*`) | **实现中** (PR-A/B/C/D 代码合入 2026-05-06); 待真机 P0 gate 验证后转 "代码已合入" |
 | [VMNET_DAEMON_HEALTH.md](VMNET_DAEMON_HEALTH.md) | vmnet daemon 一键重启 + 启 VM 前响应性 probe (silent-bridge 自救路径) | **代码已合入** 2026-05-23 |
+| [RESOURCE_MONITOR.md](RESOURCE_MONITOR.md) | 详情页 inline sparkline (CPU/MEM/IO, 60s 1Hz, host + QGA guest 双源) | **设计稿** 2026-05-24 |
+| [SHARED_FOLDER.md](SHARED_FOLDER.md) | QEMU 共享目录 (SPICE WebDAV, Win + Linux 统一; Swift 原生 WebDAV server) | **代码已合入** 2026-05-24 (PR-0~7 一晚一次性落; 协议层 e2e 验过, 真机 guest 安装步留给用户) |
 | [TODO.md](TODO.md) | QEMU 加密 BUG / 遗漏清单 + 工具链 | **TODO 清单 v1**, 大多已 Done; 仍存的低优项已挪 [../v1/ROADMAP.md](../v1/ROADMAP.md) "残余项指引" |
 
 ## 与 v1 / CHANGELOG 的关系
@@ -37,4 +39,4 @@
 
 ---
 
-**最后更新**: 2026-05-06 (FILE_COPY PR-A/B/C/D 代码合入; 待真机 P0 gate)
+**最后更新**: 2026-05-24 (SHARED_FOLDER 代码已合入; RESOURCE_MONITOR 仍设计稿待评审)

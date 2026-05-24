@@ -191,12 +191,31 @@ QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场�
     - GUI VMnetSupervisor 拉的是旧版 install-vmnet-daemons.sh (脚本内逻辑可能与新二进制不兼容)
   - 提交 commit 之前若改动涉及上述项, **必须显式跑 `make install`** 确认线上 .app 同步
 
+## 共享目录约束 **必须遵守**
+
+详见 [docs/v1/SHARING.md](docs/v1/SHARING.md) + 设计稿 [docs/v3/SHARED_FOLDER.md](docs/v3/SHARED_FOLDER.md).
+
+- **协议固定**: SPICE WebDAV over virtio-serial `org.spice-space.webdav.0` mux 协议. **不**新走 9p / virtiofs / SMB / 其他通路 (一致性 + 共用 UTM Guest Tools 链路)
+- **后端限定**: 仅 QEMU 后端 + Linux / Windows guest. VZ 后端 / macOS guest 启动期 warn + 忽略 sharedFolders (推后 VZ_SHARED_DIRECTORY.md 单独提案)
+- **WebDAV server 在 Swift 主进程内自实现**, **不**链 libspice-server / libphodav, **不**给 QEMU 加 `--enable-spice`. 跟 vdagent / qga 同款 single-client 模式 (HVM 主进程作 client 连 QEMU chardev server=on socket); QEMU 不打 spice patch
+- **socket 路径**: `HVMPaths.webdavSocketPath(for: vmId)` = `~/Library/Application Support/HVM/run/<uuid>.webdav.sock`. 禁止业务侧自己拼路径
+- **路径安全 (硬约束)**: `WebDavHandler.toHostURL` / `composeDest` 必须 (a) 拒 `..` / `.` / 空段; (b) `resolvingSymlinksInPath` 后比 `standardizedFileURL.path` 仍在 root 子树. 改这两函数必加 fuzz 测试覆盖 escape 场景
+- **空 sharedFolders 不起 server**: `config.sharedFolders.isEmpty` → 不注入 chardev argv + 不起 SpiceWebdavServer, 不占 socket 路径
+- **改 sharedFolders 必走加密分流**: 走 `EncryptedConfigEditor.save` / `AppModel.saveConfig` (内部分流 BundleIO.save / EncryptedConfigIO.save), 禁止直接 BundleIO.save (加密 VM 历史教训, grep BundleIO.save 全树确认)
+- **VM running 改 sharedFolders 拒**: chardev 不支持热挂, 落 `bundle.busy` 让用户先停 VM. GUI / CLI 都遵守
+- **name 字符集硬限**: `SharedFolderSpec.sanitizeName` + CLI 校验仅允许 `[a-zA-Z0-9_-]{1,32}`. 防 WebDAV URL 注入 / shell metachar
+- **hostPath 必须绝对路径 + 真实存在**: CLI / GUI 入口校验. 防相对路径歧义
+- **server 启失败 fail-soft**: server 起不来只 log warn, **不**阻塞 VM 启动 (共享目录非 VM 必需)
+- **guest 端依赖外置, 不自家 build**: Win 走 UTM Guest Tools 自带 `spice-webdavd-arm64-latest.msi`; Linux 让用户 `sudo apt install spice-webdavd`. **不**自家 build phodav 替代上游
+
 ## 调试/诊断工作方式约束 **必须遵守**
 
 - **禁止使用 osascript / AppleScript UI scripting 模拟 GUI 点击**(脆弱、依赖屏幕坐标和辅助功能权限, 不可复现)
 - 需要启动/停止 VM 走 `hvm-cli` 或 `hvm-dbg`, 不靠 HVM GUI
 - 需要在 guest 内做操作(看桌面、点按钮、键入命令)走 `hvm-dbg` 子命令
 - 需要 host ↔ guest 复制文件走 `hvm-dbg file push/pull`(QEMU 后端, qemu-guest-agent `guest-file-*` API; 1-10 MB/s; 软警告 100 MiB / 硬上限 4 GiB; 设计稿 `docs/v3/FILE_COPY.md`)
+- 需要长期 host ↔ guest 共享 host 目录走"共享目录" (SPICE WebDAV; `hvm-cli shared-folder add` / GUI 详情页 Sharing 区; 详见 `docs/v1/SHARING.md`)
+- 调试 WebDAV 协议层走 `hvm-dbg webdav-test` (44 case 离线单测) + `hvm-dbg webdav-serve --listen` (起 server 监听本地 socket 给 curl / Python client 测)
 - `hvm-dbg` 扩展原则: 零新协议实现, 只复用已暴露的公开 VZ API 封装
 - 遇到能力缺失**立即扩展 `hvm-dbg`**, 不要退回用 osascript
 
