@@ -585,6 +585,14 @@ public struct WebDavHandler {
 
     public func process(request req: HTTPRequest) -> HTTPResponse {
         let path = normalizePath(req.path)
+        let cl = req.body.count
+        log.info("→ \(req.method, privacy: .public) \(req.path, privacy: .public) (body=\(cl)B)")
+        let resp = dispatch(req: req, path: path)
+        log.info("← \(resp.status, privacy: .public) for \(req.method, privacy: .public) \(req.path, privacy: .public)")
+        return resp
+    }
+
+    private func dispatch(req: HTTPRequest, path: String) -> HTTPResponse {
         switch req.method.uppercased() {
         case "OPTIONS": return handleOptions()
         case "PROPFIND": return handlePropfind(req: req, path: path)
@@ -595,9 +603,9 @@ public struct WebDavHandler {
         case "MKCOL":   return handleMkcol(path: path)
         case "MOVE":    return handleMove(req: req, path: path)
         case "COPY":    return handleCopy(req: req, path: path)
-        case "PROPPATCH": return HTTPResponse.plain(status: 200)   // 接受但忽略, 客户端常发
-        case "LOCK":    return HTTPResponse.plain(status: 501, text: "LOCK not implemented")
-        case "UNLOCK":  return HTTPResponse.plain(status: 501, text: "UNLOCK not implemented")
+        case "PROPPATCH": return handleProppatch(req: req, path: path)
+        case "LOCK":    return handleLock(req: req, path: path)
+        case "UNLOCK":  return HTTPResponse.plain(status: 204)     // 假成功; 我们没真锁状态
         default:        return HTTPResponse.plain(status: 405, text: "method not allowed: \(req.method)")
         }
     }
@@ -664,6 +672,112 @@ public struct WebDavHandler {
     }
 
     // MARK: 动词实现
+
+    /// PROPPATCH 返 207 Multi-Status (RFC 4918 §9.2). Win shell IFileOperation 看到
+    /// 裸 200 会判 "事务没真 commit", PUT 完文件后还会发 DELETE 回滚 (亲测).
+    /// 解析 request body 拿用户想设的 Win32 prop 列表 (Win32CreationTime / FileAttributes
+    /// 等), 每条都返 200 OK (假设成功; host fs 实际没存这些 Win 专属时间戳, 但 Win 不验证).
+    private func handleProppatch(req: HTTPRequest, path: String) -> HTTPResponse {
+        // 简单解析 set 块里出现的所有 <D:xxx/> tag, 逐条 echo 回 prop status.
+        // 没用 XML parser, 走 regex 抠 <prop> ... </prop> 内的 tag 名 (Win 发的是标准格式).
+        let bodyStr = String(data: req.body, encoding: .utf8) ?? ""
+        // 抠 <D:set><D:prop>...</D:prop></D:set> 内所有 <D:tag/> / <D:tag>...</D:tag>
+        // 简化: 拉所有看似 prop 的 tag 名 (排除元素本身: prop / set / remove / propertyupdate)
+        var propTags: [String] = []
+        let skipTags: Set<String> = ["propertyupdate", "set", "prop", "remove"]
+        // 极简正则: 匹配 <D:name> 或 <D:name/> (D 前缀可选, 直接抠 :后字母数字)
+        var idx = bodyStr.startIndex
+        while idx < bodyStr.endIndex,
+              let lt = bodyStr.range(of: "<", range: idx..<bodyStr.endIndex)
+        {
+            let after = lt.upperBound
+            guard after < bodyStr.endIndex else { break }
+            // 跳过结束标签 / 注释 / xml decl
+            let c = bodyStr[after]
+            if c == "/" || c == "?" || c == "!" {
+                idx = bodyStr.index(after: lt.upperBound)
+                continue
+            }
+            // 找 tag 名结束 (空格 / > / /> 之前)
+            var nameEnd = after
+            while nameEnd < bodyStr.endIndex {
+                let ch = bodyStr[nameEnd]
+                if ch == ">" || ch == " " || ch == "/" || ch == "\t" || ch == "\n" || ch == "\r" { break }
+                nameEnd = bodyStr.index(after: nameEnd)
+            }
+            let rawName = String(bodyStr[after..<nameEnd])
+            // 去 namespace 前缀
+            let bareName: String
+            if let colon = rawName.firstIndex(of: ":") {
+                bareName = String(rawName[rawName.index(after: colon)...])
+            } else {
+                bareName = rawName
+            }
+            if !bareName.isEmpty, !skipTags.contains(bareName.lowercased()) {
+                if !propTags.contains(rawName) { propTags.append(rawName) }
+            }
+            idx = nameEnd
+        }
+        // 兜底: 一个 prop 都没抠到 (body 异常 / Win 没设字段?) → 返一个空 200 prop 块
+        if propTags.isEmpty {
+            propTags = ["D:Win32LastModifiedTime"]
+        }
+        var propXml = ""
+        for tag in propTags {
+            propXml += "<\(tag)/>"
+        }
+        let href = xmlEscape(req.path)
+        let xml = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <D:multistatus xmlns:D="DAV:">
+        <D:response>
+        <D:href>\(href)</D:href>
+        <D:propstat>
+        <D:prop>\(propXml)</D:prop>
+        <D:status>HTTP/1.1 200 OK</D:status>
+        </D:propstat>
+        </D:response>
+        </D:multistatus>
+        """
+        return HTTPResponse.multiStatus(xml: xml)
+    }
+
+    /// 假 LOCK 实现: 直接返 200 + 一个伪 lock token. **不**维护真实锁状态.
+    /// 这是 Win IFileOperation (Explorer 拖放 / Copy-Item / Set-ItemProperty) 必须的:
+    /// 它会发 LOCK 申请独占锁, 若返 501 它把整个 file copy 事务当失败, PUT 完文件
+    /// 立刻 DELETE 回滚, 然后报 "File Too Large for destination" 误导性错误.
+    /// 单用户单机 webdav 场景没真的并发竞争, 假锁完全够用. (UTM / chezdav 同款思路.)
+    private func handleLock(req: HTTPRequest, path: String) -> HTTPResponse {
+        // 生成伪 opaquelocktoken (RFC 4918 §6.4): opaquelocktoken:<uuid>
+        let token = "opaquelocktoken:\(UUID().uuidString.lowercased())"
+        // 返 lockdiscovery XML body. 大部分 client (尤其 Win shell) 只看 Lock-Token header
+        // 跟 status code, body 内容只要 valid xml + 含 locktoken href 就 OK.
+        let lockroot = xmlEscape(req.path)
+        let body = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <D:prop xmlns:D="DAV:">
+        <D:lockdiscovery>
+        <D:activelock>
+        <D:locktype><D:write/></D:locktype>
+        <D:lockscope><D:exclusive/></D:lockscope>
+        <D:depth>0</D:depth>
+        <D:owner><D:href>hvm-webdav</D:href></D:owner>
+        <D:timeout>Second-3600</D:timeout>
+        <D:locktoken><D:href>\(token)</D:href></D:locktoken>
+        <D:lockroot><D:href>\(lockroot)</D:href></D:lockroot>
+        </D:activelock>
+        </D:lockdiscovery>
+        </D:prop>
+        """
+        let data = Data(body.utf8)
+        var r = HTTPResponse(status: 200)
+        r.headers.append(("Content-Type", "application/xml; charset=utf-8"))
+        r.headers.append(("Content-Length", "\(data.count)"))
+        // RFC 4918 §10.5: Lock-Token header MUST 出现在 LOCK 响应里; <> 是 Coded-URL 语法
+        r.headers.append(("Lock-Token", "<\(token)>"))
+        r.body = data
+        return r
+    }
 
     private func handleOptions() -> HTTPResponse {
         var r = HTTPResponse(status: 200)
