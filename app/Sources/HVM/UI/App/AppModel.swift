@@ -219,8 +219,15 @@ public final class AppModel {
     /// 自动锁定检查间隔: 太频繁浪费 CPU, 太稀释延迟到自动锁; 30s 让最坏延迟 ≤ TTL+30s
     private static let autoLockCheckIntervalSec: TimeInterval = 30
 
-    /// 文件传输请求载体: VM + 方向 + host URL (push: 已选源; pull: 已选目标保存路径).
+    /// 文件传输请求载体: VM + 方向 + host URL.
     /// 设计稿 docs/v3/FILE_COPY.md PR-D.
+    ///
+    /// hostURL 语义按方向不同:
+    ///   - **push**: 已选源**文件**全路径 (NSOpenPanel canChooseFiles=true)
+    ///   - **pull**: 已选目标**文件夹** (NSOpenPanel canChooseDirectories=true).
+    ///     最终保存文件名 = guest 源路径的 basename, dialog 在 start() 时拼接 hostURL/basename.
+    ///     2026-05-24 改: 老版强制 NSSavePanel 让用户起 "from-vm.bin" 之类无意义名,
+    ///     现在 guest 文件叫什么 host 就叫什么 (用户更直观).
     public var fileTransferRequest: FileTransferRequest? = nil
 
     public struct FileTransferRequest: Identifiable, Sendable {
@@ -238,6 +245,19 @@ public final class AppModel {
             self.suggestedRemotePath = suggestedRemotePath
         }
         public enum Direction: String, Sendable { case push, pull }
+    }
+
+    /// 从 guest 内绝对路径 (Win `C:\Foo\bar.txt`, Linux `/foo/bar.txt`) 抠最后一段做 basename.
+    /// 用于 pull 方向决定 host 端文件名. 找不到分隔符 → 整串作为 basename. 空串 → fallback "from-vm.bin".
+    public static func deriveLocalBasename(fromGuestPath p: String) -> String {
+        let t = p.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty { return "from-vm.bin" }
+        // 找最后一个 `\` 或 `/` — Win / Linux 两种分隔符都识
+        if let lastSep = t.lastIndex(where: { $0 == "/" || $0 == "\\" }) {
+            let base = String(t[t.index(after: lastSep)...])
+            return base.isEmpty ? "from-vm.bin" : base
+        }
+        return t
     }
 
     /// 扩容请求载体: VM 引用 + 磁盘 id (主盘 "main" / 数据盘 uuid8) + 当前 GiB

@@ -74,12 +74,40 @@ struct FileTransferDialog: View {
     private var hostLine: some View {
         VStack(alignment: .leading, spacing: HVMSpace.xs) {
             LabelText(hostLabel)
-            Text(request.hostURL.path)
-                .font(HVMFont.mono)
-                .foregroundStyle(HVMColor.textSecondary)
-                .textSelection(.enabled)
-                .lineLimit(2)
-                .truncationMode(.middle)
+            if isPush {
+                // push: hostURL 就是源文件全路径
+                Text(request.hostURL.path)
+                    .font(HVMFont.mono)
+                    .foregroundStyle(HVMColor.textSecondary)
+                    .textSelection(.enabled)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+            } else {
+                // pull: hostURL 是目标**文件夹**, 文件名 = guest 源路径 basename. 动态预览.
+                let folder = request.hostURL.path
+                let trimmed = remotePathTrim
+                if trimmed.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(folder)/")
+                            .font(HVMFont.mono)
+                            .foregroundStyle(HVMColor.textSecondary)
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text("(填好 guest 源路径后自动用同名)")
+                            .font(HVMFont.small)
+                            .foregroundStyle(HVMColor.textTertiary)
+                    }
+                } else {
+                    let base = AppModel.deriveLocalBasename(fromGuestPath: trimmed)
+                    Text("\(folder)/\(base)")
+                        .font(HVMFont.mono)
+                        .foregroundStyle(HVMColor.textSecondary)
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                }
+            }
         }
     }
 
@@ -406,13 +434,21 @@ struct FileTransferDialog: View {
         let path = remotePathTrim
         guard !path.isEmpty else { return }
         inlineError = nil
+        // pull: request.hostURL 是文件夹, 最终保存路径 = folder + guest basename
+        let finalHostURL: URL
+        if isPush {
+            finalHostURL = request.hostURL
+        } else {
+            let base = AppModel.deriveLocalBasename(fromGuestPath: path)
+            finalHostURL = request.hostURL.appendingPathComponent(base)
+        }
         phase = .running
         transferTask = Task { @MainActor in
             do {
                 let result = try await model.runFileTransfer(
                     item: request.item,
                     direction: request.direction,
-                    hostURL: request.hostURL,
+                    hostURL: finalHostURL,
                     remotePath: path
                 )
                 resultBytes = result.bytes

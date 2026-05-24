@@ -34,15 +34,24 @@ func presentFilePushPicker(model: AppModel, item: AppModel.VMListItem) {
     )
 }
 
-/// guest → host pull: 弹 NSSavePanel 选保存位置 → 落 fileTransferRequest.
+/// guest → host pull: 弹 NSOpenPanel 选目标**文件夹** → 落 fileTransferRequest.
+/// 文件名不让用户起 — 走"guest 文件叫什么 host 就叫什么", FileTransferDialog 在 start()
+/// 时按 remotePath 的 basename 拼成最终 hostURL.
 @MainActor
 func presentFilePullPicker(model: AppModel, item: AppModel.VMListItem) {
-    let panel = NSSavePanel()
-    panel.title = "选择 \(item.displayName) 文件保存位置"
-    panel.nameFieldStringValue = "from-vm.bin"
-    guard panel.runModal() == .OK, let url = panel.url else { return }
+    let panel = NSOpenPanel()
+    panel.title = "选择 \(item.displayName) 文件保存到哪个文件夹"
+    panel.prompt = "选这里"
+    panel.message = "拉取到此文件夹, 文件名沿用 guest 上的名字"
+    panel.canChooseFiles = false
+    panel.canChooseDirectories = true
+    panel.allowsMultipleSelection = false
+    panel.canCreateDirectories = true
+    // 默认起 Downloads, 用户最常用的下载落点
+    panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+    guard panel.runModal() == .OK, let folder = panel.url else { return }
     model.fileTransferRequest = AppModel.FileTransferRequest(
-        item: item, direction: .pull, hostURL: url, suggestedRemotePath: ""
+        item: item, direction: .pull, hostURL: folder, suggestedRemotePath: ""
     )
 }
 
