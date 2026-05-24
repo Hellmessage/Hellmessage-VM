@@ -62,12 +62,12 @@ public enum QgaFile {
         }
         defer { try? srcHandle.close() }
 
-        let fd = try QgaSocket.connectUnix(socketPath: socketPath)
-        defer { Darwin.close(fd) }
+        let conn = try QgaSocket.connect(socketPath: socketPath)
+        defer { conn.close() }
 
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSec))
 
-        let handle = try guestFileOpen(fd: fd, path: dstRemote, mode: "wb", deadline: deadline)
+        let handle = try guestFileOpen(conn: conn, path: dstRemote, mode: "wb", deadline: deadline)
 
         var sent: Int64 = 0
         var pushError: Error?
@@ -80,17 +80,17 @@ public enum QgaFile {
                     throw QgaError.guestError(klass: "LocalFileError",
                                               desc: "src read short at offset \(sent)")
                 }
-                try guestFileWriteAll(fd: fd, handle: handle, data: chunk, deadline: deadline)
+                try guestFileWriteAll(conn: conn, handle: handle, data: chunk, deadline: deadline)
                 sent += Int64(chunk.count)
                 progress?(sent, fileSize)
             }
-            try guestFileFlush(fd: fd, handle: handle, deadline: deadline)
+            try guestFileFlush(conn: conn, handle: handle, deadline: deadline)
         } catch {
             pushError = error
         }
 
         // 关闭 remote handle (即便 push 失败也尝试关, 防 fd 泄漏 on guest 侧)
-        try? guestFileClose(fd: fd, handle: handle, deadline: deadline)
+        try? guestFileClose(conn: conn, handle: handle, deadline: deadline)
 
         if let pushError { throw pushError }
         return sent
@@ -108,18 +108,18 @@ public enum QgaFile {
         progress: ((_ bytesRead: Int64, _ total: Int64?) -> Void)? = nil
     ) async throws -> Int64 {
 
-        let fd = try QgaSocket.connectUnix(socketPath: socketPath)
-        defer { Darwin.close(fd) }
+        let conn = try QgaSocket.connect(socketPath: socketPath)
+        defer { conn.close() }
 
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSec))
 
-        let handle = try guestFileOpen(fd: fd, path: srcRemote, mode: "rb", deadline: deadline)
+        let handle = try guestFileOpen(conn: conn, path: srcRemote, mode: "rb", deadline: deadline)
 
         // SEEK_END 拿 total size, 再 SEEK_SET 回 0. 拿不到 (老 qemu-ga / non-seekable)
         // 也不致命, total 标 nil.
         let total: Int64?
-        if let endPos = try? guestFileSeek(fd: fd, handle: handle, offset: 0, whence: 2, deadline: deadline),
-           let _ = try? guestFileSeek(fd: fd, handle: handle, offset: 0, whence: 0, deadline: deadline) {
+        if let endPos = try? guestFileSeek(conn: conn, handle: handle, offset: 0, whence: 2, deadline: deadline),
+           let _ = try? guestFileSeek(conn: conn, handle: handle, offset: 0, whence: 0, deadline: deadline) {
             total = endPos
         } else {
             total = nil
@@ -133,7 +133,7 @@ public enum QgaFile {
         do {
             dstHandle = try FileHandle(forWritingTo: tmpURL)
         } catch {
-            try? guestFileClose(fd: fd, handle: handle, deadline: deadline)
+            try? guestFileClose(conn: conn, handle: handle, deadline: deadline)
             throw QgaError.guestError(klass: "LocalFileError",
                                       desc: "open dst tmp failed: \(error.localizedDescription)")
         }
@@ -145,7 +145,7 @@ public enum QgaFile {
             var eof = false
             while !eof {
                 try Task.checkCancellation()
-                let r = try guestFileRead(fd: fd, handle: handle,
+                let r = try guestFileRead(conn: conn, handle: handle,
                                           count: chunkSize, deadline: deadline)
                 if !r.data.isEmpty {
                     try dstHandle.write(contentsOf: r.data)
@@ -163,7 +163,7 @@ public enum QgaFile {
         }
 
         try? dstHandle.close()
-        try? guestFileClose(fd: fd, handle: handle, deadline: deadline)
+        try? guestFileClose(conn: conn, handle: handle, deadline: deadline)
 
         if let pullError {
             try? FileManager.default.removeItem(at: tmpURL)
@@ -191,10 +191,10 @@ public enum QgaFile {
     /// guest-file-open. mode 沿 fopen 语义: "r"/"rb"/"w"/"wb"/"a"/"ab".
     /// 返 handle (qga 内部 fd-like 句柄).
     public static func guestFileOpen(
-        fd: Int32, path: String, mode: String, deadline: Date
+        conn: QgaConnection, path: String, mode: String, deadline: Date
     ) throws -> Int {
-        let ret = try QgaSocket.call(
-            fd: fd, execute: "guest-file-open",
+        let ret = try conn.call(
+            execute: "guest-file-open",
             arguments: ["path": path, "mode": mode],
             deadline: deadline
         )
@@ -205,10 +205,10 @@ public enum QgaFile {
 
     /// guest-file-close. 失败返协议错误, 不抛对调用方致命的错 (调用方多走 try?).
     public static func guestFileClose(
-        fd: Int32, handle: Int, deadline: Date
+        conn: QgaConnection, handle: Int, deadline: Date
     ) throws {
-        _ = try QgaSocket.call(
-            fd: fd, execute: "guest-file-close",
+        _ = try conn.call(
+            execute: "guest-file-close",
             arguments: ["handle": handle],
             deadline: deadline
         )
@@ -216,10 +216,10 @@ public enum QgaFile {
 
     /// guest-file-flush. 装包脚本可能 disable, 非致命 — caller 走 try? 即可.
     public static func guestFileFlush(
-        fd: Int32, handle: Int, deadline: Date
+        conn: QgaConnection, handle: Int, deadline: Date
     ) throws {
-        _ = try QgaSocket.call(
-            fd: fd, execute: "guest-file-flush",
+        _ = try conn.call(
+            execute: "guest-file-flush",
             arguments: ["handle": handle],
             deadline: deadline
         )
@@ -227,10 +227,10 @@ public enum QgaFile {
 
     /// guest-file-seek. whence: 0=SET 1=CUR 2=END. 返 position (绝对偏移).
     public static func guestFileSeek(
-        fd: Int32, handle: Int, offset: Int64, whence: Int, deadline: Date
+        conn: QgaConnection, handle: Int, offset: Int64, whence: Int, deadline: Date
     ) throws -> Int64 {
-        let ret = try QgaSocket.call(
-            fd: fd, execute: "guest-file-seek",
+        let ret = try conn.call(
+            execute: "guest-file-seek",
             arguments: ["handle": handle, "offset": offset, "whence": whence],
             deadline: deadline
         )
@@ -249,10 +249,10 @@ public enum QgaFile {
 
     /// guest-file-read. count 是请求字节, 返实际读到 (可能 < count, 也可能为 0 当 eof).
     public static func guestFileRead(
-        fd: Int32, handle: Int, count: Int, deadline: Date
+        conn: QgaConnection, handle: Int, count: Int, deadline: Date
     ) throws -> ReadChunk {
-        let ret = try QgaSocket.call(
-            fd: fd, execute: "guest-file-read",
+        let ret = try conn.call(
+            execute: "guest-file-read",
             arguments: ["handle": handle, "count": count],
             deadline: deadline
         )
@@ -271,11 +271,11 @@ public enum QgaFile {
     /// guest-file-write. 一次 chunk; spec 上服务端可能短写 (Win), 用 guestFileWriteAll
     /// 包一层循环写满.
     public static func guestFileWrite(
-        fd: Int32, handle: Int, data: Data, deadline: Date
+        conn: QgaConnection, handle: Int, data: Data, deadline: Date
     ) throws -> Int {
         let b64 = data.base64EncodedString()
-        let ret = try QgaSocket.call(
-            fd: fd, execute: "guest-file-write",
+        let ret = try conn.call(
+            execute: "guest-file-write",
             arguments: ["handle": handle, "buf-b64": b64],
             deadline: deadline
         )
@@ -289,12 +289,12 @@ public enum QgaFile {
 
     /// 循环 guestFileWrite 直到 data 全写完 (兜短写; 多数情况下 1 次就完).
     public static func guestFileWriteAll(
-        fd: Int32, handle: Int, data: Data, deadline: Date
+        conn: QgaConnection, handle: Int, data: Data, deadline: Date
     ) throws {
         var off = 0
         while off < data.count {
             let slice = data.subdata(in: off..<data.count)
-            let n = try guestFileWrite(fd: fd, handle: handle, data: slice, deadline: deadline)
+            let n = try guestFileWrite(conn: conn, handle: handle, data: slice, deadline: deadline)
             if n <= 0 {
                 throw QgaError.guestError(klass: "ShortWrite",
                                           desc: "guest-file-write returned \(n) at offset \(off)")

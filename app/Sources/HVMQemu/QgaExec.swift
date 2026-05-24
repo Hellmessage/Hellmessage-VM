@@ -33,14 +33,14 @@ public enum QgaExec {
     public static func run(
         socketPath: String, path: String, args: [String], timeoutSec: Int = 30
     ) async throws -> Result {
-        let fd = try QgaSocket.connectUnix(socketPath: socketPath)
-        defer { Darwin.close(fd) }
+        let conn = try QgaSocket.connect(socketPath: socketPath)
+        defer { conn.close() }
 
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSec))
 
         // 1. guest-exec — 启进程拿 pid
-        let execRet = try QgaSocket.call(
-            fd: fd, execute: "guest-exec",
+        let execRet = try conn.call(
+            execute: "guest-exec",
             arguments: [
                 "path": path,
                 "arg": args,
@@ -59,8 +59,8 @@ public enum QgaExec {
         while Date() < deadline {
             usleep(pollInterval)
             pollInterval = min(maxPollInterval, pollInterval * 2)
-            let statusRet = try QgaSocket.call(
-                fd: fd, execute: "guest-exec-status",
+            let statusRet = try conn.call(
+                execute: "guest-exec-status",
                 arguments: ["pid": pid],
                 deadline: deadline
             )

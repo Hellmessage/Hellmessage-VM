@@ -4,6 +4,13 @@
 // QgaExec / QgaFile 共用. 协议: 每条命令 / 响应是单行 JSON, '\n' 分隔.
 //
 // 协议参考: https://qemu.readthedocs.io/en/latest/interop/qemu-ga-ref.html
+//
+// **历史教训** (2026-05-24): 老版本 `readJsonLine` 用 `recv(fd, &byte, 1, 0)` **一字节一字节**
+// 读. 小响应 (< 1 KiB) 没问题, 但 `guest-file-read` 1 MiB chunk 的 JSON 响应 ~1.4 MiB
+// (base64 膨胀), 单 chunk 触发 ~1.4M 次 recv syscall + JSON 解析 — 跑分钟级才回, 用户感知是
+// pull 卡死. 现在走 `QgaConnection` 类持 recv 缓冲, 单次 recv 拉 64 KiB, 扫 '\n' 切行,
+// 余字节留给下一行 — 100x+ 速度. push 不受影响 (push 是大写小读, 写一次走 sendJsonLine
+// 单次 send, 响应小).
 
 import Foundation
 import Darwin
@@ -22,10 +29,126 @@ public enum QgaError: Error, Sendable {
     case timeout
 }
 
+/// 单条 qga unix socket 连接 + per-connection recv 缓冲.
+///
+/// **必须**通过这个类做多条 call (pull/push 循环), 不要绕过用裸 fd + 老的
+/// `QgaSocket.call(fd:)` 静态 API — 老 API 单字节 recv, 跨多 call 的话每条
+/// call 自己起 buffer, 慢且可能漏读 (上一行末尾的 '\n' 后面的字节会丢).
+///
+/// owns=true (默认): deinit 时 close fd. owns=false: 调用方负责 close (例如
+/// 上层已经 defer close 了 fd).
+public final class QgaConnection {
+
+    public let fd: Int32
+    private var recvBuf = Data()
+    private var owns: Bool
+
+    public init(fd: Int32, owns: Bool = true) {
+        self.fd = fd
+        self.owns = owns
+    }
+
+    deinit {
+        if owns { Darwin.close(fd) }
+    }
+
+    /// 主动关. 重复调用安全.
+    public func close() {
+        if owns {
+            Darwin.close(fd)
+            owns = false
+        }
+    }
+
+    /// 发一条 JSON, 自动追 '\n'.
+    public func sendJsonLine(_ obj: [String: Any]) throws {
+        let data = try JSONSerialization.data(withJSONObject: obj)
+        var buf = data
+        buf.append(0x0A)
+        try buf.withUnsafeBytes { ptr -> Void in
+            var off = 0
+            while off < buf.count {
+                let r = Darwin.send(fd, ptr.baseAddress!.advanced(by: off), buf.count - off, 0)
+                if r < 0 {
+                    if errno == EINTR { continue }
+                    throw QgaError.sendFailed(reason: "send errno=\(errno)")
+                }
+                off += r
+            }
+        }
+    }
+
+    /// 读一行 (\n 结尾) JSON 并 parse. deadline 内总阻塞.
+    /// 走 64 KiB chunked recv + per-connection 缓冲, 单条 1.4 MiB 响应 ~22 次 syscall (vs 1.4M).
+    /// 16 MiB 单 line 上限防 OOM.
+    public func readJsonLine(deadline: Date) throws -> [String: Any] {
+        let chunkSize = 64 * 1024
+        while true {
+            // 1) 先扫现有 buffer 里是否已经有一整行
+            if let nlIdx = recvBuf.firstIndex(of: 0x0A) {
+                let lineData = recvBuf[..<nlIdx]
+                // 注意 lineData / recvBuf 的 startIndex 不一定是 0 (Data slice 是 ref view)
+                // 用 Data(lineData) 显式拷贝出独立 Data
+                guard let obj = try? JSONSerialization.jsonObject(with: Data(lineData)) as? [String: Any] else {
+                    let s = String(data: Data(lineData), encoding: .utf8) ?? "<binary>"
+                    // 推进缓冲跳过这行 + 然后报错 (防一直卡死在坏行)
+                    recvBuf.removeSubrange(...nlIdx)
+                    throw QgaError.parseFailed(reason: "not JSON object: \(s)")
+                }
+                // 推进缓冲跳过这行 + '\n'
+                recvBuf.removeSubrange(...nlIdx)
+                return obj
+            }
+            // 2) 没整行: 看是否过 16 MiB 上限
+            if recvBuf.count > 16 * 1024 * 1024 {
+                throw QgaError.parseFailed(reason: "line > 16MB without newline")
+            }
+            // 3) 拉一拨字节
+            if Date() >= deadline { throw QgaError.timeout }
+            var chunk = [UInt8](repeating: 0, count: chunkSize)
+            let n = chunk.withUnsafeMutableBufferPointer { bp -> Int in
+                return Darwin.recv(fd, bp.baseAddress, bp.count, 0)
+            }
+            if n > 0 {
+                recvBuf.append(chunk, count: n)
+            } else if n == 0 {
+                throw QgaError.readFailed(reason: "EOF before newline")
+            } else {
+                if errno == EINTR { continue }
+                if errno == EAGAIN || errno == EWOULDBLOCK {
+                    if Date() >= deadline { throw QgaError.timeout }
+                    continue
+                }
+                throw QgaError.readFailed(reason: "recv errno=\(errno)")
+            }
+        }
+    }
+
+    /// 发一条 QGA 命令, 同步等响应一行. 自动判 `error` 字段抛 guestError.
+    /// 返 `return` 字段 (可能是 dict / int / 其他 — 调用方按命令规约 cast).
+    @discardableResult
+    public func call(
+        execute: String, arguments: [String: Any]? = nil,
+        deadline: Date
+    ) throws -> Any {
+        var cmd: [String: Any] = ["execute": execute]
+        if let arguments { cmd["arguments"] = arguments }
+        try sendJsonLine(cmd)
+        let resp = try readJsonLine(deadline: deadline)
+        if let err = resp["error"] as? [String: Any] {
+            let klass = (err["class"] as? String) ?? "GenericError"
+            let desc  = (err["desc"] as? String) ?? "\(err)"
+            throw QgaError.guestError(klass: klass, desc: desc)
+        }
+        // QGA `return` 字段对无返回值的命令是 `{}`; 我们仍返这个空 dict.
+        return resp["return"] ?? [String: Any]()
+    }
+}
+
 public enum QgaSocket {
 
-    /// 连本地 Unix domain socket. 设 5s 读超时防 readJsonLine 永久 block.
-    /// 调用方负责 `Darwin.close(fd)`.
+    /// 连本地 Unix domain socket, 拿 raw fd. 设 5s 读超时防 readJsonLine 永久 block.
+    /// 调用方负责 `Darwin.close(fd)` (或包进 QgaConnection 自动管).
     public static func connectUnix(socketPath: String) throws -> Int32 {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
@@ -60,71 +183,9 @@ public enum QgaSocket {
         return fd
     }
 
-    /// 发一条 JSON, 自动追 '\n'.
-    public static func sendJsonLine(fd: Int32, obj: [String: Any]) throws {
-        let data = try JSONSerialization.data(withJSONObject: obj)
-        var buf = data
-        buf.append(0x0A)
-        try buf.withUnsafeBytes { ptr -> Void in
-            var off = 0
-            while off < buf.count {
-                let r = Darwin.send(fd, ptr.baseAddress!.advanced(by: off), buf.count - off, 0)
-                if r < 0 {
-                    if errno == EINTR { continue }
-                    throw QgaError.sendFailed(reason: "send errno=\(errno)")
-                }
-                off += r
-            }
-        }
-    }
-
-    /// 读一行 (\n 结尾) JSON 并 parse. deadline 内总阻塞.
-    /// 16MiB 单 line 上限防 OOM.
-    public static func readJsonLine(fd: Int32, deadline: Date) throws -> [String: Any] {
-        var lineBuf = Data()
-        while Date() < deadline {
-            var byte: UInt8 = 0
-            let n = Darwin.recv(fd, &byte, 1, 0)
-            if n < 0 {
-                if errno == EINTR { continue }
-                if errno == EAGAIN || errno == EWOULDBLOCK {
-                    if Date() >= deadline { throw QgaError.timeout }
-                    continue
-                }
-                throw QgaError.readFailed(reason: "recv errno=\(errno)")
-            }
-            if n == 0 { throw QgaError.readFailed(reason: "EOF before newline") }
-            if byte == 0x0A {
-                guard let obj = try? JSONSerialization.jsonObject(with: lineBuf) as? [String: Any] else {
-                    throw QgaError.parseFailed(reason: "not JSON object: \(String(data: lineBuf, encoding: .utf8) ?? "<binary>")")
-                }
-                return obj
-            }
-            lineBuf.append(byte)
-            if lineBuf.count > 16 * 1024 * 1024 {
-                throw QgaError.parseFailed(reason: "line > 16MB")
-            }
-        }
-        throw QgaError.timeout
-    }
-
-    /// 发一条 QGA 命令, 同步等响应一行. 自动判 `error` 字段抛 guestError.
-    /// 返 `return` 字段 (可能是 dict / int / 其他 — 调用方按命令规约 cast).
-    @discardableResult
-    public static func call(
-        fd: Int32, execute: String, arguments: [String: Any]? = nil,
-        deadline: Date
-    ) throws -> Any {
-        var cmd: [String: Any] = ["execute": execute]
-        if let arguments { cmd["arguments"] = arguments }
-        try sendJsonLine(fd: fd, obj: cmd)
-        let resp = try readJsonLine(fd: fd, deadline: deadline)
-        if let err = resp["error"] as? [String: Any] {
-            let klass = (err["class"] as? String) ?? "GenericError"
-            let desc  = (err["desc"] as? String) ?? "\(err)"
-            throw QgaError.guestError(klass: klass, desc: desc)
-        }
-        // QGA `return` 字段对无返回值的命令是 `{}`; 我们仍返这个空 dict.
-        return resp["return"] ?? [String: Any]()
+    /// connect + 包成 QgaConnection. 推荐入口 — 所有 readJsonLine / call 都走 connection 才能共享 recv 缓冲.
+    public static func connect(socketPath: String) throws -> QgaConnection {
+        let fd = try connectUnix(socketPath: socketPath)
+        return QgaConnection(fd: fd, owns: true)
     }
 }
