@@ -742,6 +742,12 @@ public struct WebDavHandler {
         s += "<D:displayname>\(xmlEscape(displayName))</D:displayname>"
         if isDir {
             s += "<D:resourcetype><D:collection/></D:resourcetype>"
+            // quota 信息: 让 Win WebDAV 客户端别按 quota=0 拒上传 ("File Too Large").
+            // 走 host fs 实际 free space; 拿不到就 fallback 1 TiB 兜底.
+            // RFC 4331: quota-available-bytes / quota-used-bytes 是 directory-level prop.
+            let (avail, used) = Self.quotaForFilesystem(at: url)
+            s += "<D:quota-available-bytes>\(avail)</D:quota-available-bytes>"
+            s += "<D:quota-used-bytes>\(used)</D:quota-used-bytes>"
         } else {
             s += "<D:resourcetype/>"
             if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) {
@@ -756,6 +762,24 @@ public struct WebDavHandler {
         }
         s += "</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>\n"
         return s
+    }
+
+    /// 读 url 所在卷的 free / total bytes. 走 URLResourceValues 的 volumeAvailableCapacityForImportantUsage
+    /// (macOS 优先重要数据可用容量, 比 systemFreeSize 更接近"真实可写量").
+    /// 失败兜底 1 TiB available + 0 used (Win 客户端不会再按 quota=0 拒上传).
+    private static func quotaForFilesystem(at url: URL) -> (avail: Int64, used: Int64) {
+        let fallbackAvail: Int64 = 1 << 40  // 1 TiB
+        let keys: Set<URLResourceKey> = [
+            .volumeAvailableCapacityForImportantUsageKey,
+            .volumeTotalCapacityKey,
+        ]
+        guard let vals = try? url.resourceValues(forKeys: keys) else {
+            return (fallbackAvail, 0)
+        }
+        let avail = (vals.volumeAvailableCapacityForImportantUsage as Int64?) ?? fallbackAvail
+        let total = Int64(vals.volumeTotalCapacity ?? 0)
+        let used = max(0, total - avail)
+        return (max(1, avail), used)
     }
 
     private func handleGet(req: HTTPRequest, path: String, head: Bool) -> HTTPResponse {

@@ -88,6 +88,10 @@ struct EditConfigDialog: View {
                     if item.config?.engine == .qemu {
                         sharedFolderSection
                     }
+
+                    // vmnet daemon 安装/重启/卸载面板 — 保留 daemon 管理入口,
+                    // 但本弹窗不再露 NIC 卡片 (NIC 管理走详情页 + 状态栏 vmnet popup).
+                    VmnetDaemonCard(networks: $draft.networks)
                 }
                 .padding(.vertical, HVMSpace.xs)
             }
