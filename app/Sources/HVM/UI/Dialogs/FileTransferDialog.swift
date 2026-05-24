@@ -4,11 +4,15 @@
 // 设计稿: docs/v3/FILE_COPY.md PR-D.
 // 状态机: form → running → done / error → 关闭.
 // 不支持取消 (D5: v1 cancel 按钮只 close modal, 后台 chunk 跑完才退. 不可中断期间隐藏 X).
+//
+// 2026-05-24: pull 路径加 inline guest 文件浏览器 — 点 [浏览…] 展开列表区,
+// 走 IPC dbg.dir.list → guest qemu-ga PowerShell/find. 点目录下钻, 点文件选中回填.
 
 import SwiftUI
 import HVMBundle
 import HVMCore
 import HVMGuiProbe
+import HVMIPC
 
 struct FileTransferDialog: View {
     @Bindable var model: AppModel
@@ -21,6 +25,13 @@ struct FileTransferDialog: View {
     @State private var resultBytes: Int64 = 0
     @State private var resultDurationMs: Int64 = 0
     @State private var transferTask: Task<Void, Never>? = nil
+
+    // pull 浏览器状态 (仅 pull 用)
+    @State private var browserExpanded: Bool = false
+    @State private var browserPath: String = ""
+    @State private var browserEntries: [IPCDbgListDirPayload.Entry]? = nil  // nil = loading
+    @State private var browserError: String? = nil
+    @State private var browserLoadTask: Task<Void, Never>? = nil
 
     private enum Phase { case form, running, done }
 
@@ -41,6 +52,9 @@ struct FileTransferDialog: View {
             VStack(alignment: .leading, spacing: HVMSpace.lg) {
                 hostLine
                 remoteLine
+                if browserExpanded {
+                    browserSection
+                }
                 statusBlock
             }
         } footer: {
@@ -53,6 +67,7 @@ struct FileTransferDialog: View {
         }
         .onDisappear {
             transferTask?.cancel()
+            browserLoadTask?.cancel()
         }
     }
 
@@ -71,16 +86,230 @@ struct FileTransferDialog: View {
     private var remoteLine: some View {
         VStack(alignment: .leading, spacing: HVMSpace.xs) {
             LabelText("\(remoteLabel) \(remoteHint)")
-            HVMTextField(
-                isPush ? "C:\\path\\file 或 /tmp/file" : "guest 内绝对路径",
-                text: $remotePath
-            )
-            .disabled(phase != .form)
-            .hvmProbe(id: "dialog.fileTransfer.input.remotePath",
-                      label: remoteLabel,
-                      action: .textField(getter: { remotePath },
-                                         setter: { remotePath = $0 }))
+            HStack(spacing: HVMSpace.sm) {
+                HVMTextField(
+                    isPush ? "C:\\path\\file 或 /tmp/file" : "guest 内绝对路径",
+                    text: $remotePath
+                )
+                .disabled(phase != .form)
+                .hvmProbe(id: "dialog.fileTransfer.input.remotePath",
+                          label: remoteLabel,
+                          action: .textField(getter: { remotePath },
+                                             setter: { remotePath = $0 }))
+                if !isPush {
+                    // 仅 pull 路径暴露浏览器 — push 的 dst 用户自定, 浏览器对 push 价值低 (而且 push 还需创建不存在路径)
+                    Button(action: { toggleBrowser() }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: browserExpanded ? "chevron.down" : "folder")
+                                .font(HVMFont.small)
+                            Text(browserExpanded ? "收起" : "浏览…").font(HVMFont.caption)
+                        }
+                    }
+                    .buttonStyle(GhostButtonStyle())
+                    .disabled(phase != .form)
+                    .help("浏览 guest 内目录 (走 qemu-guest-agent)")
+                    .hvmProbe(id: "dialog.fileTransfer.button.browse",
+                              label: browserExpanded ? "Collapse" : "Browse",
+                              action: .button { toggleBrowser() })
+                }
+            }
         }
+    }
+
+    /// guest 浏览器区 — 路径 bar + 上一级 + 刷新 + 文件列表
+    private var browserSection: some View {
+        VStack(alignment: .leading, spacing: HVMSpace.xs) {
+            HStack(spacing: HVMSpace.xs) {
+                Button(action: { goUp() }) {
+                    Image(systemName: "arrow.up").font(HVMFont.small)
+                }
+                .buttonStyle(IconButtonStyle())
+                .disabled(!canGoUp())
+                .help("上一级")
+
+                Button(action: { reload() }) {
+                    Image(systemName: "arrow.clockwise").font(HVMFont.small)
+                }
+                .buttonStyle(IconButtonStyle())
+                .help("刷新")
+
+                Text(browserPath.isEmpty ? "—" : browserPath)
+                    .font(HVMFont.monoSmall)
+                    .foregroundStyle(HVMColor.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, HVMSpace.sm)
+            .padding(.vertical, HVMSpace.xs)
+            .background(HVMColor.bgCard)
+            .overlay(
+                RoundedRectangle(cornerRadius: HVMRadius.sm)
+                    .stroke(HVMColor.border, lineWidth: 1)
+            )
+
+            browserListView
+        }
+    }
+
+    @ViewBuilder
+    private var browserListView: some View {
+        if let err = browserError {
+            Text(err)
+                .font(HVMFont.caption)
+                .foregroundStyle(HVMColor.danger)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, minHeight: 60, alignment: .topLeading)
+                .padding(HVMSpace.sm)
+                .background(HVMColor.bgCard)
+                .overlay(RoundedRectangle(cornerRadius: HVMRadius.sm).stroke(HVMColor.border, lineWidth: 1))
+        } else if browserEntries == nil {
+            HStack {
+                ProgressView().controlSize(.small)
+                Text("列目录中…").font(HVMFont.caption).foregroundStyle(HVMColor.textTertiary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 60)
+            .background(HVMColor.bgCard)
+            .overlay(RoundedRectangle(cornerRadius: HVMRadius.sm).stroke(HVMColor.border, lineWidth: 1))
+        } else if let entries = browserEntries {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if entries.isEmpty {
+                        Text("(空目录)")
+                            .font(HVMFont.caption)
+                            .foregroundStyle(HVMColor.textTertiary)
+                            .padding(HVMSpace.sm)
+                    }
+                    ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+                        Button(action: { onEntryTap(entry) }) {
+                            HStack(spacing: HVMSpace.sm) {
+                                Image(systemName: entry.isDir ? "folder.fill" : "doc")
+                                    .font(HVMFont.label)
+                                    .foregroundStyle(entry.isDir ? HVMColor.statusRunning : HVMColor.textSecondary)
+                                    .frame(width: 18)
+                                Text(entry.name)
+                                    .font(HVMFont.caption)
+                                    .foregroundStyle(HVMColor.textPrimary)
+                                    .lineLimit(1)
+                                Spacer()
+                                if !entry.isDir {
+                                    Text(humanBytes(entry.size))
+                                        .font(HVMFont.small)
+                                        .foregroundStyle(HVMColor.textTertiary)
+                                }
+                            }
+                            .padding(.horizontal, HVMSpace.sm)
+                            .padding(.vertical, 4)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .frame(height: 220)
+            .background(HVMColor.bgCard)
+            .overlay(RoundedRectangle(cornerRadius: HVMRadius.sm).stroke(HVMColor.border, lineWidth: 1))
+        }
+    }
+
+    private func toggleBrowser() {
+        if browserExpanded {
+            browserExpanded = false
+            browserLoadTask?.cancel()
+            return
+        }
+        // 打开: 先用 remotePath (若已填) 推父目录, 否则按 guestOS 默认起点
+        let initial = initialBrowsePath()
+        browserPath = initial
+        browserExpanded = true
+        reload()
+    }
+
+    /// 起始浏览路径: 若 remotePath 非空, 用它的父目录; 否则按 guestOS 默认 (Win `C:\`; Linux `/`).
+    private func initialBrowsePath() -> String {
+        let trimmed = remotePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            // 推父目录: Win `\` / Linux `/` 都识
+            if let lastSep = trimmed.lastIndex(where: { $0 == "/" || $0 == "\\" }) {
+                let parent = String(trimmed[..<lastSep])
+                // 处理 `C:` 这种 (lastSep 之前没东西) — 加回根斜杠
+                if parent.isEmpty {
+                    return String(trimmed[trimmed.startIndex...lastSep])
+                }
+                // Windows `C:` 缺尾斜杠时补
+                if parent.hasSuffix(":") {
+                    return parent + "\\"
+                }
+                return parent
+            }
+        }
+        switch request.item.config?.guestOS {
+        case .windows: return "C:\\"
+        case .linux:   return "/"
+        default:       return "/"
+        }
+    }
+
+    private func canGoUp() -> Bool {
+        // 根目录不能再上 (Win 暂仅支持 C:\ — 用户想跨盘自己手填)
+        let p = browserPath
+        if p == "C:\\" || p == "/" || p.isEmpty { return false }
+        return true
+    }
+
+    private func goUp() {
+        let p = browserPath
+        guard p != "C:\\" && p != "/" else { return }
+        // 去掉尾部斜杠后, 找最后一个 `\` 或 `/`
+        var s = p
+        while s.last == "/" || s.last == "\\" { s.removeLast() }
+        if let lastSep = s.lastIndex(where: { $0 == "/" || $0 == "\\" }) {
+            var parent = String(s[..<lastSep])
+            if parent.hasSuffix(":") { parent += "\\" }       // Win: `C:` → `C:\`
+            if parent.isEmpty { parent = "/" }                 // Linux: 根
+            browserPath = parent
+        } else {
+            // 顶到根
+            browserPath = p.contains("\\") ? "C:\\" : "/"
+        }
+        reload()
+    }
+
+    private func reload() {
+        browserLoadTask?.cancel()
+        browserError = nil
+        browserEntries = nil  // loading
+        let path = browserPath
+        browserLoadTask = Task { @MainActor in
+            do {
+                let payload = try await model.listGuestDir(item: request.item, path: path)
+                guard !Task.isCancelled, browserPath == path else { return }
+                browserEntries = payload.entries
+            } catch {
+                guard !Task.isCancelled, browserPath == path else { return }
+                browserError = "列目录失败: \(error.localizedDescription)"
+                browserEntries = []  // 标记为非 loading
+            }
+        }
+    }
+
+    private func onEntryTap(_ entry: IPCDbgListDirPayload.Entry) {
+        if entry.isDir {
+            browserPath = entry.fullPath
+            reload()
+        } else {
+            remotePath = entry.fullPath
+            browserExpanded = false  // 选中文件后自动收起
+            browserLoadTask?.cancel()
+        }
+    }
+
+    private func humanBytes(_ n: Int64) -> String {
+        let units = ["B", "KiB", "MiB", "GiB", "TiB"]
+        var v = Double(n)
+        var i = 0
+        while v >= 1024 && i < units.count - 1 { v /= 1024; i += 1 }
+        return i == 0 ? "\(n) B" : String(format: "%.1f %@", v, units[i])
     }
 
     @ViewBuilder

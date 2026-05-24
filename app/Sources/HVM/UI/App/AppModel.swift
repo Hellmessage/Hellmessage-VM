@@ -970,6 +970,37 @@ public final class AppModel {
         return (payload.bytesTransferred, payload.durationMs)
     }
 
+    /// 列 guest 内目录, 给 "从 VM 取文件" 浏览器用. VM 必须 running + qga 已起.
+    /// IPC 走 Task.detached (qga PowerShell 启动 ~1-2s, 不阻 main).
+    public func listGuestDir(
+        item: VMListItem, path: String, timeoutSec: Int = 30
+    ) async throws -> IPCDbgListDirPayload {
+        guard let holder = BundleLock.inspect(bundleURL: item.bundleURL),
+              !holder.socketPath.isEmpty else {
+            throw HVMError.ipc(.socketNotFound(path: "(inspect 失败 — VM 未运行?)"))
+        }
+        let socketPath = holder.socketPath
+        let req = IPCRequest(op: IPCOp.dbgListDir.rawValue, args: [
+            "path": path, "timeoutSec": "\(timeoutSec)"
+        ])
+        let resp: IPCResponse = try await Task.detached(priority: .userInitiated) {
+            try SocketClient.request(socketPath: socketPath, request: req,
+                                     timeoutSec: timeoutSec + 5)
+        }.value
+        guard resp.ok else {
+            throw HVMError.ipc(.remoteError(
+                code: resp.error?.code ?? "qga.dir_failed",
+                message: resp.error?.message ?? "dir list failed"
+            ))
+        }
+        guard let json = resp.data?["payload"],
+              let data = json.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(IPCDbgListDirPayload.self, from: data) else {
+            throw HVMError.ipc(.decodeFailed(reason: "dir list payload"))
+        }
+        return payload
+    }
+
     /// 给 push 建议默认远端 path. Win → `C:\Users\Public\Downloads\<basename>`;
     /// Linux/macOS → `/tmp/<basename>`. 用户在 dialog 内可改.
     public static func suggestPushRemotePath(hostURL: URL, guestOS: GuestOSType?) -> String {

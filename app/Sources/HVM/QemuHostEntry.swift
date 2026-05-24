@@ -769,6 +769,7 @@ final class QemuHostState {
         case IPCOp.dbgExecGuest.rawValue:     return await handleDbgExecGuest(req: req)
         case IPCOp.dbgFilePush.rawValue:      return await handleDbgFilePush(req: req)
         case IPCOp.dbgFilePull.rawValue:      return await handleDbgFilePull(req: req)
+        case IPCOp.dbgListDir.rawValue:       return await handleDbgListDir(req: req)
         case IPCOp.displaySetMonitors.rawValue:  return handleDisplaySetMonitors(req: req)
         case IPCOp.clipboardSetEnabled.rawValue: return handleClipboardSetEnabled(req: req)
 
@@ -1189,6 +1190,50 @@ final class QemuHostState {
             return .encoded(id: req.id, payload: payload, kind: "file pull")
         } catch {
             return .failure(id: req.id, code: "qga.file_failed", message: "\(error)")
+        }
+    }
+
+    /// dbg.dir.list — 列 guest 内目录, 给 GUI "从 VM 取文件" 浏览器 + hvm-dbg dir ls 用.
+    /// args.path: guest 内绝对路径; args.timeoutSec? (默认 30).
+    private func handleDbgListDir(req: IPCRequest) async -> IPCResponse {
+        guard let path = req.args["path"], !path.isEmpty else {
+            return .failure(id: req.id, code: "ipc.bad_args", message: "dbg.dir.list 需要 args.path")
+        }
+        let timeoutSec = Int(req.args["timeoutSec"] ?? "30") ?? 30
+        guard let cfg = config else {
+            return .failure(id: req.id, code: "backend.no_vm", message: "VM config 未就绪")
+        }
+        let qgaSocketPath = HVMPaths.qgaSocketPath(for: cfg.id).path
+        guard FileManager.default.fileExists(atPath: qgaSocketPath) else {
+            return .failure(id: req.id, code: "qga.socket_not_found",
+                            message: "qga socket 缺 (\(qgaSocketPath)); VM 未运行或 qga chardev 未启")
+        }
+        do {
+            let entries = try await QgaDir.list(
+                socketPath: qgaSocketPath, guestOS: cfg.guestOS,
+                path: path, timeoutSec: timeoutSec
+            )
+            let payload = IPCDbgListDirPayload(
+                path: path,
+                entries: entries.map {
+                    IPCDbgListDirPayload.Entry(
+                        name: $0.name, fullPath: $0.fullPath,
+                        isDir: $0.isDir, size: $0.size
+                    )
+                }
+            )
+            return .encoded(id: req.id, payload: payload, kind: "dir list")
+        } catch let QgaDir.DirError.exitNonZero(code, stderr) {
+            return .failure(id: req.id, code: "qga.dir_exit_nonzero",
+                            message: "guest 列目录退出 \(code): \(stderr.prefix(200))")
+        } catch let QgaDir.DirError.parseFailed(reason) {
+            return .failure(id: req.id, code: "qga.dir_parse",
+                            message: "解析 guest 目录输出失败: \(reason)")
+        } catch let QgaDir.DirError.unsupportedGuestOS(reason) {
+            return .failure(id: req.id, code: "qga.dir_unsupported",
+                            message: reason)
+        } catch {
+            return .failure(id: req.id, code: "qga.dir_failed", message: "\(error)")
         }
     }
 

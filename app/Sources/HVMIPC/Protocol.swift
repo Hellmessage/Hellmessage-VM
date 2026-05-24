@@ -131,6 +131,10 @@ public enum IPCOp: String, Sendable {
     /// guest → host 单文件 pull. args: remotePath, localPath, timeoutSec? (默认 600).
     /// 与 dbgFilePush 反向, 同款协议. 本地走 .hvm-tmp + atomic rename 防中断半成品.
     case dbgFilePull     = "dbg.file.pull"
+    /// 列 guest 内目录 — 给 GUI "从 VM 取文件" 浏览器 + hvm-dbg dir ls 用. args: path,
+    /// timeoutSec? (默认 30). 走 qemu-guest-agent guest-exec PowerShell (Win) / find (Linux),
+    /// 返 IPCDbgListDirPayload (entries 排好: 目录在前, 名字字母序).
+    case dbgListDir      = "dbg.dir.list"
     /// host (GUI) 通知 VMHost 改 guest 显示分辨率, args.width/height. VMHost 持有
     /// 持久 vdagent socket, 通过 vdagent VDAgentMonitorsConfig 转给 guest spice-vdagent.
     /// 取代老的"GUI 直连 vdagent socket"路径 — vdagent socket 是 single-client,
@@ -185,6 +189,25 @@ public struct IPCDbgFileTransferPayload: Codable, Sendable {
     public init(bytesTransferred: Int64, durationMs: Int64) {
         self.bytesTransferred = bytesTransferred
         self.durationMs = durationMs
+    }
+}
+
+/// dbg.dir.list 响应 — guest 目录条目列表.
+public struct IPCDbgListDirPayload: Codable, Sendable {
+    public struct Entry: Codable, Sendable {
+        public let name: String
+        public let fullPath: String
+        public let isDir: Bool
+        public let size: Int64
+        public init(name: String, fullPath: String, isDir: Bool, size: Int64) {
+            self.name = name; self.fullPath = fullPath
+            self.isDir = isDir; self.size = size
+        }
+    }
+    public let path: String          // echo 回的 query path (guest 内绝对路径)
+    public let entries: [Entry]
+    public init(path: String, entries: [Entry]) {
+        self.path = path; self.entries = entries
     }
 }
 

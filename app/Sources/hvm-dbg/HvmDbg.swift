@@ -24,6 +24,7 @@ struct HvmDbg: AsyncParsableCommand {
             ExecCommand.self,
             ExecGuestCommand.self,
             FileCommand.self,
+            DirCommand.self,
             DisplayInfoCommand.self,
             DisplayResizeCommand.self,
             QemuLaunchCommand.self,
