@@ -207,3 +207,26 @@ log.warn("vmnet bridge en10 probe silent — bridge 可能已死, 试试 [状态
 | 7 | docs/v1/NETWORK.md 现状回写 "重启 daemon" 路径 + "bridge silent" 现象 | docs 同步 |
 
 **状态**: 已合入 `develop` 分支 2026-05-23, 等用户跑实际场景验证.
+
+## 追加: QEMU `-netdev stream` reconnect-ms 自愈 (2026-05-24)
+
+用户实际跑 [重启 daemon] 流程时撞到一个体验问题: daemon 重起 ≈ 已连 VM 的 unix socket 也跟着断, QEMU 默认行为是 socket 死了就放着不重连, NIC 直接报废, 用户必须停 + 启 VM. 这条限制原本卡死了"重启 daemon" 按钮的实用性 — 谁也不想为了修一个 VM 的网, 把其他 VM 也连累停掉.
+
+**修复**: QEMU 7.2+ 给 `-netdev stream` 加了 `reconnect-ms=<ms>` 选项 (我们 10.2.0 自带), socket 断开后按毫秒数自动重连. 把 `reconnect-ms=2000` 直接拼进 argv:
+
+```
+-netdev stream,id=net0,addr.type=unix,addr.path=/var/run/socket_vmnet.bridged.en10,reconnect-ms=2000
+```
+
+**端到端实测** (2026-05-24, Ubuntu 24.04 guest, en10 桥, 192.168.110.0/24 LAN):
+
+- guest 内启 `ping -c 30 -i 1 192.168.110.1`
+- t=4s 时 host 跑 `sudo install-vmnet-daemons.sh --restart` (重启全部 5 个 daemon, 总耗时 ≈12s)
+- 结果: **30 个 ping 中 28 个收到, 仅丢 seq=1,2 (ping 启动 ARP, 跟 daemon 无关). daemon 重启的 12s 里 ping seq=5..15 全部正常收到, 0 丢包**
+- 用户视角: VM 完全感知不到 daemon 重起
+
+机制: QEMU `-netdev stream` 客户端 socket 断 → 每 2s 重连 → daemon 0.3-0.5s 内 bootstrap 完成 → QEMU 下一次 retry 命中, 链路恢复. 加上 virtio-net buffer + guest 内核 ARP / lease 缓存, 重启窗口透明.
+
+**为什么不早做**: `9ea4c08` (idempotent install) 的设计前提就是"避免重起 daemon", 因为当时 QEMU 没有 reconnect. 这条 fix 出来后, 现在两边都安全了: install 仍然 idempotent (不必要时不重启), `[重启 daemon]` 主动按了也不连累 running VM.
+
+**进一步**: 这条 fix 让 `--restart` 路径从"必须确认中断 VM" 变成"几乎无副作用" — 用户撞 silent-bridge 时点按钮没心理负担. 也意味着 R1 中的"会断已连 VM 网络"风险大幅降级 (仍有 1-2 秒包延迟, 但 TCP 连接基本不断, 长连接的 SSH / 数据库 / SSE 全部保留).

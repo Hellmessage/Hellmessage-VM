@@ -343,7 +343,13 @@ public enum QemuArgsBuilder {
                         reason: "socket_vmnet daemon 未就绪 (\(sock)); 请到 编辑配置 → 网络 → 安装 daemon, 或先 brew install socket_vmnet"
                     ))
                 }
-                args += ["-netdev", "stream,id=\(netId),addr.type=unix,addr.path=\(sock)"]
+                // reconnect-ms=2000: socket 断开后每 2 秒自动重连. daemon 重启 (bootout +
+                // bootstrap, 见 `--restart` 子命令) 的 1-2s 断网窗口里 QEMU 不会永久断;
+                // socket 一回来 QEMU 自动重连, guest virtio-net 看到的就是 carrier 短暂闪一下,
+                // DHCP lease 没过期就直接续用. **关键**: 历史 commit `e9c45d4` 一段时期走过
+                // 父子进程 fd 透传, daemon 重启后 QEMU 永久没网, 用户必须停 + 启 VM. 现在
+                // 走 `-netdev stream` 客户端 + reconnect-ms, daemon 重启对 running VM 透明.
+                args += ["-netdev", "stream,id=\(netId),addr.type=unix,addr.path=\(sock),reconnect-ms=2000"]
             case .none:
                 continue
             }

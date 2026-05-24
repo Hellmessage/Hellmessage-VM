@@ -160,7 +160,8 @@ QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场�
     - `/var/run/socket_vmnet` (shared)
     - `/var/run/socket_vmnet.host` (host)
     - `/var/run/socket_vmnet.bridged.<iface>` (bridged)
-  - **QEMU 接 socket_vmnet 协议**: socket_vmnet daemon 用 4-byte length-prefix framing, 跟 QEMU `-netdev stream` 协议**兼容** (lima / hell-vm 同款). QEMU argv 直写 `-netdev stream,id=netN,addr.type=unix,addr.path=<sock>` 直连 daemon, **不需要** `socket_vmnet_client` wrapper, **不需要**父进程 `socket()/connect()` 把 fd 透传给子进程 (socket_vmnet 集成中老的 sidecar fd-passing 路径已下线; HDP 协议内 IOSurface fd 仍走 SCM_RIGHTS, 由 `HVMScmRecv` 提供 C 胶水层 — 这是不同通路, 与 socket_vmnet 无关)
+  - **QEMU 接 socket_vmnet 协议**: socket_vmnet daemon 用 4-byte length-prefix framing, 跟 QEMU `-netdev stream` 协议**兼容** (lima / hell-vm 同款). QEMU argv 直写 `-netdev stream,id=netN,addr.type=unix,addr.path=<sock>,reconnect-ms=2000` 直连 daemon, **不需要** `socket_vmnet_client` wrapper, **不需要**父进程 `socket()/connect()` 把 fd 透传给子进程 (socket_vmnet 集成中老的 sidecar fd-passing 路径已下线; HDP 协议内 IOSurface fd 仍走 SCM_RIGHTS, 由 `HVMScmRecv` 提供 C 胶水层 — 这是不同通路, 与 socket_vmnet 无关)
+  - **reconnect-ms=2000 必须保留** (QEMU 7.2+ 选项, 我们 10.2.0 自带): daemon `--restart` / bootout-bootstrap 重起时 socket 短暂断开, QEMU 每 2s 自动重连. 实测 28/30 ping 透传, daemon 重起 12s 期间 0 丢包 — 让 [重启 daemon] 按钮对已连 VM 几乎透明. 去掉这个选项 = 任何 daemon flip 都让 running VM 永久掉网, 用户必须手动停 + 启 VM
   - **bridged 接口名只允许 `[a-zA-Z0-9]+`** (防 shell 注入, install-vmnet-daemons.sh 内部做白名单校验)
   - **共存检测**: 跟 hell-vm 同款**不**做共存检测 — 用户若已装 lima/colima 的 socket_vmnet daemon, install-vmnet-daemons.sh 会 unlink 别家 socket 重建. 用户需先卸别家
   - VZ 后端 `vmnetBridged` 走 Apple `VZBridgedNetworkDeviceAttachment` (依赖 `com.apple.vm.networking` entitlement, 申请中); `vmnetShared / vmnetHost` 在 VZ 上退化到 NAT
