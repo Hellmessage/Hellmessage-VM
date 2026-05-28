@@ -79,13 +79,17 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         // socket_vmnet 现在是系统级 launchd daemon (scripts/install-vmnet-helper.sh 安装),
         // QemuArgsBuilder 直接连 /var/run/socket_vmnet*; daemon 缺会抛 configInvalid
 
+        // 也传 qemuPidPath: qemu-launch 跑的是 production QEMU binary, 同样可能产生 orphan
+        // (人为 Ctrl-C / sigkill). 下次 QemuHostEntry 启动时会读 pid file reap orphan, 让 dev
+        // 期 qemu-launch 后再开 GUI 不踩坑.
         let inputs = QemuArgsBuilder.Inputs(
             config: config,
             bundleURL: bundleURL,
             qemuRoot: qemuRoot,
             qmpSocketPath: qmpSocket.path,
             virtioWinISOPath: virtioWinPath,
-            swtpmSocketPath: swtpmSockPath
+            swtpmSocketPath: swtpmSockPath,
+            qemuPidPath: HVMPaths.qemuPidPath(for: config.id).path
         )
         let buildResult = try QemuArgsBuilder.build(inputs)
 

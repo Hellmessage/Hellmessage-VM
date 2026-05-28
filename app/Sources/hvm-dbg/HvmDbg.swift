@@ -33,4 +33,22 @@ struct HvmDbg: AsyncParsableCommand {
             WebdavServeCommand.self,
         ]
     )
+
+    /// 覆写默认 main, 在 ArgumentParser parse 前装 SIGPIPE ignore.
+    /// hvm-dbg 本身不太会撞 SIGPIPE (它是 socket 主动方, peer 是 host server), 但 qemu-launch
+    /// 子命令会自己起 IPC server, 需要 ignore SIGPIPE 防御 client 异常断开. 详见
+    /// SignalGuard.ignoreSIGPIPE() 注释.
+    static func main() async {
+        SignalGuard.ignoreSIGPIPE()
+        do {
+            var command = try parseAsRoot()
+            if var asyncCommand = command as? AsyncParsableCommand {
+                try await asyncCommand.run()
+            } else {
+                try command.run()
+            }
+        } catch {
+            exit(withError: error)
+        }
+    }
 }

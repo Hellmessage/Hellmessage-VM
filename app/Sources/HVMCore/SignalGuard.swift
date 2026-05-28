@@ -46,6 +46,28 @@ public enum SignalGuard {
 
     // MARK: - 公开 API
 
+    /// 进程级永久忽略 SIGPIPE. 所有 entry (HVM main / hvm-cli / hvm-dbg) 启动顶部都必须调.
+    ///
+    /// 为什么必须装:
+    ///   - IPC server (HVMIPC.SocketServer) 给 client 写响应时, 若 client 已 Ctrl-C 退出,
+    ///     write(2) 走 Unix socket 触发 SIGPIPE. 默认 disposition = terminate 整个 host 进程.
+    ///   - host 进程被 SIGPIPE 杀掉后, QEMU + swtpm 子进程 reparent 到 launchd 成 orphan,
+    ///     占着 tpm/.lock NVRAM 锁 + run/<id>.qmp socket, 新 host 启不来 (swtpm exit 1).
+    ///   - 实测触发场景: `hvm-dbg exec-guest --ps ...` 跑长任务时用户 Ctrl-C, host 立即猝死,
+    ///     GUI 重启 VM 报 "QEMU 宿主进程未在规定时间内就绪 (20s)".
+    ///
+    /// 装了 SIG_IGN 后, write(2) 返 -1 + errno=EPIPE, Frame.writeAll 抛 HVMError.ipc.writeFailed,
+    /// SocketServer.handleConnection 的 `catch { return }` 干净 close 连接, host 继续跑, VM 不死.
+    ///
+    /// 跟 install()/uninstall() 那套加密事务防中断逻辑独立, 不走 reentrant 计数 — 进程级永久装.
+    public static func ignoreSIGPIPE() {
+        var action = sigaction()
+        action.__sigaction_u.__sa_handler = SIG_IGN
+        sigemptyset(&action.sa_mask)
+        action.sa_flags = 0
+        sigaction(SIGPIPE, &action, nil)
+    }
+
     /// 注册 SIGINT + SIGTERM 防中断. message 自定义; 留空走默认 "加密操作进行中 ..." 文案.
     /// 嵌套调用安全 (内部计数; 外层 install + 内层 install + 内层 uninstall + 外层 uninstall 正确).
     public static func install(message: String? = nil) {

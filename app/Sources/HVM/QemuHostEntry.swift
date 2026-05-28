@@ -51,8 +51,16 @@ public enum QemuHostEntry {
         }
 
         let qmpSocketURL = HVMPaths.qmpSocketPath(for: config.id)
-        // 清残留 socket (上次崩溃留的会让 QEMU bind 失败)
+        let qemuPidURL = HVMPaths.qemuPidPath(for: config.id)
+
+        // orphan reaper: 上次 host 异常退出 (SIGKILL / OOM / 之前的 SIGPIPE) 可能留 orphan
+        // QEMU 进程, 占着 NVRAM / 磁盘 fd / QMP socket. 读 pid file kill 老 pid.
+        // 必须在 FSCleanup 清 pid 文件之前调, 否则没 pid 可读. 详见 HVMQemu/SidecarOrphanReaper.
+        SidecarOrphanReaper.reapByPidFile(pidFile: qemuPidURL, expectedNamePrefix: "qemu-system")
+
+        // 清残留 socket / pid (上次崩溃留的会让 QEMU bind 失败 / 误以为已在跑)
         FSCleanup.removeQuietly(at: qmpSocketURL, context: "stale QMP socket")
+        FSCleanup.removeQuietly(at: qemuPidURL,   context: "stale QEMU pid file")
 
         // 2. virtio-win 路径解析 (windows guest 才用; 缓存就绪才挂第二 cdrom).
         //    创建 Win VM 时 GUI 会前台触发 ensureCached; 这里不做下载, 缺则降级.
@@ -229,7 +237,8 @@ public enum QemuHostEntry {
                 // 空时也不起 server, 不占 socket 路径.
                 webdavSocketPath: config.sharedFolders.isEmpty ? nil : webdavSocketURL.path,
                 qemuDiskSecretPath: diskSecretFile?.path,
-                qemuNvramSecretPath: nvramSecretFile?.path
+                qemuNvramSecretPath: nvramSecretFile?.path,
+                qemuPidPath: qemuPidURL.path
             )
             buildResult = try QemuArgsBuilder.build(inputs)
         } catch {
@@ -508,6 +517,11 @@ public enum QemuHostEntry {
         } else {
             logFile = nil
         }
+        // orphan reaper: 上次 host 异常退出 (SIGKILL / OOM / 修前的 SIGPIPE) 可能留 orphan
+        // swtpm 进程, 占着 tpm/.lock NVRAM 锁让新 swtpm 启不来. 先读 pid file kill 老 pid,
+        // 再清 stale 文件. 详见 HVMQemu/SidecarOrphanReaper 注释.
+        SidecarOrphanReaper.reapByPidFile(pidFile: pidPath, expectedNamePrefix: "swtpm")
+
         // 清残留 socket / pid (上次崩溃留的会让 swtpm bind 失败 / 误以为已在跑)
         FSCleanup.removeQuietly(atPath: sockPath, context: "stale swtpm socket")
         FSCleanup.removeQuietly(at: pidPath,      context: "stale swtpm pid file")

@@ -112,6 +112,12 @@ public enum HVMPaths {
     public static func swtpmPidPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).swtpm.pid")
     }
+    /// QEMU 进程的 -pidfile 路径. host 进程异常退出 (SIGKILL / OOM / 之前的 SIGPIPE) 时,
+    /// QEMU 子进程会 reparent 到 launchd 成 orphan 占着 NVRAM / 磁盘 fd. 下次 host 启动前
+    /// 用本 pid 文件抓老 pid kill 掉. 详见 HVMQemu/SidecarOrphanReaper 注释.
+    public static func qemuPidPath(for id: UUID) -> URL {
+        runDir.appendingPathComponent("\(id.uuidString.lowercased()).qemu.pid")
+    }
     /// QEMU `-display iosurface,socket=...` 的 HDP socket 路径
     /// (host HVMDisplayQemu.DisplayChannel 连此 socket 拉 framebuffer).
     public static func iosurfaceSocketPath(for id: UUID) -> URL {

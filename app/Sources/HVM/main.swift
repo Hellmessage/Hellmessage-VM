@@ -3,6 +3,11 @@
 // 详见 docs/ARCHITECTURE.md "进程模型"
 
 import Foundation
+import HVMCore
+
+// 进程顶部装 SIGPIPE 忽略 — 必须在任何 IPC 监听 / 子进程派生之前. 详见 SignalGuard.ignoreSIGPIPE() 注释.
+// 这里覆盖 GUI 主进程 + --host-mode-bundle 子进程 (二者共用本 binary).
+SignalGuard.ignoreSIGPIPE()
 
 let args = CommandLine.arguments
 

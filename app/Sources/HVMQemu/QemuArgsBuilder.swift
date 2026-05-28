@@ -85,6 +85,11 @@ public enum QemuArgsBuilder {
         /// nil → 走明文 efi-vars.fd raw (现状行为).
         public let qemuNvramSecretPath: String?
 
+        /// QEMU `-pidfile <path>`. QEMU 启动后写自己的 pid 到此文件, 用作 orphan 检测锚点 —
+        /// 下次 host 启动时 SidecarOrphanReaper.reapByPidFile 读此 pid, kill 老 orphan QEMU.
+        /// nil 时不下发 -pidfile (兼容旧调用方).
+        public let qemuPidPath: String?
+
         public init(
             config: VMConfig,
             bundleURL: URL,
@@ -101,7 +106,8 @@ public enum QemuArgsBuilder {
             qgaSocketPath: String? = nil,
             webdavSocketPath: String? = nil,
             qemuDiskSecretPath: String? = nil,
-            qemuNvramSecretPath: String? = nil
+            qemuNvramSecretPath: String? = nil,
+            qemuPidPath: String? = nil
         ) {
             self.config = config
             self.bundleURL = bundleURL
@@ -119,6 +125,7 @@ public enum QemuArgsBuilder {
             self.webdavSocketPath = webdavSocketPath
             self.qemuDiskSecretPath = qemuDiskSecretPath
             self.qemuNvramSecretPath = qemuNvramSecretPath
+            self.qemuPidPath = qemuPidPath
         }
     }
 
@@ -159,6 +166,12 @@ public enum QemuArgsBuilder {
         args += ["-smp", "\(cfg.cpuCount)"]
         args += ["-m", "\(cfg.memoryMiB)M"]
         args += ["-name", cfg.displayName]
+
+        // -pidfile: QEMU 启动后写自己 pid 到此文件 (orphan reaper 抓 orphan 的锚点).
+        // 调用方负责: 启动前调 SidecarOrphanReaper.reapByPidFile + FSCleanup.removeQuietly 清旧文件.
+        if let pidPath = inputs.qemuPidPath {
+            args += ["-pidfile", pidPath]
+        }
 
         // -no-reboot 仅装机阶段加 (cfg.bootFromDiskOnly=false): installer 拷完文件触发
         // reboot 时让 QEMU 直接退出, 给用户决策点 — 在 GUI 点"安装完成"切到
