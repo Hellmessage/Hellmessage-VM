@@ -1107,6 +1107,68 @@ public final class AppModel {
         return payload
     }
 
+    // MARK: - Guest helper 一键装 (docs/v3/HOST_FILE_CLIPBOARD.md)
+
+    /// GUI "装 helper" 按钮入口. 通过 IPC 让 VMHost 子进程执行 GuestHelperInstaller.
+    /// 走 Task.detached (长事务最多几秒 + QGA wait 可能等 10 min). 完成后通知用户.
+    /// force=true 强制重装 (先清 marker).
+    public func installGuestHelper(item: VMListItem, force: Bool = false) {
+        let displayName = item.displayName
+        guard let holder = BundleLock.inspect(bundleURL: item.bundleURL),
+              !holder.socketPath.isEmpty else {
+            sharedErrors?.present(ErrorDialogModel(
+                title: "装 helper 失败",
+                message: "VM 未运行 (找不到 IPC socket)",
+                details: nil,
+                hint: "先启动 VM 再点 \"装 helper\""
+            ))
+            return
+        }
+        let socketPath = holder.socketPath
+        let req = IPCRequest(
+            op: IPCOp.clipboardInstallHelper.rawValue,
+            args: force ? ["force": "1"] : [:]
+        )
+        // 弹通知告知开始 (异步, 装完再弹结果通知)
+        HostFilePasteNotifier.notifyInfo(
+            displayName: displayName,
+            title: "Guest Helper",
+            body: "正在安装... (首次启动 Windows VM 约需 30-60s)"
+        )
+        Task { @MainActor [weak self] in
+            let resp: IPCResponse
+            do {
+                resp = try await Task.detached(priority: .userInitiated) {
+                    // 给 600s — install 包含 wait-for-QGA (最多 10 min) + push + schtasks.
+                    try SocketClient.request(socketPath: socketPath, request: req, timeoutSec: 700)
+                }.value
+            } catch {
+                self?.sharedErrors?.present(ErrorDialogModel(
+                    title: "装 helper 失败", message: "IPC 调用失败: \(error)",
+                    details: nil, hint: nil
+                ))
+                return
+            }
+            guard let self else { return }
+            if resp.ok {
+                let installed = resp.data?["installed"] == "true"
+                let message = resp.data?["message"] ?? ""
+                let title = installed ? "Guest Helper 已装" : "Guest Helper 已就绪"
+                let body = installed
+                    ? "现在 Mac Cmd+C 文件 → Windows Ctrl+V 任意 app 自动粘贴"
+                    : (message.isEmpty ? "已是最新版本, 无需重装" : message)
+                HostFilePasteNotifier.notifyInfo(displayName: displayName, title: title, body: body)
+            } else {
+                self.sharedErrors?.present(ErrorDialogModel(
+                    title: "装 helper 失败",
+                    message: resp.error?.message ?? "未知错误",
+                    details: resp.error?.code,
+                    hint: "Windows guest 需要 qemu-ga.exe 服务 (UTM Guest Tools 自带). 检查 guest 内 qemu-ga 是否在跑."
+                ))
+            }
+        }
+    }
+
     // MARK: - host → guest 文件粘贴 (Cmd+V, docs/v3/HOST_FILE_PASTE.md)
 
     /// 用户在 FramebufferHostView 按 Cmd+V 选中文件 → 走 IPC clipboard.paste-files

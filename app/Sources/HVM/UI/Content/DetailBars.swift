@@ -170,6 +170,23 @@ struct DetailTopBar: View {
                 .hvmProbe(id: "topbar.button.pullFile",
                           label: "从 VM 取文件",
                           action: .button { presentFilePullPicker(model: model, item: item) })
+                // 一键装 Guest Helper — 仅 Windows guest (Linux helper 推 v2).
+                // 走 IPC clipboard.install-helper → VMHost 调 GuestHelperInstaller.
+                // 长事务 (含 wait-for-QGA 最长 10 min), 通知反馈进度.
+                // 详见 docs/v3/HOST_FILE_CLIPBOARD.md.
+                if item.guestOS == .windows {
+                    Button {
+                        model.installGuestHelper(item: item)
+                    } label: {
+                        Image(systemName: "wand.and.stars")
+                            .foregroundStyle(HVMColor.textSecondary)
+                    }
+                    .buttonStyle(IconButtonStyle())
+                    .help("一键装 Guest Helper (启用 Mac Cmd+C 文件 → Win Ctrl+V 任意 app 自动粘贴)")
+                    .hvmProbe(id: "topbar.button.installGuestHelper",
+                              label: "装 Guest Helper",
+                              action: .button { model.installGuestHelper(item: item) })
+                }
             }
             // QEMU 后端独立窗口 toggle: 仅 .qemu engine + running 时显示.
             // 共存式 (CLAUDE.md / 设计决策): 主窗口嵌入 + detached 独立窗口可同时存在.

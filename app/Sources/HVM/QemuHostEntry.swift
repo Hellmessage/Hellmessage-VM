@@ -863,6 +863,7 @@ final class QemuHostState {
         case IPCOp.displaySetMonitors.rawValue:  return handleDisplaySetMonitors(req: req)
         case IPCOp.clipboardSetEnabled.rawValue: return handleClipboardSetEnabled(req: req)
         case IPCOp.clipboardPasteFiles.rawValue: return await handleClipboardPasteFiles(req: req)
+        case IPCOp.clipboardInstallHelper.rawValue: return await handleClipboardInstallHelper(req: req)
 
         default:
             if req.op.hasPrefix("dbg.") {
@@ -1416,6 +1417,41 @@ final class QemuHostState {
             failed:     r.failed.map     { .init(path: $0.path, reason: $0.reason) }
         )
         return .encoded(id: req.id, payload: payload, kind: "clipboard paste files")
+    }
+
+    /// clipboard.install-helper — GUI 一键装 helper 入口. 走 GuestHelperInstaller.install,
+    /// 仅 Windows guest 有意义 (Linux/macOS guest 直接返 success 当 noop). args.force = "1"
+    /// 时先删 marker 再装 (重装路径). 走 Task.detached 跑后台, GUI 显示进度.
+    private func handleClipboardInstallHelper(req: IPCRequest) async -> IPCResponse {
+        guard let cfg = self.config else {
+            return .failure(id: req.id, code: "backend.no_vm", message: "VM config 未就绪")
+        }
+        guard cfg.guestOS == .windows else {
+            return .success(id: req.id, data: ["installed": "false",
+                                                 "message": "guest 不是 Windows, 无需 helper"])
+        }
+        let qgaPath = HVMPaths.qgaSocketPath(for: cfg.id).path
+        let force = (req.args["force"] == "1")
+
+        do {
+            if force {
+                // 先清 marker, 让 installer 重新走完整流程
+                _ = try? await QgaExec.run(
+                    socketPath: qgaPath, path: "powershell.exe",
+                    args: ["-NoProfile", "-NonInteractive", "-Command",
+                           #"Remove-Item '\#(GuestHelperInstaller.markerPath)' -Force -ErrorAction SilentlyContinue"#],
+                    timeoutSec: 30
+                )
+            }
+            let r = try await GuestHelperInstaller.install(qgaSocketPath: qgaPath)
+            return .success(id: req.id, data: [
+                "installed": r.installed ? "true" : "false",
+                "message": r.message
+            ])
+        } catch {
+            return .failure(id: req.id, code: "guest_helper.install_failed",
+                            message: "\(error)")
+        }
     }
 
     /// dbg.display.resize — 模拟 GUI 拖窗口触发 host → guest resize.

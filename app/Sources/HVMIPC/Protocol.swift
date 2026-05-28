@@ -149,6 +149,10 @@ public enum IPCOp: String, Sendable {
     /// 设计稿 docs/v3/HOST_FILE_PASTE.md. 仅 QEMU 后端 + Linux/Windows guest.
     /// 长事务: GUI 侧 timeoutSec 应 ≥ 600 (跟 FileTransferDialog 一致).
     case clipboardPasteFiles = "clipboard.paste-files"
+    /// host (GUI) 触发"一键装 helper": 走 QGA 推 EXE + 注册 schtasks ONLOGON HIGHEST
+    /// + 立即拉起. 仅 QEMU + Windows guest. args.force = "1" 时跳过 marker 检测强制重装.
+    /// 详见 docs/v3/HOST_FILE_CLIPBOARD.md §4.5 + GuestHelperInstaller.
+    case clipboardInstallHelper = "clipboard.install-helper"
 }
 
 /// clipboard.paste-files 响应. 三分桶 (成功 / 跳过 / 失败).

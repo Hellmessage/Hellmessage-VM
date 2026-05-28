@@ -33,6 +33,11 @@ enum HostFilePasteNotifier {
         post(title: "粘贴到 \(displayName) 失败", body: body)
     }
 
+    /// 通用 info 通知 (中性 title, 非 success / failure). 给 "装 helper 中" 等任务进度反馈.
+    static func notifyInfo(displayName: String, title: String, body: String) {
+        post(title: "\(title) — \(displayName)", body: body)
+    }
+
     private static func post(title: String, body: String) {
         let center = UNUserNotificationCenter.current()
         let content = UNMutableNotificationContent()
