@@ -83,7 +83,7 @@ struct TextField: View {
     private let errorMessage: String?
     private let isLoading: Bool
     private let isDisabled: Bool
-    private let probeID: String?
+    private let probeID: String
     private let onSubmit: (@MainActor @Sendable () -> Void)?
 
     init(_ label: String? = nil,
@@ -95,7 +95,7 @@ struct TextField: View {
          errorMessage: String? = nil,
          isLoading: Bool = false,
          disabled: Bool = false,
-         probeID: String? = nil,
+         probeID: String,
          onSubmit: (@MainActor @Sendable () -> Void)? = nil) {
         self.label = label
         self._text = text
@@ -245,13 +245,13 @@ struct FieldChrome: ViewModifier {
 /// Probe 集成 modifier — probeID 非 nil + 未 disabled 时挂 .hvmProbe.
 /// .textField getter 读 binding, setter 写 binding (hvm-dbg gui type 走它).
 private struct ProbeTextFieldModifier: ViewModifier {
-    let probeID: String?
+    let probeID: String
     let label: String
     @Binding var text: String
     let isDisabled: Bool
 
     func body(content: Content) -> some View {
-        if let probeID, !isDisabled {
+        if !isDisabled {
             content.hvmProbe(
                 id: probeID,
                 label: label,

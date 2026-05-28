@@ -103,7 +103,7 @@ struct Button: View {
     private let iconPosition: IconPosition
     private let isDisabled: Bool
     private let isLoading: Bool
-    private let probeID: String?
+    private let probeID: String
     private let probeLabel: String?
     // action @MainActor @Sendable, 跟 ProbeAction.button 签名对齐.
     private let action: @MainActor @Sendable () -> Void
@@ -119,7 +119,7 @@ struct Button: View {
          size: ButtonSize = .md,
          disabled: Bool = false,
          isLoading: Bool = false,
-         probeID: String? = nil,
+         probeID: String,
          probeLabel: String? = nil,
          action: @escaping @MainActor @Sendable () -> Void) {
         self.label = label
@@ -140,7 +140,7 @@ struct Button: View {
          size: ButtonSize = .md,
          disabled: Bool = false,
          isLoading: Bool = false,
-         probeID: String? = nil,
+         probeID: String,
          probeLabel: String? = nil,
          action: @escaping @MainActor @Sendable () -> Void) {
         self.label = nil
@@ -198,7 +198,7 @@ struct Button: View {
         .accessibilityLabel(label ?? icon ?? "")
         .accessibilityHint(isLoading ? "正在处理" : "")
 
-        if let probeID, !isDisabled, !isLoading {
+        if !isDisabled, !isLoading {
             button.hvmProbe(
                 id: probeID,
                 label: probeLabel ?? label ?? icon ?? "",

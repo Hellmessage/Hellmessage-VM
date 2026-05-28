@@ -126,6 +126,24 @@
 - **风格 token**: 所有颜色 / 字号 / 间距 / 圆角必须走 `HVMColor` / `HVMFont` / `HVMSpace` / `HVMRadius`, **禁止**业务侧硬编码 `Color(red:...)` / `Font.system(size:...)` / 数字 padding
 - **mono 字体使用边界**: `HVMFont.mono` / `HVMFont.monoSmall` 仅用于"代码值" (UUID / MAC / 文件路径 / shell 命令展示 / build 号), 正文 / 标题 / 按钮 / 表单一律 SF Pro
 
+### 新 GUI (HVMUI) 强制 probeID — 业务页全覆盖自动化测试
+
+新 GUI (`app/Sources/HVM/GUI/**`, `GUI=new` 编译路径) 所有交互组件 `probeID: String` **必传** (非可选). 业务侧每个实例都得给唯一 probe id, 编译期 enforce.
+
+- 影响组件: `HVMUI.Button` / `HVMUI.TextField` / `HVMUI.SecureField` / `HVMUI.Toggle` / `HVMUI.Checkbox` / `HVMUI.Select`
+- 不影响 (非交互): `Section` / `Divider` / `Badge` / `Icon` / `KbdHint` / `Tooltip`
+- `isDisabled` 时跳过 probe 注册 (即使 probeID 已传), 防 hvm-dbg gui click disabled 控件触发副作用. 但 disabled 实例仍**必须**传 probeID (保持 codebase 习惯 + 切换 enable/disable 时不丢 probe id)
+- 命名规范 `<scene>.<role>.<element>`:
+  - 业务页例: `dialog.encrypt.field.password` / `toolbar.button.create` / `detail.section.network.toggle.bridged` / `vmlist.row.item-<vmID>`
+  - Showcase: `showcase.<role>.<element>`
+  - **唯一性**: 同 view 树内不重复
+- 派生 probe id (复合控件): 不需业务侧传, 组件内部自动派生
+  - `<select.probeID>.trigger` — Select trigger button
+  - `<select.probeID>.search`  — Select 内 search field
+- 业务侧 closure / binding 必须 `@MainActor @Sendable` (跟 ProbeAction 签名对齐)
+
+**为什么强制**: 业务侧偷懒不传 probeID 会让 hvm-dbg gui 自动化覆盖率漏斗, 业务页接入 dialog / wizard 后再补麻烦. 必传让 "每个可点 / 可输 / 可切控件都能被自动化测" 成为编译期保证 (而不是 lint 后置). 详细规范见 [docs/v4/NEW_GUI.md "R6" 节](docs/v4/NEW_GUI.md).
+
 ## VZ 能力边界约束 **必须遵守**
 
 以下能力 **VZ 不支持**, 即使用户要求也不得尝试实现, 直接提示用户能力边界:

@@ -349,7 +349,8 @@ private struct NewGUIRootView: View {
                         selection: $engineSelection,
                         options: [],
                         placeholder: "拉取选项...",
-                        isLoading: true
+                        isLoading: true,
+                        probeID: "showcase.select.loading"
                     )
                     .frame(maxWidth: 200)
 
@@ -357,7 +358,8 @@ private struct NewGUIRootView: View {
                         "Disabled",
                         selection: .constant(DemoEngine.vz),
                         options: [.init(value: .vz, label: "VZ")],
-                        disabled: true
+                        disabled: true,
+                        probeID: "showcase.select.disabled"
                     )
                     .frame(maxWidth: 200)
                 }
@@ -408,7 +410,8 @@ private struct NewGUIRootView: View {
                                  hint: "捕获主机键盘 (Cmd+Opt 退出)",
                                  probeID: "showcase.toggle.keyboard")
                     HVMUI.Toggle("Host Mouse", isOn: $hostMouse,
-                                 hint: "Disabled 演示", disabled: true)
+                                 hint: "Disabled 演示", disabled: true,
+                                 probeID: "showcase.toggle.mouse.disabled")
                 }
 
                 // Checkbox 三档 size
@@ -429,7 +432,8 @@ private struct NewGUIRootView: View {
                                    indeterminate: true,
                                    probeID: "showcase.checkbox.selectall.indeterminate")
                     HVMUI.Checkbox("Disabled", isOn: .constant(true),
-                                   disabled: true)
+                                   disabled: true,
+                                   probeID: "showcase.checkbox.disabled")
                 }
 
                 // probe 反馈
@@ -492,7 +496,8 @@ private struct NewGUIRootView: View {
                                  probeID: "showcase.field.loading")
                         .frame(maxWidth: 200)
                     HVMUI.TextField("Disabled", text: .constant("read-only"),
-                                 placeholder: "", disabled: true)
+                                 placeholder: "", disabled: true,
+                                 probeID: "showcase.field.disabled")
                         .frame(maxWidth: 200)
                 }
 
@@ -568,13 +573,16 @@ private struct NewGUIRootView: View {
 
                 // Tooltip demo — hover 按钮 500ms 后出 tooltip
                 fieldRow("Tooltip (hover 500ms 后出)") {
-                    HVMUI.Button(icon: "trash", variant: .ghost) { }
+                    HVMUI.Button(icon: "trash", variant: .ghost,
+                                 probeID: "showcase.tooltip.button.delete") { }
                         .hvmTooltip("删除当前 VM", kbd: "⌫")
 
-                    HVMUI.Button(icon: "plus", variant: .ghost) { }
+                    HVMUI.Button(icon: "plus", variant: .ghost,
+                                 probeID: "showcase.tooltip.button.create") { }
                         .hvmTooltip("创建新 VM", edge: .bottom, kbd: "⌘+N")
 
-                    HVMUI.Button("保存", variant: .primary) { }
+                    HVMUI.Button("保存", variant: .primary,
+                                 probeID: "showcase.tooltip.button.save") { }
                         .hvmTooltip("保存当前修改", kbd: "⌘+S")
 
                     HVMUI.Icon("info.circle", color: .info)
@@ -617,10 +625,13 @@ private struct NewGUIRootView: View {
                     }
                 } footer: {
                     HStack(spacing: HVMTheme.space.sm) {
-                        HVMUI.Button("取消", variant: .secondary) { }
+                        HVMUI.Button("取消", variant: .secondary,
+                                     probeID: "showcase.section.footer.cancel") { }
                         Spacer()
-                        HVMUI.Button("丢弃", variant: .ghost) { }
-                        HVMUI.Button("保存", variant: .primary) { }
+                        HVMUI.Button("丢弃", variant: .ghost,
+                                     probeID: "showcase.section.footer.discard") { }
+                        HVMUI.Button("保存", variant: .primary,
+                                     probeID: "showcase.section.footer.save") { }
                     }
                 }
 
@@ -698,38 +709,54 @@ private struct NewGUIRootView: View {
                 }
 
                 buttonRow("Sizes (.sm / .md / .lg)") {
-                    HVMUI.Button("保存", variant: .primary, size: .sm) { }
-                    HVMUI.Button("保存", variant: .primary, size: .md) { }
-                    HVMUI.Button("保存", variant: .primary, size: .lg) { }
-                    HVMUI.Button(icon: "gear", variant: .ghost, size: .sm) { }
-                    HVMUI.Button(icon: "gear", variant: .ghost, size: .md) { }
-                    HVMUI.Button(icon: "gear", variant: .ghost, size: .lg) { }
+                    HVMUI.Button("保存", variant: .primary, size: .sm,
+                                 probeID: "showcase.button.save.sm") { }
+                    HVMUI.Button("保存", variant: .primary, size: .md,
+                                 probeID: "showcase.button.save.md") { }
+                    HVMUI.Button("保存", variant: .primary, size: .lg,
+                                 probeID: "showcase.button.save.lg") { }
+                    HVMUI.Button(icon: "gear", variant: .ghost, size: .sm,
+                                 probeID: "showcase.button.gear.sm") { }
+                    HVMUI.Button(icon: "gear", variant: .ghost, size: .md,
+                                 probeID: "showcase.button.gear.md") { }
+                    HVMUI.Button(icon: "gear", variant: .ghost, size: .lg,
+                                 probeID: "showcase.button.gear.lg") { }
                 }
 
                 buttonRow("Icon position") {
                     HVMUI.Button("装机", variant: .primary, icon: "plus",
-                                 iconPosition: .leading) { }
+                                 iconPosition: .leading,
+                                 probeID: "showcase.button.install.leading") { }
                     HVMUI.Button("继续", variant: .primary, icon: "arrow.right",
-                                 iconPosition: .trailing) { }
-                    HVMUI.Button("删除", variant: .destructive, icon: "trash") { }
-                    HVMUI.Button("Settings", variant: .ghost, icon: "gearshape") { }
+                                 iconPosition: .trailing,
+                                 probeID: "showcase.button.continue.trailing") { }
+                    HVMUI.Button("删除", variant: .destructive, icon: "trash",
+                                 probeID: "showcase.button.delete") { }
+                    HVMUI.Button("Settings", variant: .ghost, icon: "gearshape",
+                                 probeID: "showcase.button.settings") { }
                 }
 
                 buttonRow("Loading") {
-                    HVMUI.Button("提交中", variant: .primary, isLoading: true) { }
+                    HVMUI.Button("提交中", variant: .primary, isLoading: true,
+                                 probeID: "showcase.button.submitting") { }
                     HVMUI.Button("装机中", variant: .primary, icon: "plus",
                                  isLoading: simulateButtonLoading,
                                  probeID: "showcase.button.loadingDemo") {
                         simulateButtonLoading.toggle()
                     }
-                    HVMUI.Button(icon: "gear", variant: .icon, isLoading: true) { }
+                    HVMUI.Button(icon: "gear", variant: .icon, isLoading: true,
+                                 probeID: "showcase.button.icon.loading") { }
                 }
 
                 buttonRow("Disabled") {
-                    HVMUI.Button("Primary", variant: .primary, disabled: true) { }
-                    HVMUI.Button("Secondary", variant: .secondary, disabled: true) { }
-                    HVMUI.Button("Destructive", variant: .destructive, disabled: true) { }
-                    HVMUI.Button(icon: "gear", variant: .icon, disabled: true) { }
+                    HVMUI.Button("Primary", variant: .primary, disabled: true,
+                                 probeID: "showcase.button.primary.disabled") { }
+                    HVMUI.Button("Secondary", variant: .secondary, disabled: true,
+                                 probeID: "showcase.button.secondary.disabled") { }
+                    HVMUI.Button("Destructive", variant: .destructive, disabled: true,
+                                 probeID: "showcase.button.destructive.disabled") { }
+                    HVMUI.Button(icon: "gear", variant: .icon, disabled: true,
+                                 probeID: "showcase.button.icon.disabled") { }
                 }
 
                 HStack(spacing: HVMTheme.space.sm) {

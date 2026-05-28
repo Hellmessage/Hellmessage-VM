@@ -82,7 +82,7 @@ struct Select<Value: Hashable>: View {
     private let errorMessage: String?
     private let isLoading: Bool
     private let isDisabled: Bool
-    private let probeID: String?
+    private let probeID: String
 
     init(_ label: String? = nil,
          selection: Binding<Value?>,
@@ -94,7 +94,7 @@ struct Select<Value: Hashable>: View {
          errorMessage: String? = nil,
          isLoading: Bool = false,
          disabled: Bool = false,
-         probeID: String? = nil) {
+         probeID: String) {
         self.label = label
         self._selection = selection
         self.options = options
@@ -119,7 +119,7 @@ struct Select<Value: Hashable>: View {
          errorMessage: String? = nil,
          isLoading: Bool = false,
          disabled: Bool = false,
-         probeID: String? = nil) {
+         probeID: String) {
         self.label = label
         self._selection = Binding(
             get: { selection.wrappedValue },
@@ -255,7 +255,7 @@ struct Select<Value: Hashable>: View {
         ))
         .onHover { isHovered = $0 }
         .modifier(ProbeSelectTriggerModifier(
-            probeID: probeID.map { "\($0).trigger" },
+            probeID: "\(probeID).trigger",
             label: (label ?? placeholder) + " (打开/关闭下拉)",
             toggle: { toggleOpen() },
             isDisabled: isDisabled
@@ -267,6 +267,7 @@ struct Select<Value: Hashable>: View {
         .overlay(alignment: .topLeading) {
             if isOpen {
                 PopoverContent(
+                    selectProbeID: probeID,
                     options: filteredOptions,
                     searchable: searchable,
                     searchText: $searchText,
@@ -311,6 +312,7 @@ struct Select<Value: Hashable>: View {
 
 /// 下拉内容 — search + 选项列表 + 键盘导航
 private struct PopoverContent<Value: Hashable>: View {
+    let selectProbeID: String   // 外层 Select probeID, 给 search field 拼派生 id
     let options: [HVMUI.SelectOption<Value>]
     let searchable: Bool
     @Binding var searchText: String
@@ -328,7 +330,8 @@ private struct PopoverContent<Value: Hashable>: View {
                     text: $searchText,
                     placeholder: "搜索...",
                     size: .sm,
-                    icon: "magnifyingglass"
+                    icon: "magnifyingglass",
+                    probeID: "\(selectProbeID).search"
                 )
                 .padding(HVMTheme.space.sm)
                 .focused($searchFocused)
@@ -460,13 +463,13 @@ private struct PopoverContent<Value: Hashable>: View {
 /// Trigger 按钮的 implicit probe — <probeID>.trigger 接 .button(toggleOpen).
 /// 让 hvm-dbg gui click <probeID>.trigger 能展开/收起下拉, 自动化测下拉内容用.
 private struct ProbeSelectTriggerModifier: ViewModifier {
-    let probeID: String?
+    let probeID: String
     let label: String
     let toggle: @MainActor @Sendable () -> Void
     let isDisabled: Bool
 
     func body(content: Content) -> some View {
-        if let probeID, !isDisabled {
+        if !isDisabled {
             content.hvmProbe(
                 id: probeID,
                 label: label,
@@ -482,14 +485,14 @@ private struct ProbeSelectTriggerModifier: ViewModifier {
 /// 必须 @Binding selection + options 数组才能在 getter / setter closure 里动态算
 /// 最新值; 如果传 snapshot 字符串, ProbeRegistry.register 之后值不再更新.
 private struct ProbeSelectModifier<Value: Hashable>: ViewModifier {
-    let probeID: String?
+    let probeID: String
     let label: String
     @Binding var selection: Value?
     let options: [HVMUI.SelectOption<Value>]
     let isDisabled: Bool
 
     func body(content: Content) -> some View {
-        if let probeID, !isDisabled {
+        if !isDisabled {
             content.hvmProbe(
                 id: probeID,
                 label: label,

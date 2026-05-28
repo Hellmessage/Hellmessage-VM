@@ -39,14 +39,14 @@ struct Toggle: View {
     @Binding private var isOn: Bool
     private let size: ToggleSize
     private let isDisabled: Bool
-    private let probeID: String?
+    private let probeID: String
 
     init(_ label: String? = nil,
          isOn: Binding<Bool>,
          hint: String? = nil,
          size: ToggleSize = .md,
          disabled: Bool = false,
-         probeID: String? = nil) {
+         probeID: String) {
         self.label = label
         self._isOn = isOn
         self.hint = hint
@@ -198,13 +198,13 @@ struct Toggle: View {
 /// hvm-dbg gui click --identifier X 走 setter(!isOn); gui read --identifier X
 /// 走 getter 返 "true"/"false".
 private struct ProbeToggleModifier: ViewModifier {
-    let probeID: String?
+    let probeID: String
     let label: String
     @Binding var isOn: Bool
     let isDisabled: Bool
 
     func body(content: Content) -> some View {
-        if let probeID, !isDisabled {
+        if !isDisabled {
             content.hvmProbe(
                 id: probeID,
                 label: label,

@@ -5,7 +5,7 @@
 > 跟 [docs/v1/ROADMAP.md](v1/ROADMAP.md) 不同 — ROADMAP 是历史 v2 残余清单, 已基本归档.
 > 本文件聚焦**当前进行中**的工作 + **新发现的待办**.
 >
-> **最后更新**: 2026-05-29 (PR-C6 已合, Phase C 进度 6/8)
+> **最后更新**: 2026-05-29 (PR-C7 已合, Phase C 进度 7/8, 剩 C8 收尾)
 
 ---
 
@@ -23,7 +23,7 @@
 - [x] **C4** HVMUI.Select (下拉 + 搜索 + 键盘导航 + generic value + probe) — commit `0d76252`, fixes `f0d4787` `03dbdaf` `94b9770` `458828a` `d6fbc6d`
 - [x] **C5** HVMUI.Section + HVMUI.Divider + HVMUI.Badge (业务页骨架基石; layered shadow + double border + 6 variant Badge + h/v Divider) — commit `5a23c51`
 - [x] **C6** HVMUI.Icon (5 size + 9 color) + HVMUI.KbdHint (typed Key enum + size) + HVMUI.Tooltip (自绘 hover 500ms delay + 4 edge + 可选 kbd hint) — 辅助组件
-- [ ] **C7** Probe 命名规范固化 — `<scene>.<role>.<element>` 落进 docs/v3/HVM_DBG_GUI_PROTOCOL.md
+- [x] **C7** probeID 必传 (breaking change: 6 组件 `probeID: String?` → `probeID: String`) + 派生 probe id (Select trigger/search) + 命名规范 `<scene>.<role>.<element>` 升进 NEW_GUI.md R6 + CLAUDE.md "UI 控件使用约束" 节
 - [ ] **C8** Components Showcase 整理 — 当前 NewGUIRootView 已是 Showcase, 末轮做 visual regression baseline 截图存档
 
 ### Phase D (Dialog) — 全待

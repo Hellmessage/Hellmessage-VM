@@ -406,16 +406,26 @@ PR-L1 lint script 会扫整个 `app/Sources/HVM/GUI/` 拦 (Components 内对应�
   - 自定义 hint icon button (例 SecureField 的 eye toggle) 独立 `.accessibilityLabel`
 - **focus ring 视觉**: focus 时 ring 0 → 2px 渐现 (200ms `HVMTheme.motion.easeOut`), 用 `HVMTheme.color.borderFocus` (青 60%); error 态接管, focus ring 让位
 
-### R6. probe 接入 (HDP-GUI 自动化测试)
+### R6. probe 接入 (HDP-GUI 自动化测试) — **强制 probeID** (PR-C7 升级)
 
-- 所有交互组件支持可选 `probeID: String?` 参数. 非 nil + 未 `isDisabled` 时通过 fileprivate `ProbeXxxModifier` 挂 `.hvmProbe(id:label:action:.<role>)`
+- **所有交互组件 `probeID: String` 必传** (不再是可选). 业务侧每个实例都得给唯一 probe id, 编译期 enforce
+  - 影响组件: HVMUI.Button / TextField / SecureField / Toggle / Checkbox / Select
+  - 不影响 (非交互): Section / Divider / Badge / Icon / KbdHint / Tooltip
+- `isDisabled` 时跳过 probe 注册 (即使 probeID 已传), 防 hvm-dbg gui click disabled 控件触发副作用
 - ProbeAction role 对应:
   - Button → `.button(action)`
-  - TextField / SecureField → `.textField(getter, setter)` (binding 透传)
+  - TextField / SecureField / Select → `.textField(getter, setter)` (Select 用 label string 通路, 见 HVMUISelect.swift 注释)
   - Toggle / Checkbox → `.toggle(getter, setter)`
-  - Select → 复用 `.button(action)` + 后续可扩 `.select`
-- 命名规范 `<scene>.<role>.<element>` (例 `dialog.encrypt.field.password`, `toolbar.button.create`); Showcase 用 `showcase.<role>.<element>`
+- **派生 probe id**: 复合控件 (例如 Select 内含 trigger button + search field) 派生子 id, 用 `.suffix` 模式:
+  - `<select.probeID>.trigger` — Select trigger button (自动派生, 业务侧不传)
+  - `<select.probeID>.search`  — Select 内 search field (自动派生)
+- **命名规范** `<scene>.<role>.<element>`:
+  - 业务页例: `dialog.encrypt.field.password` / `toolbar.button.create` / `detail.section.network.toggle.bridged` / `vmlist.row.item-<vmID>`
+  - Showcase: `showcase.<role>.<element>` (`showcase.button.save.md`, `showcase.toggle.network`)
+  - **唯一性**: 同 view 树内不重复; disabled / loading 实例也要唯一 id (虽然 probe 不注册, 但保持 codebase 习惯)
 - 业务侧 closure / binding 必须 `@MainActor @Sendable` (跟 ProbeAction 签名对齐, init 类型也要标)
+
+**为什么强制**: 业务侧偷懒不传 probeID 会让 hvm-dbg gui 自动化覆盖率漏斗, 业务页接入 dialog 后再补麻烦. 必传让 "每个可点 / 可输 / 可切控件都能被自动化测" 成为编译期保证.
 
 ### R7. 模块化 / 可组合
 

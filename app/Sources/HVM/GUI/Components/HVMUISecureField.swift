@@ -29,7 +29,7 @@ struct SecureField: View {
     private let errorMessage: String?
     private let isLoading: Bool
     private let isDisabled: Bool
-    private let probeID: String?
+    private let probeID: String
     private let onSubmit: (@MainActor @Sendable () -> Void)?
 
     init(_ label: String? = nil,
@@ -41,7 +41,7 @@ struct SecureField: View {
          errorMessage: String? = nil,
          isLoading: Bool = false,
          disabled: Bool = false,
-         probeID: String? = nil,
+         probeID: String,
          onSubmit: (@MainActor @Sendable () -> Void)? = nil) {
         self.label = label
         self._text = text
@@ -151,13 +151,13 @@ struct SecureField: View {
 }  // extension HVMUI 结束
 
 private struct ProbeSecureFieldModifier: ViewModifier {
-    let probeID: String?
+    let probeID: String
     let label: String
     @Binding var text: String
     let isDisabled: Bool
 
     func body(content: Content) -> some View {
-        if let probeID, !isDisabled {
+        if !isDisabled {
             content.hvmProbe(
                 id: probeID,
                 label: label,

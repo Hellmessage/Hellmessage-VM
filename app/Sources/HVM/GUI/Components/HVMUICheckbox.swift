@@ -37,14 +37,14 @@ struct Checkbox: View {
     private let indeterminate: Bool
     private let size: CheckboxSize
     private let isDisabled: Bool
-    private let probeID: String?
+    private let probeID: String
 
     init(_ label: String? = nil,
          isOn: Binding<Bool>,
          indeterminate: Bool = false,
          size: CheckboxSize = .md,
          disabled: Bool = false,
-         probeID: String? = nil) {
+         probeID: String) {
         self.label = label
         self._isOn = isOn
         self.indeterminate = indeterminate
@@ -181,13 +181,13 @@ struct Checkbox: View {
 }  // extension HVMUI 结束
 
 private struct ProbeCheckboxModifier: ViewModifier {
-    let probeID: String?
+    let probeID: String
     let label: String
     @Binding var isOn: Bool
     let isDisabled: Bool
 
     func body(content: Content) -> some View {
-        if let probeID, !isDisabled {
+        if !isDisabled {
             content.hvmProbe(
                 id: probeID,
                 label: label,
