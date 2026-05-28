@@ -201,11 +201,21 @@ final class DetailContainerView: NSView {
 
     /// 主窗口的 QEMU 嵌入 view, 当对应 VM 已弹出独立窗口时, 主窗口让出 mouse/key
     /// 捕获 — 让用户操作完全发生在独立窗口里. dialog active 时同样让出 (避免 dialog 上看不见鼠标).
+    ///
+    /// **z-order 修复**: `FramebufferHostView` 是 MTKView (CAMetalLayer), 实测跟兄弟
+    /// CALayer (dialog overlay) 合成时 z-order 不稳, dialog 经常被 framebuffer 覆盖
+    /// (即便 subview 顺序 + zPosition 都让 overlay 在上). 最稳的做法是 dialogActive=true
+    /// 时直接 `isHidden = true` 把 MTKView 整个从合成树里摘掉, dialog 就能完整显示;
+    /// dismiss 后还原. 副作用: dialog 期间 VM 桌面看不见 (但 VM 仍在跑, 输入也被 inputCaptureEnabled=false
+    /// 截掉, 跟用户预期一致).
     private func syncEmbeddedInputCapture() {
         guard let view = currentQemuFanoutView,
               let id = currentQemuFanoutVMID else { return }
         let detached = model.detachedQemuVMs.contains(id)
         view.inputCaptureEnabled = !detached && !dialogActive
+        view.isHidden = dialogActive
+        // MTKView 暂停 displayLink 节省 CPU (隐藏时反正不需要画帧)
+        view.isPaused = dialogActive
     }
 
     /// 比较两份 VMConfig, 忽略 `networks` 字段. 用于 refresh() 决定是否需要重建 stopped host:
@@ -493,6 +503,8 @@ final class DetailContainerView: NSView {
         // 走 FramebufferRenderer letterbox 等比缩放显示 guest 原始尺寸.
         // 想动态改 guest 分辨率请走独立窗口 (DetachedVMWindowController = master).
         fanout.addSubscriber(fbView, isResizeMaster: false)
+        // 若 dialog 当前已 active (rebuild 期间冲突场景), 立即应用 hidden / 输入截断
+        syncEmbeddedInputCapture()
     }
 
     private func makeHorizontalDivider() -> NSView {
