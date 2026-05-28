@@ -389,6 +389,23 @@ Agent (Claude Code 等) 跨 session / 跨电脑都要保留, 写入项目 CLAUDE
 - 完成时 `[ ] → [x]` + 加 commit hash 引用 (跟主 commit 一起回写, 见上条约束)
 - "下个 session 记得做 X" 这种话不允许出现 — 必须落 TODO.md
 
+### commit 前先询问用户, 不自动 commit
+
+改动落地 + verify 通过后, **不**自动 `git commit`. 报告 "改动 + verify 结果", 让用户决定是否 commit / 是否调整 commit message / 是否合并到上一个 commit (amend / squash).
+
+- 用户可能想看完效果再 commit (例如 GUI 视觉验证需要真鼠标 hover 试)
+- 用户可能想分批 / 一次性 commit 多个相关改动 (减少 git log 噪音)
+- 用户可能想撤回某改动 (没 commit 比 reset 已 commit 容易)
+- 自动 commit 让用户失去 staging 决策权, 反复出现 commit→reset→re-commit 浪费时间
+
+操作:
+- 改动 + verify (make build / screenshot / hvm-dbg gui 等) 后, 输出"改动汇总 + verify 结果", 询问 "要 commit 吗"
+- 用户明确说 "commit" / "落进 commit" / "提交" 才执行 `git commit`
+- 用户继续给新需求时, 沿用已 staged 改动累积, 等 batch 完成后再统一询问
+- 已合 PR (用户已确认 commit 的) 后续 polish 不在此约束内, 但仍提示一下
+
+**例外**: 用户明确说 "做完直接 commit" / "自动 commit 不用问" 时, 该 session 内可自动 commit. 默认仍需询问.
+
 ### 参考实现: UTM, 不再参考 hell-vm
 
 凡是 "其他 QEMU app / SPICE / vdagent / Win driver 怎么做" 问题, **默认查 UTM 源码**.

@@ -66,6 +66,7 @@ fileprivate struct TooltipModifier: ViewModifier {
     @State private var isHovered = false
     @State private var showTooltip = false
     @State private var pendingTask: Task<Void, Never>?
+    @State private var tooltipSize: CGSize = .zero
 
     func body(content: Content) -> some View {
         content
@@ -88,17 +89,32 @@ fileprivate struct TooltipModifier: ViewModifier {
                 if showTooltip {
                     TooltipContent(text: text, kbd: kbd)
                         .fixedSize()
-                        // alignmentGuide 用 tooltip 实际 dimension (height/width) 算
-                        // 位置, 比 hardcode magic number 准: 不论 tooltip 内容长短
-                        // 都能精准浮在 trigger 外侧 + gap 间距. 替代之前 offset hack.
-                        .modifier(TooltipPositionModifier(edge: edge, gap: tooltipGap))
+                        // GeometryReader 拿 tooltip 实际渲染 size, 上传 @State
+                        // 用 onAppear/onChange (PreferenceKey 跨 overlay 边界传
+                        // 不上, 实测 macOS 14 上 onPreferenceChange 不触发)
+                        .background(
+                            GeometryReader { proxy in
+                                Color.clear
+                                    .onAppear { tooltipSize = proxy.size }
+                                    .onChange(of: proxy.size) { _, new in
+                                        tooltipSize = new
+                                    }
+                            }
+                        )
+                        // offset 推 tooltip 整体出 trigger 外侧 + gap 间距.
+                        // overlay alignment 让 tooltip 跟 trigger 同 edge 对齐
+                        // (默认重叠), offset 用 tooltipSize 把它推出去.
+                        // 首帧 tooltipSize=0 时 offset=(0,0) tooltip 跟 trigger
+                        // 重叠一闪, 第二帧 size 更新后跳到正确位置. 可接受.
+                        .offset(offsetForEdge)
                         .transition(.opacity.combined(with:
                             .scale(scale: 0.95, anchor: scaleAnchor)))
                         .zIndex(2000)
-                        .allowsHitTesting(false)  // tooltip 不挡 trigger 自身 hit
+                        .allowsHitTesting(false)
                 }
             }
             .animation(HVMTheme.motion.easeOut, value: showTooltip)
+            .animation(HVMTheme.motion.easeOut, value: tooltipSize)
     }
 
     private var tooltipGap: CGFloat { HVMTheme.space.sm }
@@ -120,30 +136,20 @@ fileprivate struct TooltipModifier: ViewModifier {
         case .trailing: return .leading
         }
     }
-}
 
-/// 根据 edge 用 SwiftUI .alignmentGuide 把 tooltip 推到 trigger 外侧 + gap.
-/// 关键: alignmentGuide closure 拿到的 ViewDimensions 是 tooltip 实际 dimension
-/// (来自 .fixedSize), 不需要 hardcode tooltip 高度 / 宽度.
-fileprivate struct TooltipPositionModifier: ViewModifier {
-    let edge: Edge
-    let gap: CGFloat
-
-    func body(content: Content) -> some View {
+    /// 用 tooltip 实际 size 算 offset 把 tooltip 整体推到 trigger 外侧 + gap.
+    /// overlay alignment 让 tooltip 跟 trigger 同 edge 对齐 (默认重叠), offset
+    /// 沿 edge 反方向推出 tooltipSize.dim + gap 距离.
+    private var offsetForEdge: CGSize {
         switch edge {
         case .top:
-            // tooltip.top alignment marker 设到 view 底部下方 gap 处. overlay
-            // (.top) 让 marker 对齐 trigger.top → tooltip 整体上移 (height+gap),
-            // 等于 tooltip 完全在 trigger 上方 + gap 间距.
-            content.alignmentGuide(.top) { $0.height + gap }
+            return CGSize(width: 0, height: -tooltipSize.height - tooltipGap)
         case .bottom:
-            // tooltip.bottom marker 设到 view 顶部上方 gap 处. overlay (.bottom)
-            // 让 marker 对齐 trigger.bottom → tooltip 整体下移 + gap 间距.
-            content.alignmentGuide(.bottom) { _ in -gap }
+            return CGSize(width: 0, height: tooltipSize.height + tooltipGap)
         case .leading:
-            content.alignmentGuide(.leading) { $0.width + gap }
+            return CGSize(width: -tooltipSize.width - tooltipGap, height: 0)
         case .trailing:
-            content.alignmentGuide(.trailing) { _ in -gap }
+            return CGSize(width: tooltipSize.width + tooltipGap, height: 0)
         }
     }
 }
