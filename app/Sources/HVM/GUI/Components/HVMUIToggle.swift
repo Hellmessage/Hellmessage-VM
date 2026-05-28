@@ -132,15 +132,23 @@ struct Toggle: View {
         }
     }
 
-    /// 容器 bg — disabled 时走 bgDisabled (亮一档灰), 跟主底 #08090A 有清晰轮廓.
-    /// 不用 .opacity(0.4) 整 view 降透 — 深底上容器会跟主底压成一片.
+    /// 容器 bg.
+    /// off 用 bgOverlay (#18191B) 而不是 bgRaised — sectionCard 已经是 bgRaised,
+    /// 跟 sectionCard 同色容器会跟卡片 bg 融合, 仅靠白圆点能看出形, 整体轮廓不清晰.
+    /// bgOverlay 比 bgRaised 亮一档, 在 sectionCard 内嵌入时轮廓明显.
     private var sliderBg: Color {
         if isDisabled { return HVMTheme.color.bgDisabled }
-        return isOn ? HVMTheme.color.accent : HVMTheme.color.bgRaised
+        return isOn ? HVMTheme.color.accent : HVMTheme.color.bgOverlay
     }
 
     private var dotColor: Color {
         isDisabled ? HVMTheme.color.textTertiary : HVMTheme.color.textPrimary
+    }
+
+    private var borderColor: Color {
+        if isDisabled { return HVMTheme.color.borderDefault }
+        if isOn { return HVMTheme.color.transparent }
+        return HVMTheme.color.borderEmphasis
     }
 
     private var slider: some View {
@@ -156,11 +164,11 @@ struct Toggle: View {
                         .opacity(isHovered && !isOn ? 1 : 0)
                 )
                 .overlay(
-                    // 默认边框 (off 态可见, on 态用 accent 自己代替)
+                    // 边框: off 用 borderEmphasis (强一档, 让 off 容器在 sectionCard
+                    // 内有清晰轮廓); on 态 accent 已经够亮跳过描边; disabled 保留弱
+                    // borderDefault 让"灰化"感成立
                     RoundedRectangle(cornerRadius: size.height / 2)
-                        .stroke(isOn && !isDisabled ? HVMTheme.color.transparent
-                                                    : HVMTheme.color.borderDefault,
-                                lineWidth: HVMTheme.border.hairline)
+                        .stroke(borderColor, lineWidth: HVMTheme.border.hairline)
                 )
                 .overlay(focusRing)
 

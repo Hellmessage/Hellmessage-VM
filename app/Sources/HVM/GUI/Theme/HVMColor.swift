@@ -27,9 +27,13 @@ extension HVMTheme {
         static let textOnAccent  = Color(hex: 0x0A0A0A)
 
         // 边框
-        static let borderDefault = Color(hex: 0xFFFFFF, alpha: 0.08)
-        static let borderFocus   = Color(hex: 0x06B6D4, alpha: 0.6)
-        static let borderError   = Color(hex: 0xEF4444, alpha: 0.6)
+        static let borderDefault  = Color(hex: 0xFFFFFF, alpha: 0.08)
+        // borderEmphasis: 比 borderDefault 强一档, 给在 sectionCard (bgRaised) 内嵌入
+        // 的控件 (Toggle / Checkbox off 态) 用 — 普通 borderDefault 在 bgRaised 上
+        // 太弱 (0.08), 跟卡片 bg 同色容器轮廓出不来
+        static let borderEmphasis = Color(hex: 0xFFFFFF, alpha: 0.16)
+        static let borderFocus    = Color(hex: 0x06B6D4, alpha: 0.6)
+        static let borderError    = Color(hex: 0xEF4444, alpha: 0.6)
 
         // accent (青)
         static let accent       = Color(hex: 0x06B6D4)

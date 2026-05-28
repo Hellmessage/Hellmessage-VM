@@ -161,7 +161,8 @@ struct Checkbox: View {
         // 没 border 又没 accent bg, 在 bgDisabled 上靠 textTertiary 勾撑形太弱
         if isDisabled { return HVMTheme.color.borderDefault }
         if isMarked { return HVMTheme.color.transparent }
-        return HVMTheme.color.borderDefault
+        // off 态用 borderEmphasis 让在 sectionCard (bgRaised) 内的方框轮廓清晰
+        return HVMTheme.color.borderEmphasis
     }
 
     private var iconColor: Color {
