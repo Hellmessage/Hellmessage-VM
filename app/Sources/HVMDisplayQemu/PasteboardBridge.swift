@@ -103,14 +103,36 @@ public final class PasteboardBridge {
             return
         }
 
-        // 只关心 string. 其他类型 (图片 / 文件) 暂不支持.
-        guard let text = pb.string(forType: .string), !text.isEmpty else {
-            // 用户清空了 host pasteboard / 复制了非文本 — 通知 guest release
+        // 同时取 text + image PNG. 任一非空就推 guest, 全空就 release.
+        // GRAB 会广告所有有内容的 mime, guest REQUEST 时按需取.
+        let text: String? = pb.string(forType: .string)
+        let image: Data? = Self.readImagePNG(pb)
+        let hasText = (text?.isEmpty == false)
+        let hasImage = (image != nil)
+        if !hasText && !hasImage {
+            // 用户清空了 host pasteboard / 复制了不识别的类型 — 通知 guest release
             vdagent.sendClipboardRelease()
             return
         }
-        log.info("PasteboardBridge host → guest (\(text.utf8.count) bytes utf8)")
-        vdagent.sendClipboardText(text)
+        let textBytes = text?.utf8.count ?? 0
+        let imageBytes = image?.count ?? 0
+        log.info("PasteboardBridge host → guest text=\(textBytes) bytes image=\(imageBytes) bytes")
+        fputs("HVMHost(qemu): PasteboardBridge host→guest text=\(textBytes)B image=\(imageBytes)B\n", stderr)
+        vdagent.sendClipboardData(text: hasText ? text : nil,
+                                   image: hasImage ? image : nil)
+    }
+
+    /// 读 NSPasteboard 的 image 数据, 转 PNG. 支持类型: PNG (现代 macOS 截图, Chromium, Safari);
+    /// TIFF (老 app, 部分图像 app) → 走 NSBitmapImageRep 转 PNG.
+    /// 其他类型 (HEIC / RAW / 矢量) 返 nil 让 caller 当无图.
+    private static func readImagePNG(_ pb: NSPasteboard) -> Data? {
+        if let png = pb.data(forType: .png) { return png }
+        if let tiff = pb.data(forType: .tiff),
+           let rep = NSBitmapImageRep(data: tiff),
+           let png = rep.representation(using: .png, properties: [:]) {
+            return png
+        }
+        return nil
     }
 
     // MARK: - guest → host

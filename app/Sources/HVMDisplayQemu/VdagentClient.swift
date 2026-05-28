@@ -78,9 +78,12 @@ public final class VdagentClient: @unchecked Sendable {
     // selection 编号 (CLIPBOARD = 通用剪贴板, Win/Mac 唯一; PRIMARY/SECONDARY 是 X11 概念)
     private static let SELECTION_CLIPBOARD: UInt8 = 0
 
-    // mime type 编号
-    private static let MIME_NONE: UInt32       = 0
-    private static let MIME_UTF8_TEXT: UInt32  = 1
+    // mime type 编号 (按 spice-protocol/spice/vd_agent.h VDAgentClipboardFormat)
+    private static let MIME_NONE: UInt32        = 0
+    private static let MIME_UTF8_TEXT: UInt32   = 1
+    private static let MIME_IMAGE_PNG: UInt32   = 2
+    // 未实现: MIME_IMAGE_BMP=3, MIME_IMAGE_TIFF=4, MIME_IMAGE_JPG=5
+    // 未实现: MIME_FILE_LIST=6 (UTM 风格 paste-where-you-paste 文件粘贴, 推后单独提案)
 
     // MARK: - 状态
 
@@ -195,20 +198,34 @@ public final class VdagentClient: @unchecked Sendable {
         }
     }
 
-    /// host pasteboard 变化时调: GRAB → 等 guest REQUEST → 发 CLIPBOARD 数据.
-    /// 实现简化: 我们直接同时把 GRAB + DATA 缓存在 client 内, 收 REQUEST 时翻出.
+    /// host pasteboard 变化时调: GRAB 广告所有有内容的 mime (text / image PNG / ...) →
+    /// 等 guest REQUEST → 发 CLIPBOARD 数据. 实现简化: 我们直接把 GRAB + 所有 mime DATA
+    /// 缓存在 client 内, 收 REQUEST 时按 mime 翻出.
     /// 没收 REQUEST 也不重发 (每次新内容覆盖旧的).
-    public func sendClipboardText(_ text: String) {
+    ///
+    /// 老 sendClipboardText(_:) 接口废弃, 改 sendClipboardData(text:image:); 两者 nil
+    /// 等于 release.
+    public func sendClipboardData(text: String?, image: Data?) {
         queue.async { [weak self] in
             guard let self else { return }
-            self.pendingHostText = text
+            self.pendingHostText = (text?.isEmpty == false) ? text : nil
+            self.pendingHostImage = (image?.isEmpty == false) ? image : nil
             self.ensureConnectedLocked()
             guard self.sockFD >= 0, self.capsNegotiated else {
-                log.info("vdagent clipboard GRAB pending (caps not negotiated yet)")
+                log.info("vdagent clipboard GRAB pending (caps not negotiated yet, text=\(text != nil) image=\(image != nil))")
                 return
             }
-            self.sendGrabLocked()
+            if self.pendingHostText == nil && self.pendingHostImage == nil {
+                self.sendReleaseLocked()
+            } else {
+                self.sendGrabLocked()
+            }
         }
+    }
+
+    /// 兼容旧 API (仍被部分调用方用). 走新 sendClipboardData(text:image:).
+    public func sendClipboardText(_ text: String) {
+        sendClipboardData(text: text, image: nil)
     }
 
     /// host 端剪贴板被清空 / 离场: 通知 guest 释放它持有的 host 端 mirror.
@@ -217,18 +234,25 @@ public final class VdagentClient: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self else { return }
             self.pendingHostText = nil
-            guard self.sockFD >= 0, self.capsNegotiated else { return }
-            var body = Data()
-            if self.useSelectionPrefix {
-                body.append(VdagentClient.SELECTION_CLIPBOARD)
-                body.append(0); body.append(0); body.append(0)
-            }
-            self.sendMessageLocked(type: VdagentClient.VD_AGENT_CLIPBOARD_RELEASE, payload: body)
+            self.pendingHostImage = nil
+            self.sendReleaseLocked()
         }
     }
 
-    /// 仅 queue 内访问: host 这边正在持有 (尚未发送 / 等 guest REQUEST) 的 UTF-8 文本.
+    private func sendReleaseLocked() {
+        guard sockFD >= 0, capsNegotiated else { return }
+        var body = Data()
+        if useSelectionPrefix {
+            body.append(VdagentClient.SELECTION_CLIPBOARD)
+            body.append(0); body.append(0); body.append(0)
+        }
+        sendMessageLocked(type: VdagentClient.VD_AGENT_CLIPBOARD_RELEASE, payload: body)
+    }
+
+    /// 仅 queue 内访问: host 这边正在持有 (尚未发送 / 等 guest REQUEST) 的内容.
+    /// text + image 双轨, GRAB 同时广告两边 mime, guest 自己挑 REQUEST 哪个.
     private var pendingHostText: String?
+    private var pendingHostImage: Data?    // PNG bytes
 
     // MARK: - FILE_XFER 公共 API
 
@@ -358,6 +382,7 @@ public final class VdagentClient: @unchecked Sendable {
         capsNegotiated = false
         remoteCaps = 0
         pendingHostText = nil
+        pendingHostImage = nil
     }
 
     /// queue 内调用: 没连或断了就 lazy 重连一次.
@@ -367,27 +392,63 @@ public final class VdagentClient: @unchecked Sendable {
 
     // MARK: - 内部: 写消息
 
-    /// queue 内调用. 构造 chunk + message header 后整包写出.
+    /// SPICE 单 chunk body 上限 (VD_AGENT_MAX_DATA). 超过 → 切多 chunk.
+    /// 跟 fileXferChunkSize (2000, 用于 DATA chunk 内 payload) 不同 — 这个是 chunk
+    /// body 整体上限 (含 message header 20B + payload 字节数).
+    private static let chunkBodyMaxBytes: Int = 2048
+
+    /// queue 内调用. 把 message 切多 chunk 发出去 (chunk body ≤ 2048).
+    /// chunk 1 = chunk_hdr(8B) + msg_hdr(20B) + payload[0..maxFirstChunkData)
+    /// chunk N = chunk_hdr(8B) + payload[next..next+maxChunkData)
+    /// msg_hdr.size = 整个 payload 长度 (不是 chunk 长度); chunk_hdr.size = 本 chunk body 长.
+    /// 接收端 (runReadLoop) 已支持多 chunk reassembly, 这里 send 路径补齐.
     /// 失败 → close + 下次 lazy 重连.
     private func sendMessageLocked(type: UInt32, payload: Data) {
-        var msgBuf = Data(capacity: 20 + payload.count)
-        VdagentClient.appendU32(VdagentClient.VD_AGENT_PROTOCOL, to: &msgBuf)
-        VdagentClient.appendU32(type, to: &msgBuf)
-        VdagentClient.appendU64(0, to: &msgBuf)
-        VdagentClient.appendU32(UInt32(payload.count), to: &msgBuf)
-        msgBuf.append(payload)
+        let msgHeaderSize = 20
+        let maxFirstChunkData = VdagentClient.chunkBodyMaxBytes - msgHeaderSize  // 2028
+        let maxNextChunkData = VdagentClient.chunkBodyMaxBytes                   // 2048
 
-        var chunkBuf = Data(capacity: 8 + msgBuf.count)
-        VdagentClient.appendU32(VdagentClient.VDP_CLIENT_PORT, to: &chunkBuf)
-        VdagentClient.appendU32(UInt32(msgBuf.count), to: &chunkBuf)
-        chunkBuf.append(msgBuf)
-
-        if !sendAll(chunkBuf) {
-            log.warning("vdagent send type=\(type) failed errno=\(errno), 关连接等下次 lazy 重连")
-            // 关 socket 让 read loop 自然退出; 下次 send 触发 lazy 重连
+        // Chunk 1: msg header + first slice of payload
+        let firstDataLen = min(payload.count, maxFirstChunkData)
+        var firstBody = Data(capacity: msgHeaderSize + firstDataLen)
+        VdagentClient.appendU32(VdagentClient.VD_AGENT_PROTOCOL, to: &firstBody)
+        VdagentClient.appendU32(type, to: &firstBody)
+        VdagentClient.appendU64(0, to: &firstBody)
+        VdagentClient.appendU32(UInt32(payload.count), to: &firstBody)  // 总长度, 不是本 chunk
+        if firstDataLen > 0 {
+            firstBody.append(payload.prefix(firstDataLen))
+        }
+        if !sendChunkLocked(body: firstBody) {
+            log.warning("vdagent send type=\(type) chunk1 failed errno=\(errno), 关连接等下次 lazy 重连")
             if sockFD >= 0 { Darwin.close(sockFD); sockFD = -1 }
             capsNegotiated = false
+            return
         }
+
+        // Chunks 2..N: payload 剩余切片
+        var offset = firstDataLen
+        while offset < payload.count {
+            let len = min(payload.count - offset, maxNextChunkData)
+            let chunkBody = payload.subdata(in: offset..<(offset + len))
+            if !sendChunkLocked(body: chunkBody) {
+                log.warning("vdagent send type=\(type) chunkN offset=\(offset) failed errno=\(errno), 关连接")
+                if sockFD >= 0 { Darwin.close(sockFD); sockFD = -1 }
+                capsNegotiated = false
+                return
+            }
+            offset += len
+        }
+    }
+
+    /// 单 chunk send: chunk_header(8B port+size) + body. 不做切分, 调用方保证 body ≤ chunkBodyMaxBytes.
+    /// 失败返 false (调用方需关 socket).
+    @discardableResult
+    private func sendChunkLocked(body: Data) -> Bool {
+        var chunkBuf = Data(capacity: 8 + body.count)
+        VdagentClient.appendU32(VdagentClient.VDP_CLIENT_PORT, to: &chunkBuf)
+        VdagentClient.appendU32(UInt32(body.count), to: &chunkBuf)
+        chunkBuf.append(body)
+        return sendAll(chunkBuf)
     }
 
     private func sendCapabilitiesLocked(request: UInt32) {
@@ -403,15 +464,24 @@ public final class VdagentClient: @unchecked Sendable {
     /// queue 内调用. 发 GRAB 声明 host 端有 UTF-8 文本.
     /// useSelectionPrefix=true 数据布局: selection(1B) + pad(3B) + N × uint32 mime types
     /// useSelectionPrefix=false 直接: N × uint32 mime types (Win 版 vdagent 走这条)
+    /// queue 内调用. 发 GRAB 声明 host 端有哪些 mime 可用. 同时广告 text + image PNG,
+    /// guest 按需 REQUEST 哪条 mime (Telegram 优先 image, Notepad 优先 text).
     private func sendGrabLocked() {
+        var mimes: [UInt32] = []
+        if pendingHostText  != nil { mimes.append(VdagentClient.MIME_UTF8_TEXT) }
+        if pendingHostImage != nil { mimes.append(VdagentClient.MIME_IMAGE_PNG) }
+        guard !mimes.isEmpty else { return }
+
         var body = Data()
         if useSelectionPrefix {
             body.append(VdagentClient.SELECTION_CLIPBOARD)
             body.append(0); body.append(0); body.append(0)
         }
-        VdagentClient.appendU32(VdagentClient.MIME_UTF8_TEXT, to: &body)
+        for m in mimes {
+            VdagentClient.appendU32(m, to: &body)
+        }
         sendMessageLocked(type: VdagentClient.VD_AGENT_CLIPBOARD_GRAB, payload: body)
-        log.info("vdagent CLIPBOARD_GRAB sent (mime=utf8, selPrefix=\(self.useSelectionPrefix, privacy: .public))")
+        log.info("vdagent CLIPBOARD_GRAB sent mimes=\(mimes, privacy: .public) selPrefix=\(self.useSelectionPrefix, privacy: .public)")
     }
 
     /// queue 内调用. 发 REQUEST 让 guest 发剪贴板内容过来.
@@ -439,6 +509,20 @@ public final class VdagentClient: @unchecked Sendable {
         body.append(contentsOf: utf8)
         sendMessageLocked(type: VdagentClient.VD_AGENT_CLIPBOARD, payload: body)
         log.info("vdagent CLIPBOARD data sent sel=\(selection, privacy: .public) (\(utf8.count, privacy: .public) bytes utf8) selPrefix=\(self.useSelectionPrefix, privacy: .public)")
+    }
+
+    /// queue 内调用. 发 CLIPBOARD 数据 (PNG 图片) 应答 guest 的 REQUEST.
+    /// 大 image (几 MB) 走 sendMessageLocked 的多 chunk 切分, 接收端自动 reassembly.
+    private func sendClipboardImageLocked(image: Data, selection: UInt8 = SELECTION_CLIPBOARD) {
+        var body = Data(capacity: 4 + 4 + image.count)
+        if useSelectionPrefix {
+            body.append(selection)
+            body.append(0); body.append(0); body.append(0)
+        }
+        VdagentClient.appendU32(VdagentClient.MIME_IMAGE_PNG, to: &body)
+        body.append(image)
+        sendMessageLocked(type: VdagentClient.VD_AGENT_CLIPBOARD, payload: body)
+        log.info("vdagent CLIPBOARD data sent sel=\(selection, privacy: .public) (PNG \(image.count, privacy: .public) bytes) selPrefix=\(self.useSelectionPrefix, privacy: .public)")
     }
 
     private func sendAll(_ buf: Data) -> Bool {
@@ -617,7 +701,10 @@ public final class VdagentClient: @unchecked Sendable {
         sendRequestLocked(mime: mime, selection: selection)
     }
 
-    /// guest 发 REQUEST 要 host 端剪贴板内容.
+    /// guest 发 REQUEST 要 host 端剪贴板内容. 按 mime 分派:
+    ///   - UTF8_TEXT (1) → 发 pendingHostText
+    ///   - IMAGE_PNG (2) → 发 pendingHostImage
+    ///   - 其他 → skip log
     private func handleGuestRequestLocked(_ payload: Data) {
         let (selection, mimeOff) = parseSelectionPrefix(payload)
         guard payload.count >= mimeOff + 4 else {
@@ -625,16 +712,24 @@ public final class VdagentClient: @unchecked Sendable {
             return
         }
         let mime = readU32(payload, mimeOff)
-        guard mime == VdagentClient.MIME_UTF8_TEXT else {
-            log.info("vdagent guest REQUEST 非 UTF8_TEXT (mime=\(mime, privacy: .public), sel=\(selection, privacy: .public)), 跳过")
-            return
+        switch mime {
+        case VdagentClient.MIME_UTF8_TEXT:
+            guard let text = pendingHostText else {
+                log.info("vdagent guest REQUEST UTF8_TEXT sel=\(selection, privacy: .public) 但 pendingHostText 为空, skip")
+                return
+            }
+            log.info("vdagent guest REQUEST UTF8_TEXT sel=\(selection, privacy: .public) → 发 CLIPBOARD (\(text.utf8.count, privacy: .public) bytes)")
+            sendClipboardDataLocked(text: text, selection: selection)
+        case VdagentClient.MIME_IMAGE_PNG:
+            guard let img = pendingHostImage else {
+                log.info("vdagent guest REQUEST IMAGE_PNG sel=\(selection, privacy: .public) 但 pendingHostImage 为空, skip")
+                return
+            }
+            log.info("vdagent guest REQUEST IMAGE_PNG sel=\(selection, privacy: .public) → 发 CLIPBOARD (\(img.count, privacy: .public) bytes PNG)")
+            sendClipboardImageLocked(image: img, selection: selection)
+        default:
+            log.info("vdagent guest REQUEST 不支持的 mime=\(mime, privacy: .public), sel=\(selection, privacy: .public), skip")
         }
-        guard let text = pendingHostText else {
-            log.info("vdagent guest REQUEST sel=\(selection, privacy: .public) 但 host pending 为空, 跳过")
-            return
-        }
-        log.info("vdagent guest REQUEST sel=\(selection, privacy: .public) mime=\(mime, privacy: .public), 发 CLIPBOARD (\(text.utf8.count, privacy: .public) bytes)")
-        sendClipboardDataLocked(text: text, selection: selection)
     }
 
     /// guest 真发数据过来了 (host 先 REQUEST 触发, 或 guest 主动 GRAB 后 host REQUEST 的回应).
