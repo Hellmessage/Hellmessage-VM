@@ -185,6 +185,10 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
         isPaused = false
         delegate = self
         setupCaptureOverlay()
+        setupDropOverlay()
+        // host → guest 文件拖放接入 (docs/v3/HOST_FILE_DRAG.md). 复用 Cmd+V 后端通路,
+        // 只接 file URLs (拒非 file URL / 文本 / 图片).
+        registerForDraggedTypes([.fileURL])
     }
 
     @available(*, unavailable)
@@ -699,6 +703,116 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
             bg.topAnchor.constraint(equalTo: self.topAnchor, constant: 10),
         ])
     }
+
+    // MARK: - 文件拖放 (docs/v3/HOST_FILE_DRAG.md)
+    //
+    // 跟 Cmd+V 共一条后端: drag perform 时调 onFilePaste(urls) 闭包, 走同样的
+    // AppModel.pasteFilesToVM → IPC clipboard.paste-files → FilePasteBridge 通路.
+    // 这里只负责:
+    //   1. 接受范围 (仅 fbView, 仅 inputCaptureEnabled + macStyleShortcuts + 有 onFilePaste 闭包)
+    //   2. 视觉反馈 (dropOverlay 半透明黑底 + 中央 hint 文字)
+    //   3. URLs 抽取 (跟 Cmd+V 同 urlReadingFileURLsOnly 过滤)
+
+    /// drag-enter 时显示的中央高亮 hint. setupDropOverlay 创建, draggingEntered / Exited
+    /// 切显隐.
+    private var dropOverlay: NSView?
+    private var dropOverlayLabel: NSTextField?
+
+    private func setupDropOverlay() {
+        let bg = NSView()
+        bg.wantsLayer = true
+        bg.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.45).cgColor
+        bg.layer?.borderWidth = 3
+        bg.layer?.borderColor = NSColor.controlAccentColor.cgColor
+        bg.layer?.cornerRadius = 12
+        bg.translatesAutoresizingMaskIntoConstraints = false
+        bg.isHidden = true
+
+        let label = NSTextField(labelWithString: "")
+        label.font = NSFont.systemFont(ofSize: 18, weight: .semibold)
+        label.textColor = .white
+        label.alignment = .center
+        label.backgroundColor = .clear
+        label.drawsBackground = false
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        bg.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: bg.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: bg.centerYAnchor),
+            label.leadingAnchor.constraint(greaterThanOrEqualTo: bg.leadingAnchor, constant: 20),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: bg.trailingAnchor, constant: -20),
+        ])
+
+        addSubview(bg)
+        NSLayoutConstraint.activate([
+            bg.topAnchor.constraint(equalTo: self.topAnchor, constant: 16),
+            bg.bottomAnchor.constraint(equalTo: self.bottomAnchor, constant: -16),
+            bg.leadingAnchor.constraint(equalTo: self.leadingAnchor, constant: 16),
+            bg.trailingAnchor.constraint(equalTo: self.trailingAnchor, constant: -16),
+        ])
+        dropOverlay = bg
+        dropOverlayLabel = label
+    }
+
+    /// 拖入接受判定 + 视觉反馈. 三条全过才接受:
+    ///   1. inputCaptureEnabled (跟 Cmd+V 同, dialog / detached 副作用一致)
+    ///   2. macStyleShortcuts (用户走 mac 习惯; 关掉就当不 拒)
+    ///   3. onFilePaste 已注入 (运行中 VM 才有这条闭包)
+    ///   4. 拖的 pasteboard 含至少 1 个 file URL
+    public override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        guard let urls = filePasteboardURLs(from: sender), !urls.isEmpty else {
+            return []
+        }
+        showDropOverlay(count: urls.count)
+        return .copy
+    }
+
+    public override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        // dragEnter 已算过, update 用同结果 (不每帧重读 pasteboard, 省 CPU)
+        guard dropOverlay?.isHidden == false else { return [] }
+        return .copy
+    }
+
+    public override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        hideDropOverlay()
+    }
+
+    public override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        defer { hideDropOverlay() }
+        guard let urls = filePasteboardURLs(from: sender), !urls.isEmpty else {
+            return false
+        }
+        guard let onFilePaste else { return false }
+        onFilePaste(urls)
+        return true
+    }
+
+    /// 从 NSDraggingInfo 抽出 file URLs (仅 file URL, 排 https / RTF 等其他 NSURL).
+    /// guard inputCaptureEnabled + macStyleShortcuts + 有闭包; 任一不过返 nil 让 caller 拒.
+    private func filePasteboardURLs(from sender: any NSDraggingInfo) -> [URL]? {
+        guard inputCaptureEnabled, macStyleShortcuts, onFilePaste != nil else { return nil }
+        let pb = sender.draggingPasteboard
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        guard let urls = pb.readObjects(forClasses: [NSURL.self], options: options) as? [URL],
+              !urls.isEmpty else {
+            return nil
+        }
+        return urls
+    }
+
+    private func showDropOverlay(count: Int) {
+        dropOverlayLabel?.stringValue = "释放鼠标 — 把 \(count) 个文件拖到虚拟机"
+        dropOverlay?.isHidden = false
+    }
+
+    private func hideDropOverlay() {
+        dropOverlay?.isHidden = true
+    }
+
+    /// 仅供 GUI probe 测试用: 主动切 dropOverlay 显示状态 (绕过真实 drag 流程, 给截图验证用).
+    public func probeShowDropOverlay(count: Int) { showDropOverlay(count: count) }
+    public func probeHideDropOverlay() { hideDropOverlay() }
 
     /// CapsLock 双端同步: host 与 expectedGuestCaps 不一致时给 guest 发一次
     /// caps_lock toggle 让对齐, 同步翻转 expectedGuestCaps 不等 LED_STATE 回传 (避免

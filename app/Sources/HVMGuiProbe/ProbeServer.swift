@@ -2,6 +2,9 @@
 // hvm-dbg ↔ HVM GUI 测试协议 (HDP-GUI) 服务端.
 // 设计稿 docs/v3/HVM_DBG_GUI_PROTOCOL.md.
 //
+// 跨 module 依赖说明: 引 HVMDisplayQemu 拿 FramebufferHostView (debug.simulate-drop /
+// debug.show-drop-overlay 直接戳 view 测拖放通路).
+//
 // 架构: SocketServer (HVMIPC) 包装, 跑在 HVM 主进程内, 监听
 //       ~/Library/Application Support/HVM/run/hvm-dbg-gui.sock
 //
@@ -22,6 +25,7 @@
 import Foundation
 import AppKit
 import HVMCore
+import HVMDisplayQemu
 import HVMIPC
 
 /// 弱引用包装, 给 ProbeServer 拿一个 type-erased `present(_: ErrorDialogModel-ish)`.
@@ -137,6 +141,12 @@ public enum ProbeServer {
             errorPresenter?.showMainWindow()
             return .success(id: req.id)
 
+        case "debug.simulate-drop":
+            return handleSimulateDrop(req)
+
+        case "debug.show-drop-overlay":
+            return handleShowDropOverlay(req)
+
         default:
             return .failure(id: req.id,
                              code: "gui.unknown_op",
@@ -158,6 +168,63 @@ public enum ProbeServer {
         let hint = req.args["hint"]
         presenter.presentTestError(title: title, message: message, details: details, hint: hint)
         return .success(id: req.id, data: ["triggered": "true"])
+    }
+
+    /// 测试用 — 找当前 NSApp 第一个可见 FramebufferHostView (主嵌入或 detached 都行).
+    /// 用 BFS 遍历所有 visible window 的 contentView subview tree.
+    @MainActor
+    private static func findFramebufferHostView() -> FramebufferHostView? {
+        for window in NSApp.windows where window.isVisible {
+            guard let root = window.contentView else { continue }
+            var stack: [NSView] = [root]
+            while let v = stack.popLast() {
+                if let fb = v as? FramebufferHostView { return fb }
+                stack.append(contentsOf: v.subviews)
+            }
+        }
+        return nil
+    }
+
+    /// 测试用 — 直接调 FramebufferHostView.onFilePaste(urls) 模拟拖放完成 (绕开 AppKit drag
+    /// session 复杂度, 走跟 drag drop / Cmd+V 同一闭包). args.paths = JSON 数组.
+    @MainActor
+    private static func handleSimulateDrop(_ req: IPCRequest) -> IPCResponse {
+        guard let pathsJSON = req.args["paths"],
+              let data = pathsJSON.data(using: .utf8),
+              let paths = try? JSONDecoder().decode([String].self, from: data),
+              !paths.isEmpty else {
+            return .failure(id: req.id, code: "debug.bad_args",
+                             message: "需要 args.paths (JSON 数组)")
+        }
+        guard let fb = findFramebufferHostView() else {
+            return .failure(id: req.id, code: "debug.no_fb_view",
+                             message: "找不到可见 FramebufferHostView (VM 未跑 / 选中?)")
+        }
+        guard let onFilePaste = fb.onFilePaste else {
+            return .failure(id: req.id, code: "debug.no_paste_closure",
+                             message: "fbView 未注入 onFilePaste 闭包")
+        }
+        let urls = paths.map { URL(fileURLWithPath: $0) }
+        onFilePaste(urls)
+        return .success(id: req.id, data: ["dispatched": "\(urls.count)"])
+    }
+
+    /// 测试用 — 主动切 dropOverlay 显隐 (visual snapshot 验证). args.visible="true"/"false",
+    /// args.count = N (显示时填的文件数文案).
+    @MainActor
+    private static func handleShowDropOverlay(_ req: IPCRequest) -> IPCResponse {
+        guard let fb = findFramebufferHostView() else {
+            return .failure(id: req.id, code: "debug.no_fb_view",
+                             message: "找不到可见 FramebufferHostView")
+        }
+        let visible = req.args["visible"]?.lowercased() == "true"
+        let count = Int(req.args["count"] ?? "1") ?? 1
+        if visible {
+            fb.probeShowDropOverlay(count: count)
+        } else {
+            fb.probeHideDropOverlay()
+        }
+        return .success(id: req.id)
     }
 
     /// 主动 dismiss 当前 dialog. 给 hvm-dbg 自动化测试 dismiss 后 framebuffer 恢复用.

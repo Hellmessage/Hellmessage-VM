@@ -27,8 +27,63 @@ struct GuiCommand: AsyncParsableCommand {
             GuiTriggerErrorCommand.self,
             GuiDismissErrorCommand.self,
             GuiShowWindowCommand.self,
+            GuiSimulateDropCommand.self,
+            GuiShowDropOverlayCommand.self,
         ]
     )
+}
+
+// MARK: - gui simulate-drop
+
+struct GuiSimulateDropCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "simulate-drop",
+        abstract: "(测试用) 模拟 host→guest 文件拖放 (绕过 AppKit drag session, 直接走 onFilePaste 闭包)"
+    )
+
+    @Option(name: .long, parsing: .singleValue, help: "host 文件路径; 可指定多次")
+    var file: [String]
+
+    func run() throws {
+        do {
+            guard !file.isEmpty else {
+                throw HVMError.config(.missingField(name: "至少一个 --file"))
+            }
+            let paths = file.map { ($0 as NSString).expandingTildeInPath }
+            let pathsData = try JSONEncoder().encode(paths)
+            guard let pathsStr = String(data: pathsData, encoding: .utf8) else {
+                throw HVMError.ipc(.decodeFailed(reason: "encode paths"))
+            }
+            let resp = try GuiSocket.wrappedRequest(op: "debug.simulate-drop",
+                                                    args: ["paths": pathsStr])
+            let count = resp.data?["dispatched"] ?? "?"
+            print("✔ simulated drop of \(count) files")
+        } catch { bail(error) }
+    }
+}
+
+// MARK: - gui show-drop-overlay
+
+struct GuiShowDropOverlayCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "show-drop-overlay",
+        abstract: "(测试用) 切 dropOverlay 显示状态 (visual snapshot 验证)"
+    )
+
+    @Flag(name: .long, help: "隐藏 overlay (默认显示)")
+    var hide: Bool = false
+
+    @Option(name: .long, help: "显示时填的文件数 (默认 1)")
+    var count: Int = 1
+
+    func run() throws {
+        do {
+            let visible = hide ? "false" : "true"
+            _ = try GuiSocket.wrappedRequest(op: "debug.show-drop-overlay",
+                                              args: ["visible": visible, "count": "\(count)"])
+            print(hide ? "✔ hid drop overlay" : "✔ shown drop overlay (count=\(count))")
+        } catch { bail(error) }
+    }
 }
 
 // MARK: - gui show-window
