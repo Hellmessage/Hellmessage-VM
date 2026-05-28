@@ -185,11 +185,13 @@ public enum QemuHostEntry {
         let vdagentSocketURL    = HVMPaths.vdagentSocketPath(for: config.id)
         let qgaSocketURL        = HVMPaths.qgaSocketPath(for: config.id)
         let webdavSocketURL     = HVMPaths.webdavSocketPath(for: config.id)
+        let hvmClipboardSocketURL = HVMPaths.hvmClipboardSocketPath(for: config.id)
         FSCleanup.removeQuietly(at: iosurfaceSocketURL, context: "stale iosurface socket")
         FSCleanup.removeQuietly(at: qmpInputSocketURL,  context: "stale qmp-input socket")
         FSCleanup.removeQuietly(at: vdagentSocketURL,   context: "stale vdagent socket")
         FSCleanup.removeQuietly(at: qgaSocketURL,       context: "stale qga socket")
         FSCleanup.removeQuietly(at: webdavSocketURL,    context: "stale webdav socket")
+        FSCleanup.removeQuietly(at: hvmClipboardSocketURL, context: "stale hvm-clipboard socket")
 
         // 4.5 加密 disks / nvram secret 文件准备 (启动期 0o600 临时文件, 启动后立即 unlink).
         // 走公共 LuksSecretFile (binary → base64 ASCII passphrase).
@@ -236,6 +238,9 @@ public enum QemuHostEntry {
                 // SPICE WebDAV: sharedFolders 非空才注入 chardev/device argv.
                 // 空时也不起 server, 不占 socket 路径.
                 webdavSocketPath: config.sharedFolders.isEmpty ? nil : webdavSocketURL.path,
+                // HVM 自家 guest helper (UTM 风格文件剪贴板). 仅 Windows guest 接 — helper
+                // EXE 只有 Win ARM64 build, Linux guest 没意义 (Linux 走 xclip 不同通路).
+                hvmClipboardSocketPath: config.guestOS == .windows ? hvmClipboardSocketURL.path : nil,
                 qemuDiskSecretPath: diskSecretFile?.path,
                 qemuNvramSecretPath: nvramSecretFile?.path,
                 qemuPidPath: qemuPidURL.path
@@ -372,6 +377,18 @@ public enum QemuHostEntry {
                 fputs("HVMHost(qemu): clipboard sharing 已启动 (vdagent + NSPasteboard 桥)\n", stderr)
             } else {
                 fputs("HVMHost(qemu): clipboard sharing 关闭 (config.clipboardSharingEnabled=false)\n", stderr)
+            }
+
+            // 6.4c HVM 自家 guest helper bridge (UTM 风格文件剪贴板, docs/v3/HOST_FILE_CLIPBOARD.md).
+            // 仅 Windows guest 起 — helper EXE 只有 Win ARM64 build, Linux guest 没意义.
+            // 启动后立即异步 connect, helper 没就绪不报错 (silently retry 5s, 等 guest helper
+            // 进程拉起来). PR-2 范围: 仅 bridge 客户端 + 协议层; PR-3 wire 文件上传 + PasteboardBridge
+            // 回调; PR-4 helper 自动安装.
+            if config.guestOS == .windows {
+                let clipBridge = HVMFileClipboardBridge(socketPath: hvmClipboardSocketURL.path)
+                clipBridge.start()
+                QemuHostState.shared.fileClipboardBridge = clipBridge
+                fputs("HVMHost(qemu): HVM file-clipboard bridge 已启动 (chardev: \(hvmClipboardSocketURL.lastPathComponent))\n", stderr)
             }
 
             // 6.4b SPICE WebDAV server (共享目录, docs/v3/SHARED_FOLDER.md):
@@ -703,6 +720,9 @@ final class QemuHostState {
     /// SPICE WebDAV server (共享目录, docs/v3/SHARED_FOLDER.md). nil = 该 VM config.sharedFolders 空.
     /// 跟 vdagent 同款 single-client socket, 由 VMHost 唯一持有. tearDown 不需特殊清理 (deinit 自动关 fd).
     var spiceWebdav: SpiceWebdavServer?
+    /// HVM 自家 guest helper 通路 — docs/v3/HOST_FILE_CLIPBOARD.md UTM 风格文件剪贴板.
+    /// 仅 Windows guest 启动. tearDown 时 stop() 让 read loop 退出 + 清 pending continuations.
+    var fileClipboardBridge: HVMFileClipboardBridge?
 
     var statusItem: NSStatusItem?
     var statusMenu: QemuStatusMenuController?
@@ -1554,6 +1574,8 @@ final class QemuHostState {
         pasteboardBridge = nil
         filePasteBridge?.uninstall()
         filePasteBridge = nil
+        fileClipboardBridge?.stop()
+        fileClipboardBridge = nil
         vdagent?.disconnect()
         vdagent = nil
         ipcServer?.stop()

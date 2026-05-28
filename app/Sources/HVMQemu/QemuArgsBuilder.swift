@@ -76,6 +76,12 @@ public enum QemuArgsBuilder {
         /// docs/v3/SHARED_FOLDER.md.
         public let webdavSocketPath: String?
 
+        /// 非 nil 时 argv 加 chardev hvmclipboard + virtserialport name=com.hellmessage.hvm-clipboard.0,
+        /// 给 HVM 自家 guest helper (hvm-guest-helper.exe) 收 host 指令调 OleSetClipboard
+        /// 设 Win 用户剪贴板 (UTM 风格 paste-where-you-paste). 仅 QEMU + Windows guest 时设.
+        /// host 端 HVMFileClipboardBridge 作 client 连入. 详见 docs/v3/HOST_FILE_CLIPBOARD.md.
+        public let hvmClipboardSocketPath: String?
+
         // ---- 加密 (qemu-perfile, docs/v3/ENCRYPTION.md v2.4) ----
         /// 加密 LUKS qcow2 主盘 / 数据盘的 secret 文件路径 (base64 ASCII passphrase).
         /// 由 LuksSecretFile 创建 (0o600 + base64 binary key). 启动后调用方立即 unlink.
@@ -105,6 +111,7 @@ public enum QemuArgsBuilder {
             utmGuestToolsISOPath: String? = nil,
             qgaSocketPath: String? = nil,
             webdavSocketPath: String? = nil,
+            hvmClipboardSocketPath: String? = nil,
             qemuDiskSecretPath: String? = nil,
             qemuNvramSecretPath: String? = nil,
             qemuPidPath: String? = nil
@@ -123,6 +130,7 @@ public enum QemuArgsBuilder {
             self.utmGuestToolsISOPath = utmGuestToolsISOPath
             self.qgaSocketPath = qgaSocketPath
             self.webdavSocketPath = webdavSocketPath
+            self.hvmClipboardSocketPath = hvmClipboardSocketPath
             self.qemuDiskSecretPath = qemuDiskSecretPath
             self.qemuNvramSecretPath = qemuNvramSecretPath
             self.qemuPidPath = qemuPidPath
@@ -423,6 +431,7 @@ public enum QemuArgsBuilder {
         let needsVirtioSerial = inputs.vdagentSocketPath != nil
                              || inputs.qgaSocketPath != nil
                              || inputs.webdavSocketPath != nil
+                             || inputs.hvmClipboardSocketPath != nil
         if needsVirtioSerial {
             args += ["-device", "virtio-serial-pci,id=vsp0"]
         }
@@ -448,6 +457,14 @@ public enum QemuArgsBuilder {
         if let webdavSocket = inputs.webdavSocketPath {
             args += ["-chardev", "socket,id=webdav,path=\(webdavSocket),server=on,wait=off"]
             args += ["-device", "virtserialport,bus=vsp0.0,chardev=webdav,name=org.spice-space.webdav.0"]
+        }
+        // HVM 自家 guest helper 通路 — docs/v3/HOST_FILE_CLIPBOARD.md.
+        // host 端 HVMFileClipboardBridge 作 client 连入, guest 内 hvm-guest-helper.exe 打开
+        // \\.\Global\com.hellmessage.hvm-clipboard.0 作 server-side port. JSON 协议跑
+        // length-prefix framing (跟 HVMIPC 同款).
+        if let hvmClipSocket = inputs.hvmClipboardSocketPath {
+            args += ["-chardev", "socket,id=hvmclipboard,path=\(hvmClipSocket),server=on,wait=off"]
+            args += ["-device", "virtserialport,bus=vsp0.0,chardev=hvmclipboard,name=com.hellmessage.hvm-clipboard.0"]
         }
 
         // ---- QMP 控制 ----

@@ -147,6 +147,14 @@ public enum HVMPaths {
     public static func webdavSocketPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).webdav.sock")
     }
+    /// HVM 自家 guest helper virtio-serial chardev socket — UTM 风格文件剪贴板
+    /// (docs/v3/HOST_FILE_CLIPBOARD.md). QEMU 作 chardev server, HVM 主进程
+    /// HVMFileClipboardBridge 作 client 连入. guest 内 hvm-guest-helper.exe 通过
+    /// virtio-port `com.hellmessage.hvm-clipboard.0` 收 host 端 JSON 指令调
+    /// OleSetClipboard 设 Win 用户剪贴板.
+    public static func hvmClipboardSocketPath(for id: UUID) -> URL {
+        runDir.appendingPathComponent("\(id.uuidString.lowercased()).hvm-clipboard.sock")
+    }
     // vmnetSocketPath / vmnetPidPath 已废弃: socket_vmnet 改成系统级 launchd daemon
     // (路径见 HVMQemu/VmnetDaemonPaths), 不再 per-VM 起 sidecar.
 
