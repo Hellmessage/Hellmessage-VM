@@ -218,18 +218,49 @@ final class DetailContainerView: NSView {
         view.inputCaptureEnabled = !detached && !dialogActive
 
         if dialogActive {
+            // 注: 之前试过 layer?.contents = nil 一锤定音, 但破坏 CAMetalLayer 的 drawable
+            // pool, dismiss 后再画不出来 — 屏幕黑屏. 改用"加一个不透明黑遮罩 (fbViewMask)
+            // 盖在 fbView 上方 sibling 位置". 加 mask 跟 fbView 是兄弟, mask 在 subview
+            // 顺序后面 → 永远最上层 (跟 dialog overlay 一样, 但 mask 跟 fbView 同 superview,
+            // 是 DetailContainerView 的子 view, 不会被 CAMetalLayer 兄弟透出).
+            ensureFbViewMask()
             view.isPaused = true
-            view.layer?.contents = nil   // 清掉 IOSurface drawable 内容, 防止 server 继续合成
             view.isHidden = true
             view.alphaValue = 0
+            fbViewMask?.isHidden = false
         } else {
+            fbViewMask?.isHidden = true
             view.isHidden = false
             view.alphaValue = 1
             view.isPaused = false
-            // contents 不主动恢复, 让下个 displayLink tick 自然重画 (renderer 持有 shm
-            // 仍可重新 present)
-            view.setNeedsDisplay(view.bounds)
+            // 下个 displayLink tick 自然重画一帧
         }
+    }
+
+    /// 不透明黑色遮罩, 跟 fbView 同 superview 同位置, 永远在 fbView 之上. dialogActive 时
+    /// unhide, 视觉上完全挡住 fbView; 同时 fbView 自身也 isHidden=true / alphaValue=0 双保险.
+    /// 用这个加 mask 的办法绕开 CAMetalLayer 异步合成不尊重 sibling 顺序的疑难: mask 跟
+    /// fbView 同父, AppKit 普通 layer 合成会按 subview 顺序正确地把 mask 画在 fbView 之上.
+    private var fbViewMask: NSView?
+    private func ensureFbViewMask() {
+        guard fbViewMask == nil,
+              let view = currentQemuFanoutView,
+              let parent = view.superview else { return }
+        let mask = NSView()
+        mask.wantsLayer = true
+        mask.layer?.backgroundColor = NSColor.black.cgColor
+        mask.translatesAutoresizingMaskIntoConstraints = false
+        mask.isHidden = true
+        // 加到 fbView 之后, 同位置同尺寸. AppKit sibling 顺序 (后加 = 上层) + 普通 CALayer
+        // 合成 = 永远盖住 fbView.
+        parent.addSubview(mask, positioned: .above, relativeTo: view)
+        NSLayoutConstraint.activate([
+            mask.topAnchor.constraint(equalTo: view.topAnchor),
+            mask.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            mask.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            mask.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
+        fbViewMask = mask
     }
 
     /// 比较两份 VMConfig, 忽略 `networks` 字段. 用于 refresh() 决定是否需要重建 stopped host:
