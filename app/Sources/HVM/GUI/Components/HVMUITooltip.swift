@@ -88,7 +88,10 @@ fileprivate struct TooltipModifier: ViewModifier {
                 if showTooltip {
                     TooltipContent(text: text, kbd: kbd)
                         .fixedSize()
-                        .offset(offsetFromEdge)
+                        // alignmentGuide 用 tooltip 实际 dimension (height/width) 算
+                        // 位置, 比 hardcode magic number 准: 不论 tooltip 内容长短
+                        // 都能精准浮在 trigger 外侧 + gap 间距. 替代之前 offset hack.
+                        .modifier(TooltipPositionModifier(edge: edge, gap: tooltipGap))
                         .transition(.opacity.combined(with:
                             .scale(scale: 0.95, anchor: scaleAnchor)))
                         .zIndex(2000)
@@ -97,6 +100,8 @@ fileprivate struct TooltipModifier: ViewModifier {
             }
             .animation(HVMTheme.motion.easeOut, value: showTooltip)
     }
+
+    private var tooltipGap: CGFloat { HVMTheme.space.sm }
 
     private var overlayAlignment: Alignment {
         switch edge {
@@ -115,14 +120,30 @@ fileprivate struct TooltipModifier: ViewModifier {
         case .trailing: return .leading
         }
     }
+}
 
-    private var offsetFromEdge: CGSize {
-        let gap: CGFloat = HVMTheme.space.sm
+/// 根据 edge 用 SwiftUI .alignmentGuide 把 tooltip 推到 trigger 外侧 + gap.
+/// 关键: alignmentGuide closure 拿到的 ViewDimensions 是 tooltip 实际 dimension
+/// (来自 .fixedSize), 不需要 hardcode tooltip 高度 / 宽度.
+fileprivate struct TooltipPositionModifier: ViewModifier {
+    let edge: Edge
+    let gap: CGFloat
+
+    func body(content: Content) -> some View {
         switch edge {
-        case .top:      return CGSize(width: 0, height: -gap - 22)
-        case .bottom:   return CGSize(width: 0, height: gap + 22)
-        case .leading:  return CGSize(width: -gap - 80, height: 0)
-        case .trailing: return CGSize(width: gap + 80, height: 0)
+        case .top:
+            // tooltip.top alignment marker 设到 view 底部下方 gap 处. overlay
+            // (.top) 让 marker 对齐 trigger.top → tooltip 整体上移 (height+gap),
+            // 等于 tooltip 完全在 trigger 上方 + gap 间距.
+            content.alignmentGuide(.top) { $0.height + gap }
+        case .bottom:
+            // tooltip.bottom marker 设到 view 顶部上方 gap 处. overlay (.bottom)
+            // 让 marker 对齐 trigger.bottom → tooltip 整体下移 + gap 间距.
+            content.alignmentGuide(.bottom) { _ in -gap }
+        case .leading:
+            content.alignmentGuide(.leading) { $0.width + gap }
+        case .trailing:
+            content.alignmentGuide(.trailing) { _ in -gap }
         }
     }
 }
