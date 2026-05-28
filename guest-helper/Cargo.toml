@@ -1,0 +1,50 @@
+[package]
+name = "hvm-guest-helper"
+version = "0.1.0"
+edition = "2021"
+authors = ["HVM team"]
+description = "HVM guest helper service for Windows — file-clipboard paste-where-you-paste via virtio-serial"
+license = "GPL-2.0-only"
+
+[[bin]]
+name = "hvm-guest-helper"
+path = "src/main.rs"
+
+[dependencies]
+# windows-rs: 官方 Win32 binding. 用 0.59 (2025-12, 稳定).
+# 按需启用 feature 控编译体积, 不一股脑全开.
+windows = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",              # CreateFileW 的 SECURITY_ATTRIBUTES 依赖
+    "Win32_Storage_FileSystem",
+    "Win32_System_DataExchange",   # OpenClipboard / SetClipboardData
+    "Win32_System_Ole",            # OleSetClipboard (preferred over raw SetClipboardData)
+    "Win32_System_Memory",         # GlobalAlloc / GlobalLock for CF_HDROP
+    "Win32_System_IO",             # CreateFile / ReadFile / WriteFile
+    "Win32_System_Threading",      # Sleep for retry
+] }
+
+# 协议: JSON 编解码
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+# 优化 EXE 大小: 单二进制, 不需要 debug 符号. helper 是常驻进程, 一次启动到 VM 寿命终, 不
+# 高频热路径, 牺牲性能换体积划得来.
+opt-level = "z"        # 优化大小, 比 "s" 更激进
+lto = true             # 跨 crate 优化
+codegen-units = 1      # LTO 友好, 编译慢但体积小
+strip = true           # 不带符号
+panic = "abort"        # 不展开 panic, 体积省一截 (helper 出错直接 abort + 自启重启即可)
+
+# 跨平台编译指引 (从 macOS 编 Windows ARM64):
+#   rustup target add aarch64-pc-windows-gnullvm
+#   cargo build --target aarch64-pc-windows-gnullvm --release
+# 产物: target/aarch64-pc-windows-gnullvm/release/hvm-guest-helper.exe (~500 KB)
+#
+# gnullvm 走 LLVM linker (rust-lld), 不依赖 MSVC / mingw-w64 工具链.
+# macOS 上 rustup 自带 rust-lld, 跨编译开箱即用 — 不需要装其他东西.
+#
+# Windows x64 guest (HVM 暂不支持, Apple Silicon 跑 QEMU x86 TCG 太慢):
+#   rustup target add x86_64-pc-windows-gnullvm
+#   cargo build --target x86_64-pc-windows-gnullvm --release

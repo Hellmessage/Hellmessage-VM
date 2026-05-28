@@ -1,0 +1,7 @@
+# target/ 是 cargo 构建产物缓存, 不进仓库
+/target
+
+# Cargo.lock 是 commit 的 (bin crate 必须确保 reproducible build).
+# 不要在这里 gitignore.
+
+# 给将来 dist/aarch64/hvm-guest-helper.exe (prebuilt 给没装 llvm-mingw 用户) 留位置, 不 ignore.
