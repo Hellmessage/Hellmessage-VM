@@ -83,14 +83,21 @@ private struct NewGUIRootView: View {
                 // .overlay 视觉上浮在下方 sectionCard 之上, 不被默认 VStack 后绘
                 // 顺序压住. 治标方案; PR-D1 OverlayContainer 后用 root-level
                 // ZStack 渲染浮窗, 彻底解决.
+                //
+                // 节顺序 (C8 整理): 从直接看到的视觉 (header) → 用户最常用的
+                // 交互组件 (操作类/输入类/复杂类) → 装饰类 (icon/tooltip) →
+                // Theme token 参考 (放最下面给"我想知道色板/字号" 时查).
                 VStack(alignment: .leading, spacing: HVMTheme.space.xl) {
-                    headerBlock.zIndex(120)
-                    iconsBlock.zIndex(118)
-                    sectionsBlock.zIndex(115)
-                    selectsBlock.zIndex(110)
-                    buttonsBlock.zIndex(100)
-                    togglesBlock.zIndex(80)
-                    fieldsBlock.zIndex(70)
+                    headerBlock.zIndex(140)
+                    // 交互组件 — 业务页主战场
+                    buttonsBlock.zIndex(130)
+                    fieldsBlock.zIndex(120)
+                    togglesBlock.zIndex(110)
+                    selectsBlock.zIndex(100)
+                    // 容器 + 装饰
+                    sectionsBlock.zIndex(90)
+                    iconsBlock.zIndex(80)
+                    // Theme token 参考 (色板/字号/spacing/radius/motion)
                     colorPaletteBlock.zIndex(60)
                     typographyBlock.zIndex(50)
                     spacingBlock.zIndex(40)
@@ -127,7 +134,8 @@ private struct NewGUIRootView: View {
 
     // 色板 — 横排 swatch
     private var colorPaletteBlock: some View {
-        sectionCard(title: "Colors") {
+        sectionCard(title: "Colors",
+                    description: "Theme token 色板 — 业务侧禁直写 Color(red:), 一律走 HVMTheme.color.<name>") {
             VStack(alignment: .leading, spacing: HVMTheme.space.md) {
                 swatchRow("Background", swatches: [
                     ("bgBase",    HVMTheme.color.bgBase),
@@ -176,7 +184,8 @@ private struct NewGUIRootView: View {
 
     // 字号节奏
     private var typographyBlock: some View {
-        sectionCard(title: "Typography") {
+        sectionCard(title: "Typography",
+                    description: "字号节奏严格 11/12/13/14/18/24, 不留中间值. mono 仅用于 UUID/MAC/路径") {
             VStack(alignment: .leading, spacing: HVMTheme.space.md) {
                 typoRow("xl (24, semibold)",   font: HVMTheme.font.xl)
                 typoRow("lg (18, semibold)",   font: HVMTheme.font.lg)
@@ -203,7 +212,8 @@ private struct NewGUIRootView: View {
 
     // 间距 — 横向 bar 长度差
     private var spacingBlock: some View {
-        sectionCard(title: "Spacing (4-pt grid)") {
+        sectionCard(title: "Spacing (4-pt grid)",
+                    description: "Linear 同款 4-pt grid. 业务侧禁直写 .padding(8) 等硬数字, 走 HVMTheme.space") {
             VStack(alignment: .leading, spacing: HVMTheme.space.sm) {
                 ForEach([
                     ("xs",   HVMTheme.space.xs),
@@ -233,7 +243,8 @@ private struct NewGUIRootView: View {
 
     // 圆角档位
     private var radiusBlock: some View {
-        sectionCard(title: "Radius") {
+        sectionCard(title: "Radius",
+                    description: "圆角 4 档: sm (badge) / md (字段) / lg (Section) / xl (Dialog)") {
             HStack(spacing: HVMTheme.space.lg) {
                 radiusSwatch("sm (4)", radius: HVMTheme.radius.sm)
                 radiusSwatch("md (6)", radius: HVMTheme.radius.md)
@@ -261,7 +272,8 @@ private struct NewGUIRootView: View {
 
     // 动效占位 — hover 改 bg 验三档时长感
     private var motionBlock: some View {
-        sectionCard(title: "Motion") {
+        sectionCard(title: "Motion",
+                    description: "时长三档: fast (120ms hover) / base (200ms focus) / slow (320ms 切页). Hover 试试 ↓") {
             HStack(spacing: HVMTheme.space.md) {
                 MotionDemoTile(label: "fast (120ms)", animation: HVMTheme.motion.easeOutFast)
                 MotionDemoTile(label: "base (200ms)", animation: HVMTheme.motion.easeOut)
@@ -277,7 +289,8 @@ private struct NewGUIRootView: View {
     @State private var cpuSelection: Int = 4
 
     private var selectsBlock: some View {
-        sectionCard(title: "Select (PR-C4)") {
+        sectionCard(title: "Select (PR-C4)",
+                    description: "自绘下拉, 不用 SwiftUI .popover. generic value + 搜索 + 键盘 ↑↓Enter + 互斥打开 + 派生 probe id") {
             // 反向 zIndex 让上面 fieldRow 的 Select popover 浮在下方 fieldRow 之上.
             // 治标方案; PR-D1 OverlayContainer 彻底解决.
             VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
@@ -388,7 +401,8 @@ private struct NewGUIRootView: View {
     @State private var selectAllPartial: Bool = false  // indeterminate demo
 
     private var togglesBlock: some View {
-        sectionCard(title: "Toggle / Checkbox (PR-C3)") {
+        sectionCard(title: "Toggle / Checkbox (PR-C3)",
+                    description: "3 档 size + spring 切换 + indeterminate 半选态 + disabled 灰化用 bgDisabled token") {
             VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
                 // Toggle 三档 size + label/hint
                 fieldRow("Toggle Sizes") {
@@ -458,7 +472,8 @@ private struct NewGUIRootView: View {
     @State private var simulateLoading: Bool = false
 
     private var fieldsBlock: some View {
-        sectionCard(title: "TextField / SecureField (PR-C2)") {
+        sectionCard(title: "TextField / SecureField (PR-C2)",
+                    description: "3 档 size + 7 状态 (empty/filled/focused/hover/error/loading/disabled) + focus ring 渐现 + 共享 FieldChrome modifier") {
             VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
                 // 三档 size
                 fieldRow("Sizes (.sm / .md / .lg)") {
@@ -541,7 +556,8 @@ private struct NewGUIRootView: View {
 
     // PR-C6 — HVMUI.Icon / KbdHint / Tooltip (辅助组件)
     private var iconsBlock: some View {
-        sectionCard(title: "Icon / KbdHint / Tooltip (PR-C6)") {
+        sectionCard(title: "Icon / KbdHint / Tooltip (PR-C6)",
+                    description: "辅助组件: Icon 包装 SF Symbol (5 size + 9 color), KbdHint 快捷键 chip (typed Key enum), Tooltip 自绘 hover 500ms delay") {
             VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
                 // Icon sizes
                 fieldRow("Icon sizes (.xs / .sm / .md / .lg / .xl)") {
@@ -594,7 +610,8 @@ private struct NewGUIRootView: View {
 
     // PR-C5 — HVMUI.Section / Divider / Badge
     private var sectionsBlock: some View {
-        sectionCard(title: "Section / Divider / Badge (PR-C5)") {
+        sectionCard(title: "Section / Divider / Badge (PR-C5)",
+                    description: "业务页骨架基石: Section (default/elevated + layered shadow + double border), Divider (h/v), Badge (6 variant × 2 size)") {
             VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
                 // Section variants (default / elevated)
                 fieldRow("Section variants") {
@@ -693,7 +710,8 @@ private struct NewGUIRootView: View {
     @State private var simulateButtonLoading: Bool = false
 
     private var buttonsBlock: some View {
-        sectionCard(title: "Buttons (PR-C1b)") {
+        sectionCard(title: "Buttons (PR-C1b)",
+                    description: "5 variant × 3 size + focus ring + loading + iconPosition + opacity 降透保 variant 身份感") {
             VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
                 buttonRow("Variants") {
                     HVMUI.Button("Primary", variant: .primary,
@@ -799,32 +817,16 @@ private struct NewGUIRootView: View {
     }
 
     @ViewBuilder
+    /// Showcase 节包装 — 改用 HVMUI.Section (C8 整理: Showcase 自己也用新组件,
+    /// 不再有独立 helper). 接受 title + 可选 description 副文案.
     private func sectionCard<Content: View>(
         title: String,
+        description: String? = nil,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: HVMTheme.space.md) {
-            Text(title)
-                .font(HVMTheme.font.lg)
-                .foregroundStyle(HVMTheme.color.textPrimary)
+        HVMUI.Section(title, description: description) {
             content()
         }
-        .padding(HVMTheme.space.lg)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // bg + border 在 .background 内一起渲染 (border 作 fill RoundedRectangle
-        // 的 overlay), 不走 .clipShape 也不在外层 .overlay 加 border —
-        // 否则 border 是 sectionCard 最后渲染层, 会画在所有 children (包括
-        // 子组件的 Select popover overlay) 之上, 出现"卡片边框线透到 popover
-        // 内"的视觉 bug.
-        .background(
-            RoundedRectangle(cornerRadius: HVMTheme.radius.lg)
-                .fill(HVMTheme.color.bgRaised)
-                .overlay(
-                    RoundedRectangle(cornerRadius: HVMTheme.radius.lg)
-                        .stroke(HVMTheme.color.borderDefault,
-                                lineWidth: HVMTheme.border.hairline)
-                )
-        )
     }
 }
 

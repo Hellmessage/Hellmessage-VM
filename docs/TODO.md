@@ -5,7 +5,7 @@
 > 跟 [docs/v1/ROADMAP.md](v1/ROADMAP.md) 不同 — ROADMAP 是历史 v2 残余清单, 已基本归档.
 > 本文件聚焦**当前进行中**的工作 + **新发现的待办**.
 >
-> **最后更新**: 2026-05-29 (PR-C7 已合, Phase C 进度 7/8, 剩 C8 收尾)
+> **最后更新**: 2026-05-29 (Phase C 全合 8/8, 下个候选 PR-D1 OverlayContainer)
 
 ---
 
@@ -15,7 +15,7 @@
 - [x] **T1** Theme/ 7 个 token 文件 (HVMColor / Font / Space / Radius / Border / Motion / HVMTheme namespace) — commit `a991024`
 - [x] **T2** NewGUIRootView Showcase 演示页 (色板 / 字号 / spacing / radius / motion) — commit `a991024`
 
-### Phase C (Components) — 进行中
+### Phase C (Components) — ✅ 全合
 - [x] **C1** HVMUI.Button (5 variant + hover/press/disabled + probe) — commit `e1e80b8`
 - [x] **C1b** HVMUI.Button 按 R1-R9 重做 (3 size + focus ring + loading + iconPosition) — commit `5b89ac4`, polish in `f0d4787`
 - [x] **C2** HVMUI.TextField + HVMUI.SecureField (size + 7 状态 + focus ring + a11y + 设计规范 R1-R9) — commit `81d510f`
@@ -23,8 +23,8 @@
 - [x] **C4** HVMUI.Select (下拉 + 搜索 + 键盘导航 + generic value + probe) — commit `0d76252`, fixes `f0d4787` `03dbdaf` `94b9770` `458828a` `d6fbc6d`
 - [x] **C5** HVMUI.Section + HVMUI.Divider + HVMUI.Badge (业务页骨架基石; layered shadow + double border + 6 variant Badge + h/v Divider) — commit `5a23c51`
 - [x] **C6** HVMUI.Icon (5 size + 9 color) + HVMUI.KbdHint (typed Key enum + size) + HVMUI.Tooltip (自绘 hover 500ms delay + 4 edge + 可选 kbd hint) — 辅助组件
-- [x] **C7** probeID 必传 (breaking change: 6 组件 `probeID: String?` → `probeID: String`) + 派生 probe id (Select trigger/search) + 命名规范 `<scene>.<role>.<element>` 升进 NEW_GUI.md R6 + CLAUDE.md "UI 控件使用约束" 节
-- [ ] **C8** Components Showcase 整理 — 当前 NewGUIRootView 已是 Showcase, 末轮做 visual regression baseline 截图存档
+- [x] **C7** probeID 必传 (breaking change: 6 组件 `probeID: String?` → `probeID: String`) + 派生 probe id (Select trigger/search) + 命名规范 `<scene>.<role>.<element>` 升进 NEW_GUI.md R6 + CLAUDE.md "UI 控件使用约束" 节 — commit `2179639`
+- [x] **C8** Showcase 整理 — 顺序重组 (header → 操作类 Button → 输入类 TextField → 开关类 Toggle → 复杂类 Select → 容器装饰 Section/Icon → Theme token 参考) + sectionCard helper delegate `HVMUI.Section` (统一组件不留独立 helper) + 每节加 description 副文案. 视觉回归 baseline 截图**不存进 repo** (PNG 占空间, 临时用 hvm-dbg gui screenshot 即可)
 
 ### Phase D (Dialog) — 全待
 - [ ] **D1** DialogHost overlay + DialogPresenter + EnvironmentValue 注入
