@@ -1,25 +1,40 @@
-// HVMUIButton.swift — 新 GUI 按钮组件 (PR-C1)
+// HVMUIButton.swift — 新 GUI 按钮组件 (PR-C1b 按 R1-R9 重做)
 //
 // 5 variant (互斥):
 //   .primary       — accent 青底, 主操作 (Dialog 主按钮 / 保存 / 创建)
 //   .secondary     — 边框 + 透明底, 次要操作 (取消 / 返回)
 //   .ghost         — 无边框, hover 才出 bg, 弱化操作 (icon toolbar / tab)
 //   .destructive   — 边框 error 色, 危险操作 (确认前的删除 / 加密 reset)
-//   .icon          — 纯图标 32×32, ghost 同款外观但更紧凑 (Dialog 关闭 X / titlebar)
+//   .icon          — 纯图标 size×size, ghost 同款外观但正方形 (Dialog 关闭 X / titlebar)
+//
+// 3 档 size:
+//   .sm — 24 高 / font sm / padding sm (icon-only 24×24; toolbar / 列表行内联用)
+//   .md — 32 高 / font md / padding md (default; 表单 / dialog 主流)
+//   .lg — 40 高 / font md / padding lg (hero CTA / 单按钮 dialog)
 //
 // 用法:
-//   HVMUI.Button("保存", variant: .primary, probeID: "dialog.X.button.save") { save() }
-//   HVMUI.Button("删除", variant: .destructive, icon: "trash.fill") { delete() }
-//   HVMUI.Button(icon: "gear", variant: .ghost, probeID: "toolbar.button.settings") { ... }
+//   HVMUI.Button("保存", variant: .primary) { save() }
+//   HVMUI.Button("删除", variant: .destructive, icon: "trash") { delete() }
+//   HVMUI.Button("装机", variant: .primary, icon: "play.fill",
+//                iconPosition: .trailing, size: .lg) { install() }
+//   HVMUI.Button("提交中", variant: .primary, isLoading: true) { }
+//   HVMUI.Button(icon: "gear", variant: .ghost, size: .sm) { ... }
 //
-// 状态:
-//   - hover  : bg 加深 120ms ease-out (HVMTheme.motion.easeOutFast)
-//   - press  : scale 0.97 spring (HVMTheme.motion.pressSpring)
-//   - disabled: opacity 0.4, 不接 hover / probe, 不可点击
+// 视觉 (Linear+):
+//   - hover  : bg 加深 120ms easeOutFast
+//   - press  : scale 0.97 spring (HVMButtonPressStyle)
+//   - focus  : 外圈 2px borderFocus ring 渐现 200ms (键盘 Tab 才显; click 不出)
+//   - loading: icon 位置换 ProgressView; action 跳过, hover 跳过
+//   - disabled: bg / fg 改 dim token, 不再走整体 .opacity(0.4)
+//     (深底上整 opacity 会让按钮跟主底压平; 改用 textTertiary fg + bgDisabled bg)
 //
-// probe: probeID 非 nil 时自动 .hvmProbe(id:label:action:.button(...)). 业务侧不用
-// 重写 action — modifier 内部把 action closure 透传给 ProbeRegistry, hvm-dbg gui
-// click 时拿同一 closure 调.
+// 键盘 + a11y:
+//   - SwiftUI.Button + .focused($isFocused) + .accessibilityLabel
+//   - Space / Return 自带触发
+//   - loading / disabled 时不可点
+//
+// probe: probeID 非 nil + 非 disabled + 非 loading 时挂 .button(action).
+// hvm-dbg gui click --identifier X 走 action.
 
 #if NEW_GUI
 
@@ -33,65 +48,132 @@ struct Button: View {
         case primary, secondary, ghost, destructive, icon
     }
 
+    enum ButtonSize {
+        case sm, md, lg
+
+        var height: CGFloat {
+            switch self {
+            case .sm: return 24
+            case .md: return 32
+            case .lg: return 40
+            }
+        }
+
+        var horizontalPadding: CGFloat {
+            switch self {
+            case .sm: return HVMTheme.space.sm
+            case .md: return HVMTheme.space.md
+            case .lg: return HVMTheme.space.lg
+            }
+        }
+
+        var font: Font {
+            switch self {
+            case .sm: return HVMTheme.font.sm
+            case .md: return HVMTheme.font.md
+            case .lg: return HVMTheme.font.md
+            }
+        }
+
+        var iconFont: Font {
+            switch self {
+            case .sm: return HVMTheme.font.sm
+            case .md: return HVMTheme.font.md
+            case .lg: return HVMTheme.font.lg
+            }
+        }
+
+        var spinnerScale: CGFloat {
+            switch self {
+            case .sm: return 0.5
+            case .md: return 0.6
+            case .lg: return 0.7
+            }
+        }
+    }
+
+    enum IconPosition {
+        case leading, trailing
+    }
+
     private let label: String?
-    private let icon: String?      // SF Symbol name
+    private let icon: String?
     private let variant: Variant
+    private let size: ButtonSize
+    private let iconPosition: IconPosition
     private let isDisabled: Bool
+    private let isLoading: Bool
     private let probeID: String?
     private let probeLabel: String?
-    // action 标 @MainActor + @Sendable, 跟 ProbeAction.button 签名对齐, 让 .button(action)
-    // 不需要再 wrap. SwiftUI View body 本身 @MainActor, 所有业务侧 closure 默认满足.
+    // action @MainActor @Sendable, 跟 ProbeAction.button 签名对齐.
     private let action: @MainActor @Sendable () -> Void
 
     @State private var hovered = false
+    @FocusState private var isFocused: Bool
 
     // 文字 (+ 可选 icon) 按钮
     init(_ label: String,
          variant: Variant = .primary,
          icon: String? = nil,
+         iconPosition: IconPosition = .leading,
+         size: ButtonSize = .md,
          disabled: Bool = false,
+         isLoading: Bool = false,
          probeID: String? = nil,
          probeLabel: String? = nil,
          action: @escaping @MainActor @Sendable () -> Void) {
         self.label = label
         self.icon = icon
         self.variant = variant
+        self.iconPosition = iconPosition
+        self.size = size
         self.isDisabled = disabled
+        self.isLoading = isLoading
         self.probeID = probeID
         self.probeLabel = probeLabel
         self.action = action
     }
 
-    // 纯 icon 按钮 (默认 .icon variant, 也可显式传 .ghost 给 toolbar 用)
+    // 纯 icon 按钮 (默认 .icon variant)
     init(icon: String,
          variant: Variant = .icon,
+         size: ButtonSize = .md,
          disabled: Bool = false,
+         isLoading: Bool = false,
          probeID: String? = nil,
          probeLabel: String? = nil,
          action: @escaping @MainActor @Sendable () -> Void) {
         self.label = nil
         self.icon = icon
         self.variant = variant
+        self.iconPosition = .leading
+        self.size = size
         self.isDisabled = disabled
+        self.isLoading = isLoading
         self.probeID = probeID
         self.probeLabel = probeLabel
         self.action = action
     }
 
     var body: some View {
-        let button = SwiftUI.Button(action: action) {
+        let button = SwiftUI.Button(action: {
+            if !isLoading { action() }
+        }) {
             HStack(spacing: HVMTheme.space.sm) {
-                if let icon {
-                    Image(systemName: icon)
-                        .font(HVMTheme.font.md)
+                if iconPosition == .leading {
+                    iconOrSpinner
                 }
                 if let label {
                     Text(label)
-                        .font(HVMTheme.font.md)
+                        .font(size.font)
+                }
+                if iconPosition == .trailing {
+                    iconOrSpinner
                 }
             }
-            .padding(.horizontal, variant == .icon ? 0 : HVMTheme.space.md)
-            .frame(minWidth: variant == .icon ? 32 : 0, minHeight: 32)
+            .padding(.horizontal, variant == .icon ? 0 : size.horizontalPadding)
+            .frame(minWidth: variant == .icon ? size.height : 0,
+                   minHeight: size.height)
             .foregroundStyle(textColor)
             .background(bgColor)
             .clipShape(RoundedRectangle(cornerRadius: HVMTheme.radius.md))
@@ -99,15 +181,19 @@ struct Button: View {
                 RoundedRectangle(cornerRadius: HVMTheme.radius.md)
                     .stroke(borderColor, lineWidth: borderWidth)
             )
-            .opacity(isDisabled ? 0.4 : 1.0)
+            .overlay(focusRing)
+            .animation(HVMTheme.motion.easeOutFast, value: hovered)
+            .animation(HVMTheme.motion.easeOut, value: isFocused)
+            .animation(HVMTheme.motion.easeOut, value: isLoading)
         }
         .buttonStyle(HVMButtonPressStyle())
-        .disabled(isDisabled)
-        .onHover { if !isDisabled { hovered = $0 } }
-        .animation(HVMTheme.motion.easeOutFast, value: hovered)
+        .disabled(isDisabled || isLoading)
+        .focused($isFocused)
+        .onHover { if !isDisabled && !isLoading { hovered = $0 } }
+        .accessibilityLabel(label ?? icon ?? "")
+        .accessibilityHint(isLoading ? "正在处理" : "")
 
-        // probeID 非 nil 时挂 probe; 同一 action closure 给 hvm-dbg gui click 用
-        if let probeID, !isDisabled {
+        if let probeID, !isDisabled, !isLoading {
             button.hvmProbe(
                 id: probeID,
                 label: probeLabel ?? label ?? icon ?? "",
@@ -118,9 +204,24 @@ struct Button: View {
         }
     }
 
-    // MARK: - 外观计算 (variant + hover 矩阵, 全 token)
+    @ViewBuilder
+    private var iconOrSpinner: some View {
+        if isLoading {
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(size.spinnerScale)
+                .progressViewStyle(.circular)
+                .frame(width: 16, height: 16)
+        } else if let icon {
+            Image(systemName: icon)
+                .font(size.iconFont)
+        }
+    }
+
+    // MARK: - 外观计算 (variant + state 矩阵, 全 token)
 
     private var textColor: Color {
+        if isDisabled { return HVMTheme.color.textTertiary }
         switch variant {
         case .primary:
             return HVMTheme.color.textOnAccent
@@ -134,6 +235,14 @@ struct Button: View {
     }
 
     private var bgColor: Color {
+        if isDisabled {
+            switch variant {
+            case .primary:
+                return HVMTheme.color.bgDisabled
+            case .secondary, .ghost, .icon, .destructive:
+                return HVMTheme.color.transparent
+            }
+        }
         switch variant {
         case .primary:
             return hovered ? HVMTheme.color.accentHover : HVMTheme.color.accent
@@ -145,6 +254,14 @@ struct Button: View {
     }
 
     private var borderColor: Color {
+        if isDisabled {
+            switch variant {
+            case .primary, .ghost, .icon:
+                return HVMTheme.color.transparent
+            case .secondary, .destructive:
+                return HVMTheme.color.borderDefault
+            }
+        }
         switch variant {
         case .primary, .ghost, .icon:
             return HVMTheme.color.transparent
@@ -161,6 +278,15 @@ struct Button: View {
             return 0
         case .secondary, .destructive:
             return HVMTheme.border.hairline
+        }
+    }
+
+    @ViewBuilder
+    private var focusRing: some View {
+        if isFocused && !isDisabled {
+            RoundedRectangle(cornerRadius: HVMTheme.radius.md)
+                .stroke(HVMTheme.color.borderFocus, lineWidth: HVMTheme.border.focus)
+                .transition(.opacity)
         }
     }
 }

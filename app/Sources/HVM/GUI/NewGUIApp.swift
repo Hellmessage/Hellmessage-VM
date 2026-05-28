@@ -81,9 +81,9 @@ private struct NewGUIRootView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: HVMTheme.space.xl) {
                     headerBlock
+                    buttonsBlock
                     togglesBlock
                     fieldsBlock
-                    buttonsBlock
                     colorPaletteBlock
                     typographyBlock
                     spacingBlock
@@ -421,27 +421,51 @@ private struct NewGUIRootView: View {
         }
     }
 
-    // PR-C1 — 5 variant + hover/press/disabled + icon + probe
+    // PR-C1b — 5 variant + 3 size + focus ring + loading + iconPosition + probe
+    @State private var simulateButtonLoading: Bool = false
+
     private var buttonsBlock: some View {
-        sectionCard(title: "Buttons (PR-C1)") {
+        sectionCard(title: "Buttons (PR-C1b)") {
             VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
                 buttonRow("Variants") {
                     HVMUI.Button("Primary", variant: .primary,
-                              probeID: "showcase.button.primary") { probeClickLog = "primary" }
+                                 probeID: "showcase.button.primary") { probeClickLog = "primary" }
                     HVMUI.Button("Secondary", variant: .secondary,
-                              probeID: "showcase.button.secondary") { probeClickLog = "secondary" }
+                                 probeID: "showcase.button.secondary") { probeClickLog = "secondary" }
                     HVMUI.Button("Ghost", variant: .ghost,
-                              probeID: "showcase.button.ghost") { probeClickLog = "ghost" }
+                                 probeID: "showcase.button.ghost") { probeClickLog = "ghost" }
                     HVMUI.Button("Destructive", variant: .destructive,
-                              probeID: "showcase.button.destructive") { probeClickLog = "destructive" }
+                                 probeID: "showcase.button.destructive") { probeClickLog = "destructive" }
                     HVMUI.Button(icon: "gear", variant: .icon,
-                              probeID: "showcase.button.icon") { probeClickLog = "icon" }
+                                 probeID: "showcase.button.icon") { probeClickLog = "icon" }
                 }
 
-                buttonRow("With icon") {
-                    HVMUI.Button("Create VM", variant: .primary, icon: "plus") { }
-                    HVMUI.Button("Delete", variant: .destructive, icon: "trash") { }
+                buttonRow("Sizes (.sm / .md / .lg)") {
+                    HVMUI.Button("保存", variant: .primary, size: .sm) { }
+                    HVMUI.Button("保存", variant: .primary, size: .md) { }
+                    HVMUI.Button("保存", variant: .primary, size: .lg) { }
+                    HVMUI.Button(icon: "gear", variant: .ghost, size: .sm) { }
+                    HVMUI.Button(icon: "gear", variant: .ghost, size: .md) { }
+                    HVMUI.Button(icon: "gear", variant: .ghost, size: .lg) { }
+                }
+
+                buttonRow("Icon position") {
+                    HVMUI.Button("装机", variant: .primary, icon: "plus",
+                                 iconPosition: .leading) { }
+                    HVMUI.Button("继续", variant: .primary, icon: "arrow.right",
+                                 iconPosition: .trailing) { }
+                    HVMUI.Button("删除", variant: .destructive, icon: "trash") { }
                     HVMUI.Button("Settings", variant: .ghost, icon: "gearshape") { }
+                }
+
+                buttonRow("Loading") {
+                    HVMUI.Button("提交中", variant: .primary, isLoading: true) { }
+                    HVMUI.Button("装机中", variant: .primary, icon: "plus",
+                                 isLoading: simulateButtonLoading,
+                                 probeID: "showcase.button.loadingDemo") {
+                        simulateButtonLoading.toggle()
+                    }
+                    HVMUI.Button(icon: "gear", variant: .icon, isLoading: true) { }
                 }
 
                 buttonRow("Disabled") {
@@ -452,7 +476,7 @@ private struct NewGUIRootView: View {
                 }
 
                 HStack(spacing: HVMTheme.space.sm) {
-                    Text("hvm-dbg gui click --identifier showcase.button.primary")
+                    Text("hvm-dbg gui click --identifier showcase.button.loadingDemo")
                         .font(HVMTheme.font.monoSm)
                         .foregroundStyle(HVMTheme.color.textTertiary)
                     Text("最近: \(probeClickLog)")
