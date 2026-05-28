@@ -16,16 +16,32 @@
 //   - gui.keypress     发 keystroke (PR-G3)
 //   - gui.dialog       当前 dialog 名 (PR-G3 / G4)
 //   - gui.event.subscribe 长连接事件流 (PR-G4)
+//   - debug.trigger-error  仅测试用; 给 ErrorPresenter push 一个测试 ErrorDialog
+//                          (验 dialog z-order / 显示行为, 不依赖真实业务失败路径)
 
 import Foundation
 import AppKit
 import HVMCore
 import HVMIPC
 
+/// 弱引用包装, 给 ProbeServer 拿一个 type-erased `present(_: ErrorDialogModel-ish)`.
+/// 避开 ProbeServer 直接依赖 ErrorPresenter (它在 HVM target, ProbeServer 在 HVMGuiProbe target).
+@MainActor
+public protocol ProbeErrorPresenter: AnyObject {
+    func presentTestError(title: String, message: String, details: String?, hint: String?)
+}
+
 @MainActor
 public enum ProbeServer {
     private static let log = HVMLog.logger("guiprobe.server")
     nonisolated(unsafe) private static var server: SocketServer?
+    /// 用于 debug.trigger-error. HVMApp 启动时通过 setTestErrorPresenter 注入.
+    nonisolated(unsafe) private static weak var errorPresenter: ProbeErrorPresenter?
+
+    /// 给 HVMApp 在启动时注入 ErrorPresenter 适配器 (HVMAppDelegate 起 ProbeServer 前调).
+    public static func setTestErrorPresenter(_ presenter: ProbeErrorPresenter?) {
+        errorPresenter = presenter
+    }
 
     /// 默认 socket 路径
     public static var defaultSocketPath: URL {
@@ -107,11 +123,30 @@ public enum ProbeServer {
         case "gui.read":
             return handleRead(req)
 
+        case "debug.trigger-error":
+            return handleTriggerError(req)
+
         default:
             return .failure(id: req.id,
                              code: "gui.unknown_op",
                              message: "unknown op '\(req.op)'")
         }
+    }
+
+    /// 仅测试用. 通过注入的 ErrorPresenter 适配器 push 一个测试 ErrorDialog,
+    /// 让 hvm-dbg 自动化测试验证 dialog z-order / 显示行为 (不依赖真实业务失败路径).
+    @MainActor
+    private static func handleTriggerError(_ req: IPCRequest) -> IPCResponse {
+        guard let presenter = errorPresenter else {
+            return .failure(id: req.id, code: "debug.no_presenter",
+                             message: "ErrorPresenter 未注入; HVMApp 启动顺序错乱?")
+        }
+        let title = req.args["title"] ?? "Test Error"
+        let message = req.args["message"] ?? "Test error from gui probe (debug.trigger-error)"
+        let details = req.args["details"]
+        let hint = req.args["hint"]
+        presenter.presentTestError(title: title, message: message, details: details, hint: hint)
+        return .success(id: req.id, data: ["triggered": "true"])
     }
 
     @MainActor

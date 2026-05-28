@@ -22,6 +22,8 @@ final class HVMAppDelegate: NSObject, NSApplicationDelegate {
     let confirms = ConfirmPresenter()
     private var mainController: MainWindowController?
     private var statusItem: NSStatusItem?
+    /// Probe error adapter strong ref. ProbeServer 内部用 weak, 这里必须 strong 不让它被回收.
+    private var probeErrorAdapter: ErrorPresenterProbeAdapter?
     /// 状态栏弹出的 SwiftUI popover. 点 status item 切换显隐.
     private var statusPopover: NSPopover?
     /// 优雅退出流程进行中, 防止重复触发. true 时 applicationShouldTerminate 直接放行
@@ -59,6 +61,11 @@ final class HVMAppDelegate: NSObject, NSApplicationDelegate {
 
         // GUI 测试探针 (HDP-GUI). HVM_GUI_PROBE=1 时启 unix socket server,
         // 让 hvm-dbg gui xxx 自动化点击 / 截图 / 输入. 设计稿 docs/v3/HVM_DBG_GUI_PROTOCOL.md.
+        // 注入 ErrorPresenter 适配器, 给 debug.trigger-error op 用 (验 dialog z-order).
+        // adapter 必须用 strong ref 保活, ProbeServer 内只持 weak.
+        let adapter = ErrorPresenterProbeAdapter(presenter: errors)
+        self.probeErrorAdapter = adapter
+        ProbeServer.setTestErrorPresenter(adapter)
         ProbeServer.start()
     }
 
@@ -358,5 +365,17 @@ public enum HVMAppLauncher {
         let delegate = HVMAppDelegate()
         app.delegate = delegate
         app.run()
+    }
+}
+
+/// 把 ErrorPresenter 暴露给 HVMGuiProbe 的 debug.trigger-error op (跨 module 走 protocol).
+@MainActor
+final class ErrorPresenterProbeAdapter: ProbeErrorPresenter {
+    private weak var presenter: ErrorPresenter?
+    init(presenter: ErrorPresenter) { self.presenter = presenter }
+    func presentTestError(title: String, message: String, details: String?, hint: String?) {
+        presenter?.present(ErrorDialogModel(
+            title: title, message: message, details: details, hint: hint
+        ))
     }
 }

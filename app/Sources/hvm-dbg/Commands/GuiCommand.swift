@@ -24,8 +24,42 @@ struct GuiCommand: AsyncParsableCommand {
             GuiClickCommand.self,
             GuiTypeCommand.self,
             GuiReadCommand.self,
+            GuiTriggerErrorCommand.self,
         ]
     )
+}
+
+// MARK: - gui trigger-error (debug only)
+
+struct GuiTriggerErrorCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "trigger-error",
+        abstract: "(测试用) 给 HVM ErrorPresenter push 一个测试 ErrorDialog (验 dialog z-order)"
+    )
+
+    @Option(name: .long, help: "错误标题")
+    var title: String = "Test Error"
+
+    @Option(name: .long, help: "错误正文")
+    var message: String = "Test error from gui probe"
+
+    @Option(name: .long, help: "详情 (可选)")
+    var details: String?
+
+    @Option(name: .long, help: "提示 (可选)")
+    var hint: String?
+
+    func run() throws {
+        do {
+            var args: [String: String] = ["title": title, "message": message]
+            if let details { args["details"] = details }
+            if let hint { args["hint"] = hint }
+            _ = try GuiSocket.wrappedRequest(op: "debug.trigger-error", args: args)
+            print("✔ triggered ErrorDialog '\(title)'")
+        } catch {
+            bail(error)
+        }
+    }
 }
 
 // MARK: - 共享 helpers
