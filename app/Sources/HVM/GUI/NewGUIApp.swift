@@ -27,7 +27,10 @@ final class NewGUIAppDelegate: NSObject, NSApplicationDelegate {
         //      minWidth/minHeight 自动同步到 window.contentMinSize
         //   3. win.contentMinSize = ... — 直接锁 content 区下限 (不含标题栏); 双保险
         // 不用 win.minSize: 它含 28px 标题栏, 设 1080×720 时 content 仍能压到 1080×692.
-        let host = NSHostingController(rootView: NewGUIRootView())
+        // PR-D1: .hvmDialogHost() 套在 NSHostingController root view 外层 —
+        // 作为 NewGUIRootView 的真正祖先, 让 NewGUIRootView 内部 @EnvironmentObject
+        // 能拿到 DialogPresenter.
+        let host = NSHostingController(rootView: NewGUIRootView().hvmDialogHost())
         host.sizingOptions = .minSize
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1080, height: 720),
@@ -71,6 +74,11 @@ public enum NewGUIAppLauncher {
 // MARK: - Root + Theme 演示页
 
 private struct NewGUIRootView: View {
+    // PR-D1: @EnvironmentObject 拿 dialog presenter. .hvmDialogHost() 在
+    // NSHostingController root view 外层套 (NewGUIAppDelegate), 是 NewGUIRootView
+    // 的祖先, environment 注入有效.
+    @EnvironmentObject private var dialog: HVMUI.DialogPresenter
+
     @State private var probeClickLog: String = "—"
 
     var body: some View {
@@ -110,13 +118,9 @@ private struct NewGUIRootView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        // PR-D1 OverlayContainer: .hvmDialogHost() 在 .frame 之前调 — 让 dialog
-        // 在 modifier chain 内但 .frame 之后还能算 size (NSHostingController
-        // sizingOptions=.minSize 拿 root view minSize, 必须 .frame 在最外).
-        // 业务侧子 view 用 @EnvironmentObject 拿 dialog (NewGUIRootView 自己不
-        // 用 @EnvironmentObject — 它在 hvmDialogHost 的子层位置 OK 但本身评估
-        // 时 environment 还没注入, 子 view 在 hvmDialogHost 渲染层之内才能拿).
-        .hvmDialogHost()
+        // PR-D1 OverlayContainer: .hvmDialogHost() 套外层在 NSHostingController
+        // 创建时 (NewGUIRootView().hvmDialogHost()), NewGUIRootView 自己可以
+        // @EnvironmentObject 拿 dialog.
         .frame(minWidth: 1080, idealWidth: 1080, minHeight: 720, idealHeight: 720)
     }
 
@@ -563,14 +567,54 @@ private struct NewGUIRootView: View {
     }
 
     // PR-D1 — OverlayContainer demo (DialogHost + DialogPresenter)
-    // NewGUIRootView 自己不持 dialog (@EnvironmentObject 必须祖先注入; NewGUIRootView
-    // 的 .hvmDialogHost() 是它内部 modifier 不算自己的祖先). dialog 操作放在
-    // DialogDemoContent 子 view 里, 子 view 是 hvmDialogHost 渲染层的内部, 能拿到.
-
     private var dialogDemoBlock: some View {
         sectionCard(title: "OverlayContainer (PR-D1)",
                     description: "全局 dialog 渲染容器 — popover 渲染到 root-level ZStack, 脱离 ScrollView/sectionCard 层级限制. AlertDialog/Confirm/Input/Wizard 后续 D3-D6 落地") {
-            DialogDemoContent()
+            VStack(alignment: .leading, spacing: HVMTheme.space.md) {
+                fieldRow("Try it") {
+                    HVMUI.Button("打开简单 Dialog", variant: .primary,
+                                 probeID: "showcase.dialog.show") {
+                        dialog.present { handle in
+                            SimpleDialogCard(
+                                handle: handle,
+                                title: "Hello!",
+                                message: "这是一个 PR-D1 OverlayContainer demo dialog. 渲染在 root-level ZStack, 完全脱离 ScrollView clip 和 sectionCard 层级."
+                            )
+                        }
+                    }
+
+                    HVMUI.Button("嵌套 Dialog", variant: .secondary,
+                                 probeID: "showcase.dialog.nested") {
+                        dialog.present { outerHandle in
+                            SimpleDialogCard(
+                                handle: outerHandle,
+                                title: "外层",
+                                message: "栈结构支持嵌套. 点'再开一个'看栈顶覆盖效果.",
+                                extraLabel: "再开一个",
+                                extraProbeID: "showcase.dialog.nested.inner",
+                                extraAction: {
+                                    dialog.present { innerHandle in
+                                        SimpleDialogCard(
+                                            handle: innerHandle,
+                                            title: "内层",
+                                            message: "栈顶 dialog 覆盖外层. 关闭内层后外层仍在."
+                                        )
+                                    }
+                                }
+                            )
+                        }
+                    }
+
+                    HVMUI.Button("关闭所有", variant: .ghost,
+                                 probeID: "showcase.dialog.dismissAll") {
+                        dialog.dismissAll()
+                    }
+                }
+
+                Text("hvm-dbg gui click showcase.dialog.show → 打开 dialog (zIndex 浮在 sectionCard / Buttons 节之上)")
+                    .font(HVMTheme.font.monoSm)
+                    .foregroundStyle(HVMTheme.color.textTertiary)
+            }
         }
     }
 
@@ -846,68 +890,6 @@ private struct NewGUIRootView: View {
     ) -> some View {
         HVMUI.Section(title, description: description) {
             content()
-        }
-    }
-}
-
-/// PR-D1 OverlayContainer demo 子 view — 用 @EnvironmentObject 拿 dialog
-/// (NewGUIRootView 自己拿不到, 因为它是 hvmDialogHost 的子层 modifier 应用对象;
-/// 这个子 view 在 hvmDialogHost 渲染层之内, 能拿到 dialog presenter).
-private struct DialogDemoContent: View {
-    @EnvironmentObject private var dialog: HVMUI.DialogPresenter
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: HVMTheme.space.md) {
-            HStack(alignment: .top, spacing: HVMTheme.space.md) {
-                VStack(alignment: .leading, spacing: HVMTheme.space.xs) {
-                    Text("Try it")
-                        .font(HVMTheme.font.sm)
-                        .foregroundStyle(HVMTheme.color.textSecondary)
-                    HStack(alignment: .top, spacing: HVMTheme.space.md) {
-                        HVMUI.Button("打开简单 Dialog", variant: .primary,
-                                     probeID: "showcase.dialog.show") {
-                            dialog.present { handle in
-                                SimpleDialogCard(
-                                    handle: handle,
-                                    title: "Hello!",
-                                    message: "这是一个 PR-D1 OverlayContainer demo dialog. 渲染在 root-level ZStack, 完全脱离 ScrollView clip 和 sectionCard 层级."
-                                )
-                            }
-                        }
-
-                        HVMUI.Button("嵌套 Dialog", variant: .secondary,
-                                     probeID: "showcase.dialog.nested") {
-                            dialog.present { outerHandle in
-                                SimpleDialogCard(
-                                    handle: outerHandle,
-                                    title: "外层",
-                                    message: "栈结构支持嵌套. 点'再开一个'看栈顶覆盖效果.",
-                                    extraLabel: "再开一个",
-                                    extraProbeID: "showcase.dialog.nested.inner",
-                                    extraAction: {
-                                        dialog.present { innerHandle in
-                                            SimpleDialogCard(
-                                                handle: innerHandle,
-                                                title: "内层",
-                                                message: "栈顶 dialog 覆盖外层. 关闭内层后外层仍在."
-                                            )
-                                        }
-                                    }
-                                )
-                            }
-                        }
-
-                        HVMUI.Button("关闭所有", variant: .ghost,
-                                     probeID: "showcase.dialog.dismissAll") {
-                            dialog.dismissAll()
-                        }
-                    }
-                }
-            }
-
-            Text("hvm-dbg gui click showcase.dialog.show → 打开 dialog (zIndex 浮在 sectionCard / Buttons 节之上)")
-                .font(HVMTheme.font.monoSm)
-                .foregroundStyle(HVMTheme.color.textTertiary)
         }
     }
 }

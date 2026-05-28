@@ -25,11 +25,14 @@
 //       }
 //   }
 //
-// 根视图接入 (NewGUIRootView 已加):
-//   var body: some View {
-//       ZStack { ... }
-//           .hvmDialogHost()   // ← 这一行
-//   }
+// 根视图接入 (在创建 NSHostingController 时套外层):
+//   let host = NSHostingController(rootView: NewGUIRootView().hvmDialogHost())
+//
+// 关键: .hvmDialogHost() 必须套在 NSHostingController 的 rootView 外层, 让它
+// 是 NewGUIRootView 的真正祖先. 这样 NewGUIRootView 内部可直接
+// @EnvironmentObject 拿到 DialogPresenter. 如果加在 NewGUIRootView body 末尾
+// 那是子层 modifier 应用对象, NewGUIRootView 自身评估时 environment 还没注入,
+// 会触发 fatal "No ObservableObject of type DialogPresenter found".
 //
 // 多 dialog 栈: 支持嵌套 present (例 Wizard 内再开 Confirm "确定取消?"),
 // 栈顶 dialog 接收交互. 业务侧用 handle.close() 关栈顶, presenter.dismissAll()
