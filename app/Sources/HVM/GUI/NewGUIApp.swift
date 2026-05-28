@@ -81,6 +81,7 @@ private struct NewGUIRootView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: HVMTheme.space.xl) {
                     headerBlock
+                    togglesBlock
                     fieldsBlock
                     buttonsBlock
                     colorPaletteBlock
@@ -258,6 +259,76 @@ private struct NewGUIRootView: View {
                 MotionDemoTile(label: "fast (120ms)", animation: HVMTheme.motion.easeOutFast)
                 MotionDemoTile(label: "base (200ms)", animation: HVMTheme.motion.easeOut)
                 MotionDemoTile(label: "slow (320ms)", animation: HVMTheme.motion.easeOutSlow)
+            }
+        }
+    }
+
+    // PR-C3 — HVMUI.Toggle + HVMUI.Checkbox (size + spring + indeterminate + probe)
+    @State private var autoStart: Bool = true
+    @State private var networkOn: Bool = false
+    @State private var hostKeyboard: Bool = true
+    @State private var hostMouse: Bool = false
+    @State private var termsAccepted: Bool = false
+    @State private var filterRunning: Bool = true
+    @State private var selectAllPartial: Bool = false  // indeterminate demo
+
+    private var togglesBlock: some View {
+        sectionCard(title: "Toggle / Checkbox (PR-C3)") {
+            VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
+                // Toggle 三档 size + label/hint
+                fieldRow("Toggle Sizes") {
+                    HVMUI.Toggle("自动启动", isOn: $autoStart, size: .sm,
+                                 probeID: "showcase.toggle.autostart.sm")
+                    HVMUI.Toggle("自动启动", isOn: $autoStart,
+                                 hint: "登录时自动启 VM", size: .md,
+                                 probeID: "showcase.toggle.autostart.md")
+                    HVMUI.Toggle("自动启动", isOn: $autoStart, size: .lg,
+                                 probeID: "showcase.toggle.autostart.lg")
+                }
+
+                // Toggle 各种 binding 状态
+                fieldRow("Toggle States") {
+                    HVMUI.Toggle("启用网络", isOn: $networkOn,
+                                 hint: networkOn ? "vmnet daemon 正在运行" : "未启",
+                                 probeID: "showcase.toggle.network")
+                    HVMUI.Toggle("Host Keyboard", isOn: $hostKeyboard,
+                                 hint: "捕获主机键盘 (Cmd+Opt 退出)",
+                                 probeID: "showcase.toggle.keyboard")
+                    HVMUI.Toggle("Host Mouse", isOn: $hostMouse,
+                                 hint: "Disabled 演示", disabled: true)
+                }
+
+                // Checkbox 三档 size
+                fieldRow("Checkbox Sizes") {
+                    HVMUI.Checkbox("仅显示运行中", isOn: $filterRunning, size: .sm,
+                                   probeID: "showcase.checkbox.filter.sm")
+                    HVMUI.Checkbox("仅显示运行中", isOn: $filterRunning, size: .md,
+                                   probeID: "showcase.checkbox.filter.md")
+                    HVMUI.Checkbox("仅显示运行中", isOn: $filterRunning, size: .lg,
+                                   probeID: "showcase.checkbox.filter.lg")
+                }
+
+                // Checkbox indeterminate + disabled
+                fieldRow("Checkbox States") {
+                    HVMUI.Checkbox("我同意条款", isOn: $termsAccepted,
+                                   probeID: "showcase.checkbox.terms")
+                    HVMUI.Checkbox("全选 (半选)", isOn: $selectAllPartial,
+                                   indeterminate: true,
+                                   probeID: "showcase.checkbox.selectall.indeterminate")
+                    HVMUI.Checkbox("Disabled", isOn: .constant(true),
+                                   disabled: true)
+                }
+
+                // probe 反馈
+                HStack(spacing: HVMTheme.space.sm) {
+                    Text("hvm-dbg gui click --identifier showcase.toggle.network")
+                        .font(HVMTheme.font.monoSm)
+                        .foregroundStyle(HVMTheme.color.textTertiary)
+                    Text("network: \(networkOn ? "on" : "off")")
+                        .font(HVMTheme.font.xs)
+                        .foregroundStyle(networkOn ? HVMTheme.color.success
+                                                   : HVMTheme.color.textTertiary)
+                }
             }
         }
     }
