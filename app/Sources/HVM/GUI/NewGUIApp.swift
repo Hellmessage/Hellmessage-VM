@@ -89,6 +89,7 @@ private struct NewGUIRootView: View {
                 // Theme token 参考 (放最下面给"我想知道色板/字号" 时查).
                 VStack(alignment: .leading, spacing: HVMTheme.space.xl) {
                     headerBlock.zIndex(140)
+                    dialogDemoBlock.zIndex(135)
                     // 交互组件 — 业务页主战场
                     buttonsBlock.zIndex(130)
                     fieldsBlock.zIndex(120)
@@ -109,6 +110,13 @@ private struct NewGUIRootView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        // PR-D1 OverlayContainer: .hvmDialogHost() 在 .frame 之前调 — 让 dialog
+        // 在 modifier chain 内但 .frame 之后还能算 size (NSHostingController
+        // sizingOptions=.minSize 拿 root view minSize, 必须 .frame 在最外).
+        // 业务侧子 view 用 @EnvironmentObject 拿 dialog (NewGUIRootView 自己不
+        // 用 @EnvironmentObject — 它在 hvmDialogHost 的子层位置 OK 但本身评估
+        // 时 environment 还没注入, 子 view 在 hvmDialogHost 渲染层之内才能拿).
+        .hvmDialogHost()
         .frame(minWidth: 1080, idealWidth: 1080, minHeight: 720, idealHeight: 720)
     }
 
@@ -554,6 +562,18 @@ private struct NewGUIRootView: View {
         }
     }
 
+    // PR-D1 — OverlayContainer demo (DialogHost + DialogPresenter)
+    // NewGUIRootView 自己不持 dialog (@EnvironmentObject 必须祖先注入; NewGUIRootView
+    // 的 .hvmDialogHost() 是它内部 modifier 不算自己的祖先). dialog 操作放在
+    // DialogDemoContent 子 view 里, 子 view 是 hvmDialogHost 渲染层的内部, 能拿到.
+
+    private var dialogDemoBlock: some View {
+        sectionCard(title: "OverlayContainer (PR-D1)",
+                    description: "全局 dialog 渲染容器 — popover 渲染到 root-level ZStack, 脱离 ScrollView/sectionCard 层级限制. AlertDialog/Confirm/Input/Wizard 后续 D3-D6 落地") {
+            DialogDemoContent()
+        }
+    }
+
     // PR-C6 — HVMUI.Icon / KbdHint / Tooltip (辅助组件)
     private var iconsBlock: some View {
         sectionCard(title: "Icon / KbdHint / Tooltip (PR-C6)",
@@ -827,6 +847,124 @@ private struct NewGUIRootView: View {
         HVMUI.Section(title, description: description) {
             content()
         }
+    }
+}
+
+/// PR-D1 OverlayContainer demo 子 view — 用 @EnvironmentObject 拿 dialog
+/// (NewGUIRootView 自己拿不到, 因为它是 hvmDialogHost 的子层 modifier 应用对象;
+/// 这个子 view 在 hvmDialogHost 渲染层之内, 能拿到 dialog presenter).
+private struct DialogDemoContent: View {
+    @EnvironmentObject private var dialog: HVMUI.DialogPresenter
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: HVMTheme.space.md) {
+            HStack(alignment: .top, spacing: HVMTheme.space.md) {
+                VStack(alignment: .leading, spacing: HVMTheme.space.xs) {
+                    Text("Try it")
+                        .font(HVMTheme.font.sm)
+                        .foregroundStyle(HVMTheme.color.textSecondary)
+                    HStack(alignment: .top, spacing: HVMTheme.space.md) {
+                        HVMUI.Button("打开简单 Dialog", variant: .primary,
+                                     probeID: "showcase.dialog.show") {
+                            dialog.present { handle in
+                                SimpleDialogCard(
+                                    handle: handle,
+                                    title: "Hello!",
+                                    message: "这是一个 PR-D1 OverlayContainer demo dialog. 渲染在 root-level ZStack, 完全脱离 ScrollView clip 和 sectionCard 层级."
+                                )
+                            }
+                        }
+
+                        HVMUI.Button("嵌套 Dialog", variant: .secondary,
+                                     probeID: "showcase.dialog.nested") {
+                            dialog.present { outerHandle in
+                                SimpleDialogCard(
+                                    handle: outerHandle,
+                                    title: "外层",
+                                    message: "栈结构支持嵌套. 点'再开一个'看栈顶覆盖效果.",
+                                    extraLabel: "再开一个",
+                                    extraProbeID: "showcase.dialog.nested.inner",
+                                    extraAction: {
+                                        dialog.present { innerHandle in
+                                            SimpleDialogCard(
+                                                handle: innerHandle,
+                                                title: "内层",
+                                                message: "栈顶 dialog 覆盖外层. 关闭内层后外层仍在."
+                                            )
+                                        }
+                                    }
+                                )
+                            }
+                        }
+
+                        HVMUI.Button("关闭所有", variant: .ghost,
+                                     probeID: "showcase.dialog.dismissAll") {
+                            dialog.dismissAll()
+                        }
+                    }
+                }
+            }
+
+            Text("hvm-dbg gui click showcase.dialog.show → 打开 dialog (zIndex 浮在 sectionCard / Buttons 节之上)")
+                .font(HVMTheme.font.monoSm)
+                .foregroundStyle(HVMTheme.color.textTertiary)
+        }
+    }
+}
+
+/// 简单 dialog 卡片 — D1 demo 用. D3 AlertDialog 落地后业务侧改用 dialog.alert(...)
+private struct SimpleDialogCard: View {
+    let handle: HVMUI.DialogHandle
+    let title: String
+    let message: String
+    var extraLabel: String? = nil
+    var extraProbeID: String? = nil
+    var extraAction: (@MainActor @Sendable () -> Void)? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: HVMTheme.space.md) {
+            HStack {
+                Text(title)
+                    .font(HVMTheme.font.lg)
+                    .foregroundStyle(HVMTheme.color.textPrimary)
+                Spacer()
+                HVMUI.Button(icon: "xmark", variant: .icon, size: .sm,
+                             probeID: "demo.dialog.close.x") {
+                    handle.close()
+                }
+            }
+
+            Text(message)
+                .font(HVMTheme.font.base)
+                .foregroundStyle(HVMTheme.color.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: HVMTheme.space.sm) {
+                HVMUI.Button("取消", variant: .secondary,
+                             probeID: "demo.dialog.cancel") { handle.close() }
+                Spacer()
+                if let extraLabel, let extraProbeID, let extraAction {
+                    HVMUI.Button(extraLabel, variant: .secondary,
+                                 probeID: extraProbeID, action: extraAction)
+                }
+                HVMUI.Button("确定", variant: .primary,
+                             probeID: "demo.dialog.confirm") { handle.close() }
+            }
+            .padding(.top, HVMTheme.space.xs)
+        }
+        .padding(HVMTheme.space.lg)
+        .frame(width: 400)
+        .background(
+            RoundedRectangle(cornerRadius: HVMTheme.radius.xl)
+                .fill(HVMTheme.color.bgOverlay)
+                .overlay(
+                    RoundedRectangle(cornerRadius: HVMTheme.radius.xl)
+                        .stroke(HVMTheme.color.borderEmphasis,
+                                lineWidth: HVMTheme.border.hairline)
+                )
+        )
+        .shadow(color: .black.opacity(0.45), radius: 24, x: 0, y: 12)
+        .shadow(color: .black.opacity(0.20), radius: 4, x: 0, y: 2)
     }
 }
 
