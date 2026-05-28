@@ -8,6 +8,20 @@ SWIFTPM_DIR   := $(PKG_DIR)/.build
 # 签名身份: 空/auto = bundle.sh 自动探测 (Apple Development 优先, 否则 ad-hoc)
 SIGN_IDENTITY ?= auto
 ENTITLEMENTS  := $(PKG_DIR)/Resources/HVM.entitlements
+
+# GUI 开关:
+#   GUI=new (默认) — 新 GUI (app/Sources/HVM/GUI/**, NewGUIAppLauncher; 重构中)
+#   GUI=old        — 老 GUI (app/Sources/HVM/UI/**, HVMAppLauncher; 整套保留作回退)
+# 默认走新 GUI: 透传 -Xswiftc -DNEW_GUI 让 main.swift 走 #if NEW_GUI 分支.
+# 切换 GUI 时 SwiftPM 会自动按条件编译 flag 变化重链接, 不需要 make clean.
+GUI ?= new
+ifeq ($(GUI),new)
+SWIFT_DEFINES := -Xswiftc -DNEW_GUI
+else ifeq ($(GUI),old)
+SWIFT_DEFINES :=
+else
+$(error 未知 GUI=$(GUI), 可选: old / new)
+endif
 # QEMU 后端产物 (由 scripts/qemu-build.sh 生成, 仓库 ignore, 详见 docs/QEMU_INTEGRATION.md)
 # stage 即裁剪 + 签名 + LICENSE/MANIFEST 后的最终成品, bundle.sh 直接拷进 .app
 # 不再有 third_party/qemu/ 中间 vendor 层
@@ -22,7 +36,7 @@ HVM_CLI_BIN     := $(SWIFT_BUILD_DIR)/hvm-cli
 HVM_DBG_BIN     := $(SWIFT_BUILD_DIR)/hvm-dbg
 BUNDLE_STAMP    := $(BUILD_DIR)/.bundle-stamp
 
-.PHONY: all build bundle compile dev verify clean help icon register-types qemu qemu-clean edk2 edk2-clean build-all xed install uninstall run-app
+.PHONY: all build bundle compile dev verify clean help icon register-types qemu qemu-clean edk2 edk2-clean build-all xed install uninstall run-app open dev-open
 
 # 默认: release 模式 + 完整 .app 签名
 all: build
@@ -38,8 +52,15 @@ help:
 	@echo "  make xed        — Xcode 打开 SwiftPM 包 (开发期辅助, 非权威构建路径)"
 	@echo "  make install    — 把 build/HVM.app 安装到 /Applications/ (覆盖旧版)"
 	@echo "  make uninstall  — 从 /Applications/ 卸载 HVM.app"
-	@echo "  make run-app    — build + install + 重启 GUI 主进程 (开发期 dev loop; 不动正在运行的 VM host 子进程)"
+	@echo "  make run-app    — build + install + 重启 GUI 主进程 (release; 不动正在运行的 VM host 子进程)"
+	@echo "  make open       — run-app 的短别名 (release; 改一行 ~14s)"
+	@echo "  make dev-open   — debug 模式 dev loop, 改一行 ~3-5s; 推荐日常迭代用"
 	@echo "  make clean      — 清除 build/ 和 app/.build/"
+	@echo
+	@echo "GUI 切换 (任意 make 目标都可加):"
+	@echo "  GUI=new (默认) — 新 GUI (app/Sources/HVM/GUI/**, 重构中)"
+	@echo "  GUI=old        — 老 GUI (app/Sources/HVM/UI/**, 整套保留作回退)"
+	@echo "  例: make install GUI=old / make run-app GUI=old / make dev GUI=old"
 	@echo
 	@echo "QEMU 后端 (Win arm64 / 可选 Linux arm64; 详见 docs/QEMU_INTEGRATION.md):"
 	@echo "  make edk2       — 拉 EDK2 + apply Win11 patch + 编译 (~5 分钟; 仅打包者跑; Win11 ARM64 装机必需)"
@@ -49,10 +70,12 @@ help:
 	@echo "  make build-all  — make edk2 + make qemu + make build (发布完整流程)"
 
 # 1. SwiftPM 编译全部 executable
+# $(SWIFT_DEFINES) 为空 (GUI=old) 时 swift build 拿到空字符串, 等价不传; GUI=new 时
+# 透传 `-Xswiftc -DNEW_GUI` 让 main.swift 走新 GUI 分支
 compile:
-	swift build --package-path $(PKG_DIR) -c $(CONFIGURATION) --product HVM
-	swift build --package-path $(PKG_DIR) -c $(CONFIGURATION) --product hvm-cli
-	swift build --package-path $(PKG_DIR) -c $(CONFIGURATION) --product hvm-dbg
+	swift build --package-path $(PKG_DIR) -c $(CONFIGURATION) $(SWIFT_DEFINES) --product HVM
+	swift build --package-path $(PKG_DIR) -c $(CONFIGURATION) $(SWIFT_DEFINES) --product hvm-cli
+	swift build --package-path $(PKG_DIR) -c $(CONFIGURATION) $(SWIFT_DEFINES) --product hvm-dbg
 
 # 2. 生成图标 (源图不存在则跳过, 不阻断构建)
 icon:
@@ -161,6 +184,17 @@ run-app: install
 	fi
 	@open /Applications/HVM.app
 	@echo "✔ 已启动 /Applications/HVM.app"
+
+# run-app 的短别名 (习惯性 `make open` 即编译 + 关旧 + 启新; 透传 GUI=old/new)
+open: run-app
+
+# debug 模式 dev loop: 跳过 release 全模块优化 (~14s → ~3-5s).
+# debug / release 各自走 .build/debug / .build/release 子目录, BUNDLE_STAMP 在 build/
+# 顶层只一份, 切 CONFIGURATION 会 invalidate stamp 重 bundle — 跟 swift build 同步.
+# AMFI + entitlement 在 debug 签名也走 com.apple.security.virtualization, VZ guest 能正常起.
+# 想要 release 性能测试或发布走 `make open` / `make build`.
+dev-open:
+	@$(MAKE) open CONFIGURATION=debug
 
 # 从 /Applications/ 卸载 (用户数据 ~/Library/Application Support/HVM/ 不动)
 uninstall:

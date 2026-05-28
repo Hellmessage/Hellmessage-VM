@@ -362,6 +362,10 @@ QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场�
 
 Agent (Claude Code 等) 跨 session / 跨电脑都要保留, 写入项目 CLAUDE.md 而非 ~/.claude/projects/.../memory/.
 
+### 回复语言: 中文
+
+跟用户的所有对话回复一律用中文 (代码 / 命令 / 文件名 / log 原文等技术 token 保留英文). 包括: 任务汇报 / 方案说明 / 进度更新 / 错误解释 / 提问澄清. 不切英文, 不混用. 代码内中文注释已是项目约定 (见 "代码约束").
+
 ### 参考实现: UTM, 不再参考 hell-vm
 
 凡是 "其他 QEMU app / SPICE / vdagent / Win driver 怎么做" 问题, **默认查 UTM 源码**.
