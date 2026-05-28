@@ -47,6 +47,12 @@ extension HVMTheme {
 
         // 透明 (按钮 / 字段 ghost 态 bg; 业务侧禁止直写 Color.clear)
         static let transparent = Color.clear
+
+        // disabled 控件 bg — 比 bgRaised 亮一档, 在 bgBase 主底上有清晰轮廓.
+        // Toggle / Checkbox / 其他控件 disabled 时改用这个 bg 而不是单纯 opacity 0.4
+        // (深色 GUI 上整体降透会让控件跟底色压成一片, 看不出形). 配合 textTertiary 文字
+        // 和圆点形成"低对比但可读"的 disabled 态.
+        static let bgDisabled = Color(hex: 0x2A2B2E)
     }
 }
 

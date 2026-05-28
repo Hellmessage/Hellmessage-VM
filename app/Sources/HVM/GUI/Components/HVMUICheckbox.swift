@@ -96,14 +96,14 @@ struct Checkbox: View {
                 if let label {
                     Text(label)
                         .font(size.labelFont)
-                        .foregroundStyle(HVMTheme.color.textPrimary)
+                        .foregroundStyle(isDisabled ? HVMTheme.color.textTertiary
+                                                    : HVMTheme.color.textPrimary)
                 }
             }
         }
         .buttonStyle(.plain)
         .focused($isFocused)
         .disabled(isDisabled)
-        .opacity(isDisabled ? 0.4 : 1.0)
         .onHover { if !isDisabled { isHovered = $0 } }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(label ?? "")
@@ -134,7 +134,7 @@ struct Checkbox: View {
             if isMarked {
                 Image(systemName: indeterminate ? "minus" : "checkmark")
                     .font(size.iconFont)
-                    .foregroundStyle(HVMTheme.color.textOnAccent)
+                    .foregroundStyle(iconColor)
                     .scaleEffect(isMarked ? 1.0 : 0.6)
                     .opacity(isMarked ? 1 : 0)
             }
@@ -144,7 +144,12 @@ struct Checkbox: View {
         .animation(HVMTheme.motion.easeOut, value: isFocused)
     }
 
+    /// disabled 时强制走 bgDisabled (灰底 + 灰勾), 不用 accent 误导用户它能点.
+    /// off 态 disabled = 透明底 (跟普通 off 一致, 仅靠 border 显示)
     private var boxFill: Color {
+        if isDisabled {
+            return isMarked ? HVMTheme.color.bgDisabled : HVMTheme.color.transparent
+        }
         if isMarked {
             return isHovered ? HVMTheme.color.accentHover : HVMTheme.color.accent
         }
@@ -152,8 +157,15 @@ struct Checkbox: View {
     }
 
     private var boxBorder: Color {
+        // disabled 始终保留 border, 不论 marked 与否 — 否则 disabled+marked 时
+        // 没 border 又没 accent bg, 在 bgDisabled 上靠 textTertiary 勾撑形太弱
+        if isDisabled { return HVMTheme.color.borderDefault }
         if isMarked { return HVMTheme.color.transparent }
         return HVMTheme.color.borderDefault
+    }
+
+    private var iconColor: Color {
+        isDisabled ? HVMTheme.color.textTertiary : HVMTheme.color.textOnAccent
     }
 
     @ViewBuilder

@@ -102,7 +102,6 @@ struct Toggle: View {
         .buttonStyle(.plain)
         .focused($isFocused)
         .disabled(isDisabled)
-        .opacity(isDisabled ? 0.4 : 1.0)
         .onHover { if !isDisabled { isHovered = $0 } }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(label ?? hint ?? "")
@@ -122,21 +121,33 @@ struct Toggle: View {
             if let label {
                 Text(label)
                     .font(size.labelFont)
-                    .foregroundStyle(HVMTheme.color.textPrimary)
+                    .foregroundStyle(isDisabled ? HVMTheme.color.textTertiary
+                                                : HVMTheme.color.textPrimary)
             }
             if let hint {
                 Text(hint)
                     .font(HVMTheme.font.xs)
-                    .foregroundStyle(HVMTheme.color.textSecondary)
+                    .foregroundStyle(HVMTheme.color.textTertiary)
             }
         }
+    }
+
+    /// 容器 bg — disabled 时走 bgDisabled (亮一档灰), 跟主底 #08090A 有清晰轮廓.
+    /// 不用 .opacity(0.4) 整 view 降透 — 深底上容器会跟主底压成一片.
+    private var sliderBg: Color {
+        if isDisabled { return HVMTheme.color.bgDisabled }
+        return isOn ? HVMTheme.color.accent : HVMTheme.color.bgRaised
+    }
+
+    private var dotColor: Color {
+        isDisabled ? HVMTheme.color.textTertiary : HVMTheme.color.textPrimary
     }
 
     private var slider: some View {
         ZStack(alignment: isOn ? .trailing : .leading) {
             // 容器
             RoundedRectangle(cornerRadius: size.height / 2)
-                .fill(isOn ? HVMTheme.color.accent : HVMTheme.color.bgRaised)
+                .fill(sliderBg)
                 .frame(width: size.width, height: size.height)
                 .overlay(
                     // hover layer (off 态时更明显)
@@ -147,15 +158,15 @@ struct Toggle: View {
                 .overlay(
                     // 默认边框 (off 态可见, on 态用 accent 自己代替)
                     RoundedRectangle(cornerRadius: size.height / 2)
-                        .stroke(isOn ? HVMTheme.color.transparent
-                                     : HVMTheme.color.borderDefault,
+                        .stroke(isOn && !isDisabled ? HVMTheme.color.transparent
+                                                    : HVMTheme.color.borderDefault,
                                 lineWidth: HVMTheme.border.hairline)
                 )
                 .overlay(focusRing)
 
-            // 圆点 (white)
+            // 圆点 (white 或 disabled 灰)
             Circle()
-                .fill(HVMTheme.color.textPrimary)
+                .fill(dotColor)
                 .frame(width: size.dotDiameter, height: size.dotDiameter)
                 .padding(.horizontal, 2)
         }
