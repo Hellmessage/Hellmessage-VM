@@ -768,10 +768,108 @@ private struct NewGUIRootView: View {
                     }
                 }
 
-                Text("hvm-dbg gui click showcase.confirm.* / input.* → 最近: \(probeClickLog)")
+                // PR-D6: WizardDialog (多步骤 + 步骤指示器 + 上一步/下一步)
+                fieldRow("WizardDialog (PR-D6, async API)") {
+                    HVMUI.Button("创建 VM 向导 (3 步)",
+                                 variant: .primary, icon: "wand.and.stars",
+                                 probeID: "showcase.wizard.createVM") {
+                        Task { @MainActor in
+                            let r = await dialog.wizard(
+                                title: "创建 VM",
+                                steps: [
+                                    .init(title: "选 OS") {
+                                        wizardStepDemoOS
+                                    },
+                                    .init(title: "配置") {
+                                        wizardStepDemoConfig
+                                    },
+                                    .init(title: "确认") {
+                                        wizardStepDemoReview
+                                    }
+                                ],
+                                probeID: "showcase.wizard.createVM.dlg"
+                            )
+                            switch r {
+                            case .completed: probeClickLog = "wizard → completed"
+                            case .cancelled: probeClickLog = "wizard → cancelled"
+                            }
+                        }
+                    }
+                    HVMUI.Button("两步 demo",
+                                 variant: .secondary, icon: "checklist",
+                                 probeID: "showcase.wizard.twoStep") {
+                        Task { @MainActor in
+                            let r = await dialog.wizard(
+                                title: "两步演示",
+                                steps: [
+                                    .init(title: "Hello") {
+                                        Text("第一步内容 — 任何 SwiftUI View 都可以塞进 step.content")
+                                            .font(HVMTheme.font.base)
+                                            .foregroundStyle(HVMTheme.color.textSecondary)
+                                    },
+                                    .init(title: "World") {
+                                        Text("第二步内容 — 最后一步「下一步」自动变「完成」")
+                                            .font(HVMTheme.font.base)
+                                            .foregroundStyle(HVMTheme.color.textSecondary)
+                                    }
+                                ],
+                                probeID: "showcase.wizard.twoStep.dlg"
+                            )
+                            switch r {
+                            case .completed: probeClickLog = "twoStep → completed"
+                            case .cancelled: probeClickLog = "twoStep → cancelled"
+                            }
+                        }
+                    }
+                }
+
+                Text("hvm-dbg gui click showcase.confirm.* / input.* / wizard.* → 最近: \(probeClickLog)")
                     .font(HVMTheme.font.monoSm)
                     .foregroundStyle(HVMTheme.color.textTertiary)
             }
+        }
+    }
+
+    // PR-D6 — Wizard 各步 demo 内容 (静态展示, 不持业务态)
+
+    private var wizardStepDemoOS: some View {
+        VStack(alignment: .leading, spacing: HVMTheme.space.md) {
+            Text("选择 guest OS").font(HVMTheme.font.md)
+                .foregroundStyle(HVMTheme.color.textPrimary)
+            Text("演示步骤 — 真实业务页这里放 HVMUI.Select 选 macOS / Linux / Windows.")
+                .font(HVMTheme.font.base)
+                .foregroundStyle(HVMTheme.color.textSecondary)
+            HStack(spacing: HVMTheme.space.sm) {
+                HVMUI.Badge("macOS", variant: .accent)
+                HVMUI.Badge("Linux", variant: .info)
+                HVMUI.Badge("Windows (实验性)", variant: .warn)
+            }
+        }
+    }
+
+    private var wizardStepDemoConfig: some View {
+        VStack(alignment: .leading, spacing: HVMTheme.space.md) {
+            Text("配置硬件").font(HVMTheme.font.md)
+                .foregroundStyle(HVMTheme.color.textPrimary)
+            Text("演示步骤 — 真实业务页这里放 CPU / 内存 / 磁盘 / 网络 表单.")
+                .font(HVMTheme.font.base)
+                .foregroundStyle(HVMTheme.color.textSecondary)
+            HStack(spacing: HVMTheme.space.md) {
+                HVMUI.Badge("4 CPU", variant: .neutral)
+                HVMUI.Badge("8 GB", variant: .neutral)
+                HVMUI.Badge("64 GB SSD", variant: .neutral)
+            }
+        }
+    }
+
+    private var wizardStepDemoReview: some View {
+        VStack(alignment: .leading, spacing: HVMTheme.space.md) {
+            Text("确认创建").font(HVMTheme.font.md)
+                .foregroundStyle(HVMTheme.color.textPrimary)
+            Text("演示步骤 — 真实业务页这里 review 全部配置, 点「完成」后调 hvm-cli create.")
+                .font(HVMTheme.font.base)
+                .foregroundStyle(HVMTheme.color.textSecondary)
+            HVMUI.Badge("ready to create", variant: .success)
         }
     }
 

@@ -515,7 +515,7 @@ Showcase 是组件库的 living doc, 后续 PR-L1 lint 时还要做 visual regre
 | **D3** | feat(gui): HVMAlertDialog (info/warn/error/success 四档) | 4 档 demo + hvm-dbg gui screenshot 视觉一致 |
 | **D4** | feat(gui): HVMConfirmDialog (含 destructive 主按钮) | 确认/取消 / 危险确认 二态 demo + 取消按钮自动 focus |
 | **D5** | feat(gui): HVMInputDialog (单字段 + 多字段表单 + validation hook) | 单/多字段 demo, validation fail 时主按钮禁用 |
-| **D6** | feat(gui): HVMWizardDialog (步骤指示器 + 上下一步 + 取消) | 3 步 demo, hvm-dbg gui click next/prev 切步 OK |
+| **D6** | feat(gui): HVMWizardDialog (步骤指示器 + 上下一步 + 取消) | 3 步 demo, hvm-dbg gui click next/prev 切步 OK | ✅ 已合 |
 | **D7** | feat(gui): Dialog probe id 命名规范固化 + 文档 | docs/v3/HVM_DBG_GUI_PROTOCOL.md 加 "Dialog probe id 规范" 节 |
 
 **Phase L — 防漂移 (收尾, 半天)**
@@ -538,7 +538,7 @@ Showcase 是组件库的 living doc, 后续 PR-L1 lint 时还要做 visual regre
 | **D2** | mono 字体用 SF Mono / JetBrains Mono / 系统 default monospaced? | 系统 monospaced (零打包) | T1 PR 内决 |
 | **D3** | Dialog 蒙底 `Color.black.opacity(0.5)` 还是带 blur material? | 纯黑 0.5 (Linear 同款) | D1 PR 内决 |
 | **D4** | HVMSelect 搜索匹配算法: 子串 / fuzzy / 拼音首字母? | 子串 (最简, 中文友好) | C4 PR 内决 |
-| **D5** | Wizard 步骤指示器位置: 顶部水平 / 左侧垂直? | 顶部水平 (Dialog 卡片宽 = 主轴) | D6 PR 内决 |
+| **D5** | Wizard 步骤指示器位置: 顶部水平 / 左侧垂直? | **已决 顶部水平** (Dialog 卡片宽 = 主轴; D6 PR 已合) | ✅ 已决 |
 | **D6** | 业务页迁移顺序 (本稿合入后第一个业务页是哪个)? | 用户决 (建议从 VM 列表入手) | 本稿全 PR 合入后用户拍 |
 | **D7** | 是否给 Dialog 加 "再次操作" 撤销提示? (例: 删除后 5s 内可撤) | 不加 v1, 留 v2 | 本稿不决, 业务页迁移时按需 |
 | **D8** | 老 GUI 何时退役? | 新 GUI 全业务页迁完 (估 2-3 个月) 后, 老 UI/ 删除 | 不决, 走"业务迁完再说"路径 |
