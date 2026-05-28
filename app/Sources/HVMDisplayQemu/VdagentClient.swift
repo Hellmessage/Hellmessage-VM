@@ -22,9 +22,9 @@
 //     - VD_AGENT_CLIPBOARD_REQUEST (8)      — "把那个 mime 内容发我"
 //     - VD_AGENT_CLIPBOARD (4)              — 实际数据
 //     - VD_AGENT_CLIPBOARD_RELEASE (9)      — "我的剪贴板没了"
-//     - VD_AGENT_FILE_XFER_START (12)       — host → guest 起文件传输
-//     - VD_AGENT_FILE_XFER_STATUS (13)      — 双向状态码 (CAN_SEND_DATA / SUCCESS / 错误)
-//     - VD_AGENT_FILE_XFER_DATA (14)        — chunk 数据
+//     - VD_AGENT_FILE_XFER_START (10)       — host → guest 起文件传输
+//     - VD_AGENT_FILE_XFER_STATUS (11)      — 双向状态码 (CAN_SEND_DATA / SUCCESS / 错误)
+//     - VD_AGENT_FILE_XFER_DATA (12)        — chunk 数据
 //
 // 协商 caps:
 //   CLIPBOARD_BY_DEMAND (5) + CLIPBOARD_SELECTION (6).
@@ -56,14 +56,19 @@ public final class VdagentClient: @unchecked Sendable {
     private static let VD_AGENT_CLIPBOARD_GRAB: UInt32           = 7
     private static let VD_AGENT_CLIPBOARD_REQUEST: UInt32        = 8
     private static let VD_AGENT_CLIPBOARD_RELEASE: UInt32        = 9
-    private static let VD_AGENT_FILE_XFER_START: UInt32          = 12
-    private static let VD_AGENT_FILE_XFER_STATUS: UInt32         = 13
-    private static let VD_AGENT_FILE_XFER_DATA: UInt32           = 14
+    // 注: 这些 type 编号严格按 spice-protocol/spice/vd_agent.h enum 顺序, 不是 12/13/14.
+    // 之前我把 START/STATUS/DATA 编错成 12/13/14, 与 CLIPBOARD_RELEASE=9 之后下一个 START=10
+    // 错位 2, guest vdagent 收到未知 type 静默丢弃, host 等 CAN_SEND_DATA 永远不来 → 30s
+    // timeout. 正确顺序: START=10, STATUS=11, DATA=12.
+    private static let VD_AGENT_FILE_XFER_START: UInt32          = 10
+    private static let VD_AGENT_FILE_XFER_STATUS: UInt32         = 11
+    private static let VD_AGENT_FILE_XFER_DATA: UInt32           = 12
 
     // capabilities 位编号 (见 vd_agent.h enum VDAgentCap)
     private static let VD_AGENT_CAP_CLIPBOARD_BY_DEMAND: UInt32  = 5
     private static let VD_AGENT_CAP_CLIPBOARD_SELECTION: UInt32  = 6
-    private static let VD_AGENT_CAP_FILE_XFER_DISABLED: UInt32   = 8
+    // 注: cap 位号也错过 — 之前写 8 (那是 GUEST_LINEEND_LF). 正确 13.
+    private static let VD_AGENT_CAP_FILE_XFER_DISABLED: UInt32   = 13
 
     /// FILE_XFER DATA chunk payload 上限 (字节). SPICE upstream VD_AGENT_MAX_DATA = 2048,
     /// 减去 chunk header (8B) + message header (20B) + DATA id/size (12B) = 2008.
