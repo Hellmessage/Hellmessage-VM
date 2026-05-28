@@ -1,0 +1,118 @@
+# 跨 session TODO 清单
+
+> 总览 / 持续追踪 / 防遗忘. 每开新 session 先读这份, 知道当前节奏在哪里.
+>
+> 跟 [docs/v1/ROADMAP.md](v1/ROADMAP.md) 不同 — ROADMAP 是历史 v2 残余清单, 已基本归档.
+> 本文件聚焦**当前进行中**的工作 + **新发现的待办**.
+>
+> **最后更新**: 2026-05-29
+
+---
+
+## 当前主线 — 新 GUI 重构 (docs/v3/NEW_GUI.md)
+
+### Phase T (Theme) — ✅ 全合
+- [x] **T1** Theme/ 7 个 token 文件 (HVMColor / Font / Space / Radius / Border / Motion / HVMTheme namespace) — commit `a991024`
+- [x] **T2** NewGUIRootView Showcase 演示页 (色板 / 字号 / spacing / radius / motion) — commit `a991024`
+
+### Phase C (Components) — 进行中
+- [x] **C1** HVMUI.Button (5 variant + hover/press/disabled + probe) — commit `e1e80b8`
+- [x] **C1b** HVMUI.Button 按 R1-R9 重做 (3 size + focus ring + loading + iconPosition) — commit `5b89ac4`, polish in `f0d4787`
+- [x] **C2** HVMUI.TextField + HVMUI.SecureField (size + 7 状态 + focus ring + a11y + 设计规范 R1-R9) — commit `81d510f`
+- [x] **C3** HVMUI.Toggle + HVMUI.Checkbox (3 size + spring + indeterminate + probe) — commit `6580347`, fixes `07573af` `e10f81b`
+- [x] **C4** HVMUI.Select (下拉 + 搜索 + 键盘导航 + generic value + probe) — commit `0d76252`, fixes `f0d4787` `03dbdaf` `94b9770` `458828a` `d6fbc6d`
+- [ ] **C5** HVMUI.Section + HVMUI.Divider + HVMUI.Badge — 后续业务页骨架基石; Section 需含 R8 layered shadow
+- [ ] **C6** HVMUI.Tooltip + HVMUI.KbdHint + HVMUI.Icon — 辅助组件
+- [ ] **C7** Probe 命名规范固化 — `<scene>.<role>.<element>` 落进 docs/v3/HVM_DBG_GUI_PROTOCOL.md
+- [ ] **C8** Components Showcase 整理 — 当前 NewGUIRootView 已是 Showcase, 末轮做 visual regression baseline 截图存档
+
+### Phase D (Dialog) — 全待
+- [ ] **D1** DialogHost overlay + DialogPresenter + EnvironmentValue 注入
+  - **关键**: 同时解决当前 Select popover 的 zIndex 反向 hack + ScrollView clip 限制 (popover 渲染到 root-level ZStack)
+- [ ] **D2** FocusTrap + EscRouter (tab 锁卡片 + esc 栈顶关)
+- [ ] **D3** HVMUI.AlertDialog (info / warn / error / success 四档)
+- [ ] **D4** HVMUI.ConfirmDialog (含 destructive 主按钮)
+- [ ] **D5** HVMUI.InputDialog (单字段 + 多字段表单 + validation hook)
+- [ ] **D6** HVMUI.WizardDialog (步骤指示器 + 上下一步 + 取消)
+- [ ] **D7** Dialog probe id 命名规范固化 + 文档
+
+### Phase L (Lint) — 待
+- [ ] **L1** scripts/check-gui-tokens.sh 防漂移 lint script (扫 GUI/ 内 Color(red:/ Font.system(size:/ padding(数字) 等硬编码)
+- [ ] **L1.5** Makefile 加 `make check-gui` target 接 L1 script
+
+---
+
+## 已知 work-around (PR-D1 彻底解决)
+
+这些是 PR-C4 修 popover 时的治标手段, 后续 PR-D1 OverlayContainer 落地后应清掉.
+
+- [ ] **ScrollView VStack children 反向 zIndex** ([NewGUIApp.swift](../app/Sources/HVM/GUI/NewGUIApp.swift)) — `headerBlock.zIndex(110)` → `footerBlock.zIndex(10)`, 让上面 sectionCard 内的 Select popover 浮在下方 sectionCard 之上. PR-D1 后 popover 渲染到 root-level ZStack, 不再需要此 hack.
+- [ ] **selectsBlock 内 VStack children 反向 zIndex** ([NewGUIApp.swift](../app/Sources/HVM/GUI/NewGUIApp.swift)) — `fieldRow Basic .zIndex(40)` → `probe HStack .zIndex(10)`, 让上面 fieldRow 内的 popover 浮在下方 fieldRow 之上.
+- [ ] **Select trigger.zIndex(10) / errorMessage.zIndex(1)** ([HVMUISelect.swift](../app/Sources/HVM/GUI/Components/HVMUISelect.swift)) — 让 popover 浮在 errorMessage 之上. PR-D1 后 popover 渲染脱离 VStack 层级, 此 zIndex 也可删.
+- [ ] **Select popover 仍受 ScrollView clip 限制** — 如果 popover 超 ScrollView 可见区底部, 会被裁. 当前靠 Showcase 顺序调整 (selectsBlock 放最上) 缓解. PR-D1 后浮窗渲染到 NSWindow 顶层完全脱离 ScrollView.
+
+---
+
+## 未决事项 (Decisions, docs/v3/NEW_GUI.md)
+
+| ID | 决策 | 当前状态 |
+|---|---|---|
+| D1 | accent 色用青 `#06B6D4` | ✅ 已决 (用户 2026-05-28 拍板) |
+| D2 | mono 字体: SF Mono / JetBrains Mono / 系统 default | 待 (T1 内已用系统 monospaced, 暂保留) |
+| D3 | Dialog 蒙底: `Color.black.opacity(0.5)` vs blur material | 待 (D1 PR 内决) |
+| D4 | HVMSelect 搜索算法: 子串 / fuzzy / 拼音首字母 | ✅ 已用子串 (C4 已合, 中文友好) |
+| D5 | Wizard 步骤指示器位置: 顶部水平 vs 左侧垂直 | 待 (D6 PR 内决) |
+| D6 | 业务页迁移顺序 — 第一个业务页是哪个 | 待用户拍板; 建议 VM 列表 |
+| D7 | Dialog 加 "撤销" 提示 (例: 删除后 5s 内可撤) | 待 (业务页迁移时按需) |
+| D8 | 老 GUI 何时退役 | 待 (新 GUI 全业务页迁完后) |
+
+---
+
+## 业务页迁移 (新 GUI 基础设施全合后)
+
+每个业务页独立子稿 `docs/v3/NEW_GUI_<feature>.md`. 引 NEW_GUI.md 作 R1-R9 + Theme/Components/Dialog 基础设施前置依赖.
+
+- [ ] `docs/v3/NEW_GUI_MAIN_LAYOUT.md` — sidebar + detail 两栏主窗口骨架 + 工具栏
+- [ ] `docs/v3/NEW_GUI_VM_LIST.md` — VM 列表项 (running/stopped/encrypted 状态 / 加密锁图标 / context menu)
+- [ ] `docs/v3/NEW_GUI_VM_DETAIL.md` — 详情页 (overview / sharing / network / disk / 加密 等 section)
+- [ ] `docs/v3/NEW_GUI_CREATE_VM.md` — 创建 VM Wizard (复用 HVMUI.WizardDialog)
+- [ ] `docs/v3/NEW_GUI_ENCRYPTION.md` — 加密 / 解密 / rekey dialog
+- [ ] `docs/v3/NEW_GUI_FILE_TRANSFER.md` — 文件传输 dialog
+- [ ] `docs/v3/NEW_GUI_NETWORK.md` — 网络配置 + vmnet daemon 控制
+- [ ] `docs/v3/NEW_GUI_FRAMEBUFFER.md` — VM 窗口 framebuffer 嵌入 (HDP 接入)
+
+---
+
+## 老 GUI 残余 (D8 触发后)
+
+- [ ] 老 GUI `app/Sources/HVM/UI/**` 整套删除 (Style / Content / Dialogs / Shell / Detached / IPSW / App / Settings 全 ~70+ 文件)
+- [ ] `app/Sources/HVM/HVMApp.swift` 删除 (HVMAppDelegate + HVMAppLauncher)
+- [ ] `app/Sources/HVM/main.swift` 删除 `#if NEW_GUI / #else` 分流, 永远走新 GUI
+- [ ] Makefile 删除 `GUI ?= new` 开关 + 删 `GUI=old` 分支
+- [ ] docs/v1/GUI.md 删除老 GUI 现状描述, 替换成新 GUI 现状
+
+---
+
+## 用户反馈待复现 / 确认
+
+用户视觉反馈, 修复合入后等用户再次确认是否真解决.
+
+- [ ] **"那根青色细线"** ([commit `94b9770`](../README.md) 描述, [`458828a`](../README.md) 已修) — 用户 2026-05-29 看到 popover 内有青色细线, 推测是 sectionCard `.overlay(border)` 透出. 修法已落 (border 移到 `.background` 内). **用户再次开 popover 时若仍见到, 提供新截图重新定位**.
+- [ ] **Showcase 字段 demo 共享 binding 错觉** — Showcase 内多个相似字段共享 `$vmName` / `$autoStart` 等 binding, 用 hvm-dbg gui type 一个会同步影响其他. 业务页接入时每个字段独立 binding, 此 Showcase artifact 不影响生产.
+
+---
+
+## 跨主题低优 (单独提案才动手)
+
+- [ ] **PR-D1 OverlayContainer 之后**: VM detail 页 popover (例如"添加共享目录"小卡片) 也走全局 OverlayContainer
+- [ ] **i18n** — 设计稿明确 NEW_GUI.md 不引 LocalizedStringKey, 硬中文. 未来真要 i18n 时单独立项
+- [ ] **VoiceOver / a11y 全覆盖** — R5 规范要求 accessibilityLabel/Hint/Value, 已落 C1-C4 字段类组件. 业务页接入时统一审计一遍.
+- [ ] **键盘快捷键全局集成** — Cmd+N 新建 VM / Cmd+, 设置 / Cmd+W 关窗 等. 业务页接入时统一规划.
+
+---
+
+## 治理
+
+- 完成的项 `[x]` 标记 + 加 commit hash 引用
+- 下次 session 开始时先读这份, 看上次卡在哪
+- 完成全 Phase C/D/L 后, 本文件可压缩, 把已合 PR 归档到 docs/v3/NEW_GUI.md 的"实现历史"小节
