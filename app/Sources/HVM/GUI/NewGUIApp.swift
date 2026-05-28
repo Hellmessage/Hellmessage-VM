@@ -638,17 +638,19 @@ private struct NewGUIRootView: View {
         }
         .padding(HVMTheme.space.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // bg + border 用 RoundedRectangle 自家绘 (不走 .clipShape) — 让 Select 等
-        // 内部组件的 popover overlay 能浮出卡片边界, 不被 clipShape 裁掉.
-        // 视觉上 bgRaised fill + borderDefault stroke 跟原 .clipShape 一致.
+        // bg + border 在 .background 内一起渲染 (border 作 fill RoundedRectangle
+        // 的 overlay), 不走 .clipShape 也不在外层 .overlay 加 border —
+        // 否则 border 是 sectionCard 最后渲染层, 会画在所有 children (包括
+        // 子组件的 Select popover overlay) 之上, 出现"卡片边框线透到 popover
+        // 内"的视觉 bug.
         .background(
             RoundedRectangle(cornerRadius: HVMTheme.radius.lg)
                 .fill(HVMTheme.color.bgRaised)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: HVMTheme.radius.lg)
-                .stroke(HVMTheme.color.borderDefault,
-                        lineWidth: HVMTheme.border.hairline)
+                .overlay(
+                    RoundedRectangle(cornerRadius: HVMTheme.radius.lg)
+                        .stroke(HVMTheme.color.borderDefault,
+                                lineWidth: HVMTheme.border.hairline)
+                )
         )
     }
 }
