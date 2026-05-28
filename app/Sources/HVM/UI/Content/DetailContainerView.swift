@@ -203,19 +203,33 @@ final class DetailContainerView: NSView {
     /// 捕获 — 让用户操作完全发生在独立窗口里. dialog active 时同样让出 (避免 dialog 上看不见鼠标).
     ///
     /// **z-order 修复**: `FramebufferHostView` 是 MTKView (CAMetalLayer), 实测跟兄弟
-    /// CALayer (dialog overlay) 合成时 z-order 不稳, dialog 经常被 framebuffer 覆盖
-    /// (即便 subview 顺序 + zPosition 都让 overlay 在上). 最稳的做法是 dialogActive=true
-    /// 时直接 `isHidden = true` 把 MTKView 整个从合成树里摘掉, dialog 就能完整显示;
-    /// dismiss 后还原. 副作用: dialog 期间 VM 桌面看不见 (但 VM 仍在跑, 输入也被 inputCaptureEnabled=false
-    /// 截掉, 跟用户预期一致).
+    /// CALayer (dialog overlay) 合成时 z-order 不稳. CAMetalLayer 走 IOSurface + 窗口
+    /// server 异步合成, 跟普通 CALayer 不在同一层 transaction, 单独 `isHidden` / `zPosition`
+    /// 都不一定生效. 这里多管齐下兜底:
+    ///   1. `isPaused = true` — 停 displayLink, 不再 present 新 drawable
+    ///   2. `layer?.contents = nil` — 清掉已 present 的 drawable 内容
+    ///   3. `isHidden = true` — 标准 AppKit 隐藏 (NSView + layer)
+    ///   4. `alphaValue = 0` — opacity 路径兜底
+    /// dismiss 后逆向还原, 下一次 displayLink tick 自动重画一帧.
     private func syncEmbeddedInputCapture() {
         guard let view = currentQemuFanoutView,
               let id = currentQemuFanoutVMID else { return }
         let detached = model.detachedQemuVMs.contains(id)
         view.inputCaptureEnabled = !detached && !dialogActive
-        view.isHidden = dialogActive
-        // MTKView 暂停 displayLink 节省 CPU (隐藏时反正不需要画帧)
-        view.isPaused = dialogActive
+
+        if dialogActive {
+            view.isPaused = true
+            view.layer?.contents = nil   // 清掉 IOSurface drawable 内容, 防止 server 继续合成
+            view.isHidden = true
+            view.alphaValue = 0
+        } else {
+            view.isHidden = false
+            view.alphaValue = 1
+            view.isPaused = false
+            // contents 不主动恢复, 让下个 displayLink tick 自然重画 (renderer 持有 shm
+            // 仍可重新 present)
+            view.setNeedsDisplay(view.bounds)
+        }
     }
 
     /// 比较两份 VMConfig, 忽略 `networks` 字段. 用于 refresh() 决定是否需要重建 stopped host:
