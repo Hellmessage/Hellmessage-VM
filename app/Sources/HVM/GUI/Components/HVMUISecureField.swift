@@ -141,6 +141,10 @@ struct SecureField: View {
                     .progressViewStyle(.circular)
             }
         }
+        // padding + frame 内化 (FieldChrome 不再管), 让 hit test 覆盖整个 padding 区
+        .padding(.horizontal, size.horizontalPadding)
+        .frame(maxWidth: .infinity, minHeight: size.height)
+        .contentShape(Rectangle())
     }
 }
 

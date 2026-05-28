@@ -79,18 +79,22 @@ private struct NewGUIRootView: View {
                 .ignoresSafeArea()
 
             ScrollView {
+                // 反向 zIndex (上→下递减) — 让上面 sectionCard 内的 Select popover
+                // .overlay 视觉上浮在下方 sectionCard 之上, 不被默认 VStack 后绘
+                // 顺序压住. 治标方案; PR-D1 OverlayContainer 后用 root-level
+                // ZStack 渲染浮窗, 彻底解决.
                 VStack(alignment: .leading, spacing: HVMTheme.space.xl) {
-                    headerBlock
-                    selectsBlock
-                    buttonsBlock
-                    togglesBlock
-                    fieldsBlock
-                    colorPaletteBlock
-                    typographyBlock
-                    spacingBlock
-                    radiusBlock
-                    motionBlock
-                    footerBlock
+                    headerBlock.zIndex(110)
+                    selectsBlock.zIndex(100)
+                    buttonsBlock.zIndex(90)
+                    togglesBlock.zIndex(80)
+                    fieldsBlock.zIndex(70)
+                    colorPaletteBlock.zIndex(60)
+                    typographyBlock.zIndex(50)
+                    spacingBlock.zIndex(40)
+                    radiusBlock.zIndex(30)
+                    motionBlock.zIndex(20)
+                    footerBlock.zIndex(10)
                 }
                 .padding(HVMTheme.space.xxl)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -272,6 +276,8 @@ private struct NewGUIRootView: View {
 
     private var selectsBlock: some View {
         sectionCard(title: "Select (PR-C4)") {
+            // 反向 zIndex 让上面 fieldRow 的 Select popover 浮在下方 fieldRow 之上.
+            // 治标方案; PR-D1 OverlayContainer 彻底解决.
             VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
                 fieldRow("Basic") {
                     HVMUI.Select(
@@ -297,6 +303,7 @@ private struct NewGUIRootView: View {
                     )
                     .frame(maxWidth: 160)
                 }
+                .zIndex(40)
 
                 // searchable + 大量选项
                 fieldRow("Searchable (10 ISO)") {
@@ -323,6 +330,7 @@ private struct NewGUIRootView: View {
                     )
                     .frame(maxWidth: 320)
                 }
+                .zIndex(30)
 
                 fieldRow("States") {
                     HVMUI.Select(
@@ -351,6 +359,7 @@ private struct NewGUIRootView: View {
                     )
                     .frame(maxWidth: 200)
                 }
+                .zIndex(20)
 
                 HStack(spacing: HVMTheme.space.sm) {
                     Text("hvm-dbg gui type --identifier showcase.select.engine --text QEMU")
@@ -360,6 +369,7 @@ private struct NewGUIRootView: View {
                         .font(HVMTheme.font.xs)
                         .foregroundStyle(HVMTheme.color.accent)
                 }
+                .zIndex(10)
             }
         }
     }

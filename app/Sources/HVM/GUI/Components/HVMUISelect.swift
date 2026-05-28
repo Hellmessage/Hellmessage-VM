@@ -178,60 +178,65 @@ struct Select<Value: Hashable>: View {
     }
 
     private var trigger: some View {
-        ZStack(alignment: .topLeading) {
-            // 真正的按钮 trigger
-            SwiftUI.Button {
-                toggleOpen()
-            } label: {
-                HStack(spacing: HVMTheme.space.sm) {
-                    if let icon = icon ?? currentOption?.icon {
-                        Image(systemName: icon)
-                            .font(size.font)
-                            .foregroundStyle(HVMTheme.color.textSecondary)
-                    }
-
-                    SwiftUI.Text(currentOption?.label ?? placeholder)
+        SwiftUI.Button {
+            toggleOpen()
+        } label: {
+            HStack(spacing: HVMTheme.space.sm) {
+                if let icon = icon ?? currentOption?.icon {
+                    Image(systemName: icon)
                         .font(size.font)
-                        .foregroundStyle(currentOption == nil
-                                         ? HVMTheme.color.textTertiary
-                                         : HVMTheme.color.textPrimary)
-                        .lineLimit(1)
+                        .foregroundStyle(HVMTheme.color.textSecondary)
+                }
 
-                    Spacer(minLength: 0)
+                SwiftUI.Text(currentOption?.label ?? placeholder)
+                    .font(size.font)
+                    .foregroundStyle(currentOption == nil
+                                     ? HVMTheme.color.textTertiary
+                                     : HVMTheme.color.textPrimary)
+                    .lineLimit(1)
 
-                    if isLoading {
-                        ProgressView()
-                            .controlSize(.small)
-                            .scaleEffect(size.spinnerScale)
-                            .progressViewStyle(.circular)
-                    } else {
-                        Image(systemName: isOpen ? "chevron.up" : "chevron.down")
-                            .font(size.font)
-                            .foregroundStyle(HVMTheme.color.textSecondary)
-                    }
+                Spacer(minLength: 0)
+
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(size.spinnerScale)
+                        .progressViewStyle(.circular)
+                } else {
+                    Image(systemName: isOpen ? "chevron.up" : "chevron.down")
+                        .font(size.font)
+                        .foregroundStyle(HVMTheme.color.textSecondary)
                 }
             }
-            .buttonStyle(.plain)
-            .focused($triggerFocused)
-            .disabled(isDisabled)
-            .modifier(FieldChrome(
-                size: size,
-                isFocused: triggerFocused || isOpen,
-                isHovered: isHovered && !isDisabled,
-                isError: errorMessage != nil,
-                isDisabled: isDisabled
-            ))
-            .onHover { isHovered = $0 }
-            // implicit trigger probe — <probeID>.trigger 接 .button(toggleOpen).
-            // 业务侧不用显式传, 自动派生; hvm-dbg gui click 自动化展开下拉用.
-            .modifier(ProbeSelectTriggerModifier(
-                probeID: probeID.map { "\($0).trigger" },
-                label: (label ?? placeholder) + " (打开/关闭下拉)",
-                toggle: { toggleOpen() },
-                isDisabled: isDisabled
-            ))
-
-            // 自家 overlay 浮窗 — 完全自绘, 无系统 vibrancy / arrow / 阴影
+            // 内化 padding + frame + contentShape, 让 button hit test 覆盖整个 padding
+            // 区域 (修 "点击中间不显示下拉" bug). Spacer(minLength: 0) + frame maxWidth
+            // 让 HStack 撑满 trigger 宽度.
+            .padding(.horizontal, size.horizontalPadding)
+            .frame(maxWidth: .infinity, minHeight: size.height)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focused($triggerFocused)
+        .disabled(isDisabled)
+        .modifier(FieldChrome(
+            size: size,
+            isFocused: triggerFocused || isOpen,
+            isHovered: isHovered && !isDisabled,
+            isError: errorMessage != nil,
+            isDisabled: isDisabled
+        ))
+        .onHover { isHovered = $0 }
+        .modifier(ProbeSelectTriggerModifier(
+            probeID: probeID.map { "\($0).trigger" },
+            label: (label ?? placeholder) + " (打开/关闭下拉)",
+            toggle: { toggleOpen() },
+            isDisabled: isDisabled
+        ))
+        // popover 用 .overlay(alignment:) 而不是 ZStack child — overlay 不参与
+        // 父 view frame 计算, popover 完全脱离 layout flow 浮在 trigger 下方,
+        // 不会顶下面 fieldRow / sectionCard / VStack sibling. 配合外层 zIndex
+        // 反向让 popover 视觉压在所有下方控件之上.
+        .overlay(alignment: .topLeading) {
             if isOpen {
                 PopoverContent(
                     options: filteredOptions,
@@ -243,8 +248,11 @@ struct Select<Value: Hashable>: View {
                     onClose: { isOpen = false }
                 )
                 .frame(minWidth: 240)
+                // .overlay 容器把 child 高度隐式约束到 trigger frame; 加 fixedSize
+                // 让 popover 用 content 自身 ideal size, ScrollView / VStack 能正确
+                // 撑高 (修 "下拉只显示搜索框, 选项列表消失" bug).
+                .fixedSize(horizontal: false, vertical: true)
                 .offset(y: size.height + HVMTheme.space.xs)
-                .zIndex(1000)
                 .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
             }
         }
@@ -297,8 +305,11 @@ private struct PopoverContent<Value: Hashable>: View {
             if options.isEmpty {
                 emptyState
             } else {
+                // VStack 替 LazyVStack: .overlay 模式下 LazyVStack ideal size 算不
+                // 出会塌成 0; VStack 走 content size 自然撑高. ScrollView 仍包裹
+                // 限 maxHeight 280 防超长选项列表撑爆.
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    VStack(spacing: 0) {
                         ForEach(Array(options.enumerated()), id: \.element.id) { idx, opt in
                             row(idx: idx, option: opt)
                         }
@@ -393,6 +404,9 @@ private struct PopoverContent<Value: Hashable>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(rowBg(isHighlighted: isHighlighted))
             .clipShape(RoundedRectangle(cornerRadius: HVMTheme.radius.sm))
+            // contentShape 让 hover hit 区跟整 row frame 一致 (修 "空白区域移动
+            // 不变色" bug). 否则 hover 只在 HStack content (文字 / icon) 范围内.
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .padding(.horizontal, HVMTheme.space.xs)

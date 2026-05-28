@@ -181,11 +181,17 @@ struct TextField: View {
                     .progressViewStyle(.circular)
             }
         }
+        // padding + frame 内化 (FieldChrome 不再管), 让 hit test 覆盖整个 padding 区
+        .padding(.horizontal, size.horizontalPadding)
+        .frame(maxWidth: .infinity, minHeight: size.height)
+        .contentShape(Rectangle())
     }
 }
 
 /// 字段外框 modifier — TextField / SecureField / Select 共享.
-/// 输入控件作为 content, modifier 加 bg / border / focus ring / hover layer / padding.
+/// 仅管 bg / border / focus ring; padding + frame + contentShape 留给业务侧 button
+/// label 内部, 这样 SwiftUI.Button hit test 覆盖整个 padding 后 frame, 避免"点中间
+/// 空白不响应"问题.
 struct FieldChrome: ViewModifier {
     let size: FieldSize
     let isFocused: Bool
@@ -195,8 +201,6 @@ struct FieldChrome: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .padding(.horizontal, size.horizontalPadding)
-            .frame(height: size.height)
             .background(bgLayer)
             .clipShape(RoundedRectangle(cornerRadius: HVMTheme.radius.md))
             .overlay(borderLayer)
