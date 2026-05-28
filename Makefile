@@ -52,9 +52,10 @@ help:
 	@echo "  make xed        — Xcode 打开 SwiftPM 包 (开发期辅助, 非权威构建路径)"
 	@echo "  make install    — 把 build/HVM.app 安装到 /Applications/ (覆盖旧版)"
 	@echo "  make uninstall  — 从 /Applications/ 卸载 HVM.app"
-	@echo "  make run-app    — build + install + 重启 GUI 主进程 (release; 不动正在运行的 VM host 子进程)"
+	@echo "  make run-app    — build + 重启 build/HVM.app GUI 主进程 (release; 不动 host 子进程; 不写 /Applications/)"
 	@echo "  make open       — run-app 的短别名 (release; 改一行 ~14s)"
 	@echo "  make dev-open   — debug 模式 dev loop, 改一行 ~3-5s; 推荐日常迭代用"
+	@echo "                    注: open / dev-open 不再同步 /Applications/HVM.app, 想测 hvm-cli start 先 make install"
 	@echo "  make clean      — 清除 build/ 和 app/.build/"
 	@echo
 	@echo "GUI 切换 (任意 make 目标都可加):"
@@ -171,19 +172,22 @@ install: build
 		"$$LSREG" -f /Applications/HVM.app 2>/dev/null || true
 	@echo "✔ 已安装: /Applications/HVM.app"
 
-# 开发期 dev loop: 编译 + 安装 + 重启 GUI 主进程 (保留运行中的 VM host 子进程).
-# 主 GUI 进程 cmdline 第二个 token 是 .app/Contents/MacOS/HVM; host 子进程是同一 binary
-# + --host-mode-bundle ... (cmdline 不以 HVM 结尾). 用 regex 匹配 cmdline 第二字段是否
-# 以 .../HVM.app/Contents/MacOS/HVM 结尾 — 比老的 NF==2 字段数判断稳健 (用户带参启动也不漏杀).
-run-app: install
+# 开发期 dev loop: 编译 + 重启 GUI 主进程 (保留运行中的 VM host 子进程).
+# 启动的是 $(BUILD_DIR)/HVM.app — bundle.sh 输出的带签名 + entitlement 的 .app, **不**走
+# /Applications/HVM.app, 避免 dev 期污染线上副本; 想测 hvm-cli start (它只查 /Applications/
+# 与 ~/Applications/ 见 HostLauncher.locateHVMBinary) 单独跑 `make install`.
+# 主 GUI 进程 cmdline 第二个 token 以 .../HVM.app/Contents/MacOS/HVM 结尾 (build/ 与
+# /Applications/ 两条路径都满足); host 子进程 cmdline 带 --host-mode-bundle 后缀 (regex
+# 不匹配, 不被误杀). regex 同时杀 build/ 与 /Applications/ 的 GUI 主进程, 避免两份并存.
+run-app: build
 	@OLDPID=$$(ps -axo pid,command | awk '$$2 ~ /\/HVM\.app\/Contents\/MacOS\/HVM$$/ {print $$1}' | head -1); \
 	if [ -n "$$OLDPID" ]; then \
 		echo "ℹ 重启 GUI 主进程 pid=$$OLDPID (host 子进程不动)"; \
 		kill $$OLDPID 2>/dev/null || true; \
 		sleep 1; \
 	fi
-	@open /Applications/HVM.app
-	@echo "✔ 已启动 /Applications/HVM.app"
+	@open $(BUILD_DIR)/HVM.app
+	@echo "✔ 已启动 $(BUILD_DIR)/HVM.app"
 
 # run-app 的短别名 (习惯性 `make open` 即编译 + 关旧 + 启新; 透传 GUI=old/new)
 open: run-app
