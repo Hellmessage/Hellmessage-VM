@@ -1,6 +1,6 @@
 # 新 GUI 重构 — Linear 风 + 自绘 Dialog + 全局 Theme
 
-> 状态: **实现中** 2026-05-28 (D1 已决; PR-T1 / T2 / C1 / C2 已合; 组件设计规范 R1-R9 落入"组件设计规范"节作为后续 PR 验收基线)
+> 状态: **实现中** 2026-05-29 (D1 已决; Phase T 2/2 + Phase C 8/8 + Phase D 7/7 全合; 剩 Phase L 防漂移 lint; 组件设计规范 R1-R9 落入"组件设计规范"节作为后续 PR 验收基线; Dialog probe id 命名规范固化到 [HVM_DBG_GUI_PROTOCOL.md](../v3/HVM_DBG_GUI_PROTOCOL.md))
 >
 > 入口已就绪 (commit b9e969d): `app/Sources/HVM/GUI/NewGUIApp.swift` + Makefile `GUI ?= new` 透传 `-Xswiftc -DNEW_GUI`. 老 GUI (`app/Sources/HVM/UI/**`) 一行不动作为回退. 本稿覆盖**基础设施层**: Theme token / Components / Dialog 框架. **业务页 (VM 列表 / 详情页 / 创建向导等) 不在本稿范围**, 后续每业务页单独立 `docs/v4/NEW_GUI_<XXX>.md` 子提案.
 
@@ -516,7 +516,7 @@ Showcase 是组件库的 living doc, 后续 PR-L1 lint 时还要做 visual regre
 | **D4** | feat(gui): HVMConfirmDialog (含 destructive 主按钮) | 确认/取消 / 危险确认 二态 demo + 取消按钮自动 focus |
 | **D5** | feat(gui): HVMInputDialog (单字段 + 多字段表单 + validation hook) | 单/多字段 demo, validation fail 时主按钮禁用 |
 | **D6** | feat(gui): HVMWizardDialog (步骤指示器 + 上下一步 + 取消) | 3 步 demo, hvm-dbg gui click next/prev 切步 OK | ✅ 已合 |
-| **D7** | feat(gui): Dialog probe id 命名规范固化 + 文档 | docs/v3/HVM_DBG_GUI_PROTOCOL.md 加 "Dialog probe id 规范" 节 |
+| **D7** | feat(gui): Dialog probe id 命名规范固化 + 文档 | docs/v3/HVM_DBG_GUI_PROTOCOL.md 加 "Dialog probe id 规范" 节 | ✅ 已合 |
 
 **Phase L — 防漂移 (收尾, 半天)**
 

@@ -140,9 +140,16 @@
 - 派生 probe id (复合控件): 不需业务侧传, 组件内部自动派生
   - `<select.probeID>.trigger` — Select trigger button
   - `<select.probeID>.search`  — Select 内 search field
+  - **Dialog 系派生** (业务侧只传 base, dialog 内子控件自动派生; 完整规范见 [docs/v3/HVM_DBG_GUI_PROTOCOL.md "Dialog probe id 命名规范" 节](docs/v3/HVM_DBG_GUI_PROTOCOL.md)):
+    - `<dialog.probeID>.close` — 右上 X (all dialogs)
+    - `<dialog.probeID>.confirm` — Alert / Confirm / Input 主按钮
+    - `<dialog.probeID>.cancel` — Confirm / Input / Wizard 副按钮 (取消)
+    - `<dialog.probeID>.field.<idx>` — InputDialog 第 idx 个字段
+    - `<dialog.probeID>.prev` / `.next` / `.complete` — WizardDialog 导航 (按 currentIndex 派生当前)
+    - `<dialog.probeID>.step.<idx>` — WizardDialog 步骤指示器 (仅 past step 注册, current/future 不点)
 - 业务侧 closure / binding 必须 `@MainActor @Sendable` (跟 ProbeAction 签名对齐)
 
-**为什么强制**: 业务侧偷懒不传 probeID 会让 hvm-dbg gui 自动化覆盖率漏斗, 业务页接入 dialog / wizard 后再补麻烦. 必传让 "每个可点 / 可输 / 可切控件都能被自动化测" 成为编译期保证 (而不是 lint 后置). 详细规范见 [docs/v4/NEW_GUI.md "R6" 节](docs/v4/NEW_GUI.md).
+**为什么强制**: 业务侧偷懒不传 probeID 会让 hvm-dbg gui 自动化覆盖率漏斗, 业务页接入 dialog / wizard 后再补麻烦. 必传让 "每个可点 / 可输 / 可切控件都能被自动化测" 成为编译期保证 (而不是 lint 后置). 详细规范见 [docs/v4/NEW_GUI.md "R6" 节](docs/v4/NEW_GUI.md) + [docs/v3/HVM_DBG_GUI_PROTOCOL.md "Dialog probe id 规范" 节](docs/v3/HVM_DBG_GUI_PROTOCOL.md).
 
 ## VZ 能力边界约束 **必须遵守**
 

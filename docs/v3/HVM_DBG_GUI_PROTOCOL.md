@@ -273,9 +273,118 @@ PR-11f 真机 e2e **依赖** PR-G1 + PR-G3 (至少 screenshot + click + type). �
 - env 开关启用 (D-G6)
 - 主张 PR-G 先行 (D-G9)
 
+## Dialog probe id 命名规范 (PR-D7, 2026-05-29)
+
+> 状态: **代码已合入** — 新 GUI Phase D (D3-D6) 已用该规范, D7 固化登记到此节. 关联 [docs/v4/NEW_GUI.md](../v4/NEW_GUI.md) Phase D PR 表 + [CLAUDE.md](../../CLAUDE.md) "新 GUI (HVMUI) 强制 probeID".
+
+新 GUI (`app/Sources/HVM/GUI/Dialogs/`) 4 类 dialog 都接受一个 `probeID: String` base, 内部按统一规则**派生**控件级 probe id. 业务侧只写 base, 不显式拼派生 id; 自动化测试也按统一 suffix 拨控件.
+
+### 基础规则: 业务侧 base + dialog 自动派生
+
+业务侧:
+
+```swift
+await dialog.confirm(
+    title: "删除 VM?",
+    message: "...",
+    probeID: "dialog.deleteVM"          // 业务 base — 业务侧只传这一个
+)
+```
+
+dialog 内部按下表自动派生子控件 probe id:
+
+| Dialog 类型 | 派生 suffix | 控件 | 注册条件 |
+|---|---|---|---|
+| **Alert / Confirm / Input / Wizard** | `<base>.close` | 右上 X | 始终 |
+| **Alert** | `<base>.confirm` | 主按钮「确定」 | 始终 |
+| **Confirm** | `<base>.confirm` | 主按钮 (含 destructive) | 始终 |
+| **Confirm / Input / Wizard** | `<base>.cancel` | 副按钮「取消」 | 始终 |
+| **Input** | `<base>.confirm` | 主按钮 (validate 通过时) | validate 通过 |
+| **Input** | `<base>.field.<idx>` | 第 idx 个 TextField/SecureField (0-indexed) | 始终 |
+| **Wizard** | `<base>.prev` | 「上一步」 | currentIndex > 0 |
+| **Wizard** | `<base>.next` | 「下一步」 | currentIndex < lastIndex |
+| **Wizard** | `<base>.complete` | 「完成」 | currentIndex == lastIndex |
+| **Wizard** | `<base>.step.<idx>` | 步骤指示器第 idx 个 chip | 仅 past step (`idx < currentIndex`) — 可点回退 |
+
+**为什么 disabled / future / current 不注册**: 自动化 click disabled / 不存在的控件会触发副作用或失败. 只注册当前可见且可触发的控件, 让 `hvm-dbg gui list --prefix <base>` 反映"当前可点"集合.
+
+### 业务 base 命名: `dialog.<scene>` 或 `<scene>.<action>`
+
+跟 G2 既有 `<scene>.<role>.<element>` 规范一致, dialog base 推荐:
+
+| 场景 | base 示例 |
+|---|---|
+| 删除 VM 确认 | `dialog.deleteVM` |
+| 创建 VM 向导 | `dialog.createVM` |
+| 重命名 VM | `dialog.renameVM` |
+| 解锁加密 VM | `dialog.unlockVM` |
+| 加密 / 解密 / rekey | `dialog.encryptVM` / `dialog.decryptVM` / `dialog.rekeyVM` |
+| 添加共享目录 | `dialog.addSharedFolder` |
+| 添加磁盘 | `dialog.addDisk` |
+| 删除快照 | `dialog.deleteSnapshot` |
+| 启动报错 alert | `dialog.startError` |
+
+业务测试调用例:
+
+```bash
+# 1. 触发删除 VM 流程 (toolbar 上某个按钮)
+hvm-dbg gui click --identifier toolbar.button.deleteVM
+
+# 2. dialog 出现, 列当前可点控件
+hvm-dbg gui list --prefix dialog.deleteVM
+# IDENTIFIER                ROLE     LABEL
+# dialog.deleteVM.cancel    button   取消
+# dialog.deleteVM.close     button   xmark
+# dialog.deleteVM.confirm   button   删除
+
+# 3. 点确认
+hvm-dbg gui click --identifier dialog.deleteVM.confirm
+```
+
+### Showcase 命名: `showcase.<dialog-type>.<scenario>` + `.dlg.<suffix>`
+
+showcase demo 区分 trigger 按钮 (在 showcase 页本身) 与 dialog 内派生 id:
+
+| 用途 | 命名 |
+|---|---|
+| Showcase 内触发按钮 | `showcase.<dialog-type>.<scenario>` |
+| 该 demo 的 dialog base | `showcase.<dialog-type>.<scenario>.dlg` |
+| Dialog 内派生 (自动) | `showcase.<dialog-type>.<scenario>.dlg.<suffix>` |
+
+例: 多字段输入 demo
+
+```
+showcase.input.shared                     # 触发按钮 (在 Showcase 页)
+showcase.input.shared.dlg.field.0         # dialog 内第一个字段 (host 路径)
+showcase.input.shared.dlg.field.1         # 第二个字段 (name)
+showcase.input.shared.dlg.confirm         # 添加 / 主按钮
+showcase.input.shared.dlg.cancel          # 取消
+showcase.input.shared.dlg.close           # X
+```
+
+### Disabled 控件 probe 行为
+
+`HVMUI.Button(.., disabled: true)` 不注册 probe (即使传了 probeID). 这是为了**让 `hvm-dbg gui click` 永远只能触发当前真正能触发的动作** — disabled 按钮自动从 registry 消失. InputDialog validate 失败时主按钮 disabled, 同样不可点; validate 通过后立即可点. 自动化脚本因此可用以下模式确认状态:
+
+```bash
+# 输入字段后验证 validate 通过
+hvm-dbg gui type --identifier dialog.unlockVM.field.0 --text "secret123"
+hvm-dbg gui list --prefix dialog.unlockVM | grep confirm   # 出现 → validate 通过
+```
+
+### 接入清单 (业务侧迁移参考)
+
+新业务页接入新 GUI Dialog 时:
+
+1. **base id 用 `dialog.<scene>`** 例 `dialog.deleteVM`
+2. **不要拼**派生 id — 直接调 `dialog.confirm(...)` / `.input(...)` / `.wizard(...)` 把 base 传进去
+3. **测试侧拼派生 id** — 按上表 suffix 模式拨控件, 命名稳定不依赖业务实现
+4. **新增 dialog 类型** (例如 ColorPickerDialog) 时, 在此节追加一行表项, 派生 suffix 选名遵循 "动作动词 (confirm/cancel) / 控件角色 (field/step) / 状态 (prev/next)" 三类
+
 ## 相关文档
 
 - 关联设计稿 [GUI_ENCRYPTION.md](GUI_ENCRYPTION.md) — PR-11f 真机验证依赖此协议
 - 现有 hvm-dbg [docs/v1/DEBUG_PROBE.md](../v1/DEBUG_PROBE.md) (待回写 GUI 节)
 - 现有 IPC: [HVMIPC/SocketServer.swift](../../app/Sources/HVMIPC/SocketServer.swift) — 复用模式参考
 - [CLAUDE.md](../../CLAUDE.md) "调试/诊断工作方式约束" 节 (本稿合入后补"GUI 自动化优先")
+- 新 GUI 设计稿 [docs/v4/NEW_GUI.md](../v4/NEW_GUI.md) — Dialog probe id 规范由其 R6 / Phase D 系列 PR 实现, D7 固化登记到本稿
