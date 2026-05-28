@@ -90,6 +90,13 @@ public final class PasteboardBridge {
         if on { start() } else { stop() }
     }
 
+    /// macOS Cmd+C 一个文件时触发. closure 由 QemuHostEntry 注入, 内部走
+    /// HVMFileClipboardBridge.publishFiles — QGA 上传 + 通知 guest helper 设 Win clipboard
+    /// (UTM 风格 paste-where-you-paste, docs/v3/HOST_FILE_CLIPBOARD.md).
+    /// nil = 没接入文件剪贴板通路 (例如 Linux guest 或老 binary), file URLs 直接忽略.
+    /// 在内部 Pasteboard 轮询线程上调; 调用方负责切到目标线程.
+    public var onFileURLs: (([URL]) -> Void)?
+
     // MARK: - host → guest
 
     private func pollHostPasteboard() {
@@ -103,27 +110,50 @@ public final class PasteboardBridge {
             return
         }
 
-        // 同时取 text + image PNG. 任一非空就推 guest, 全空就 release.
-        // GRAB 会广告所有有内容的 mime, guest REQUEST 时按需取.
+        // 同时取 text + image PNG + file URLs. text/image 走 vdagent (mime 1/2),
+        // file URLs 走 onFileURLs callback (独立的 HVMFileClipboardBridge 通路, 因为
+        // UTM Guest Tools vdagent.exe 不实现 CLIPBOARD_FILE_LIST mime=6, 详见
+        // docs/v3/HOST_FILE_CLIPBOARD.md).
         //
-        // NOTE: file URLs (Cmd+C on Finder file) 走独立的 HVMFileClipboardBridge (HOST_FILE_CLIPBOARD.md
-        // 设计稿), 不走 SPICE vdagent. 探针实验 (2026-05-28) 实测 UTM Guest Tools vdagent.exe
-        // 不实现 CLIPBOARD_FILE_LIST mime=6, 改走自家 guest helper EXE + 独立 virtio-serial.
-        // 这里 PasteboardBridge 只管 text + image 两条 vdagent 通路.
+        // 优先级: file URLs 跟 text/image 都试 — Cmd+C 一个 file 时 NSPasteboard 通常
+        // 同时含 file URL + 文件名文本, 我们各走各的 (guest 端 helper 设 CF_HDROP,
+        // vdagent 设 text). Telegram 等 app 优先取 CF_HDROP (因为里面是文件).
         let text: String? = pb.string(forType: .string)
         let image: Data? = Self.readImagePNG(pb)
+        let fileURLs: [URL]? = Self.readFileURLs(pb)
         let hasText = (text?.isEmpty == false)
         let hasImage = (image != nil)
-        if !hasText && !hasImage {
+        let hasFiles = (fileURLs?.isEmpty == false)
+
+        if !hasText && !hasImage && !hasFiles {
             vdagent.sendClipboardRelease()
             return
         }
-        let textBytes = text?.utf8.count ?? 0
-        let imageBytes = image?.count ?? 0
-        log.info("PasteboardBridge host → guest text=\(textBytes) bytes image=\(imageBytes) bytes")
-        fputs("HVMHost(qemu): PasteboardBridge host→guest text=\(textBytes)B image=\(imageBytes)B\n", stderr)
-        vdagent.sendClipboardData(text: hasText ? text : nil,
-                                   image: hasImage ? image : nil)
+
+        // text / image → vdagent
+        if hasText || hasImage {
+            let textBytes = text?.utf8.count ?? 0
+            let imageBytes = image?.count ?? 0
+            log.info("PasteboardBridge host → guest (vdagent) text=\(textBytes) bytes image=\(imageBytes) bytes")
+            vdagent.sendClipboardData(text: hasText ? text : nil,
+                                       image: hasImage ? image : nil)
+        }
+
+        // file URLs → callback → HVMFileClipboardBridge (UTM 风格)
+        if hasFiles, let urls = fileURLs, let cb = onFileURLs {
+            log.info("PasteboardBridge host → guest (helper) files=\(urls.count)")
+            cb(urls)
+        }
+    }
+
+    /// 读 NSPasteboard 的 file URLs (仅 file URL, 排 https/RTF 等). 没有返 nil.
+    private static func readFileURLs(_ pb: NSPasteboard) -> [URL]? {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: options) as? [URL],
+           !urls.isEmpty {
+            return urls
+        }
+        return nil
     }
 
     /// 读 NSPasteboard 的 image 数据, 转 PNG. 支持类型: PNG (现代 macOS 截图, Chromium, Safari);

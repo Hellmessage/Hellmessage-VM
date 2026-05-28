@@ -382,12 +382,25 @@ public enum QemuHostEntry {
             // 6.4c HVM 自家 guest helper bridge (UTM 风格文件剪贴板, docs/v3/HOST_FILE_CLIPBOARD.md).
             // 仅 Windows guest 起 — helper EXE 只有 Win ARM64 build, Linux guest 没意义.
             // 启动后立即异步 connect, helper 没就绪不报错 (silently retry 5s, 等 guest helper
-            // 进程拉起来). PR-2 范围: 仅 bridge 客户端 + 协议层; PR-3 wire 文件上传 + PasteboardBridge
-            // 回调; PR-4 helper 自动安装.
+            // 进程拉起来). PR-3 接 PasteboardBridge.onFileURLs callback 走 publishFiles 完整通路.
+            // PR-4 helper 自动安装.
             if config.guestOS == .windows {
-                let clipBridge = HVMFileClipboardBridge(socketPath: hvmClipboardSocketURL.path)
+                let clipBridge = HVMFileClipboardBridge(
+                    socketPath: hvmClipboardSocketURL.path,
+                    qgaSocketPath: qgaSocketURL.path
+                )
                 clipBridge.start()
                 QemuHostState.shared.fileClipboardBridge = clipBridge
+                // 接 PasteboardBridge file URLs callback (跟 vdagent text/image 平行路径).
+                // 必须在 PasteboardBridge.start() 之后 / 之前都行 (callback 是 var, runtime 改).
+                QemuHostState.shared.pasteboardBridge?.onFileURLs = { [weak clipBridge] urls in
+                    guard let bridge = clipBridge else { return }
+                    // 后台异步上传 + 通知 helper, 不阻 NSPasteboard 轮询线程
+                    Task.detached(priority: .userInitiated) {
+                        let result = await bridge.publishFiles(urls)
+                        fputs("HVMHost(qemu): file-clipboard publish done: success=\(result.successful.count) skipped=\(result.skipped.count) failed=\(result.failed.count) clipboardSet=\(result.clipboardSet)\n", stderr)
+                    }
+                }
                 fputs("HVMHost(qemu): HVM file-clipboard bridge 已启动 (chardev: \(hvmClipboardSocketURL.lastPathComponent))\n", stderr)
             }
 
