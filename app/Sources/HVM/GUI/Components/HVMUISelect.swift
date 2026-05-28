@@ -128,6 +128,7 @@ struct Select<Value: Hashable>: View {
     @State private var isHovered = false
     @State private var searchText = ""
     @State private var highlightedIndex: Int = 0
+    @State private var triggerWidth: CGFloat = 0
     @FocusState private var triggerFocused: Bool
 
     private var currentOption: SelectOption<Value>? {
@@ -159,12 +160,16 @@ struct Select<Value: Hashable>: View {
                     options: options,
                     isDisabled: isDisabled
                 ))
+                // trigger zIndex 高于 errorMessage, 让 trigger 的 overlay popover
+                // 浮在 errorMessage 之上 (修 "error 字段下拉被红字遮挡" bug)
+                .zIndex(10)
 
             if let errorMessage {
                 SwiftUI.Text(errorMessage)
                     .font(HVMTheme.font.xs)
                     .foregroundStyle(HVMTheme.color.error)
                     .transition(.opacity)
+                    .zIndex(1)
             }
         }
         .animation(HVMTheme.motion.easeOut, value: errorMessage != nil)
@@ -232,6 +237,15 @@ struct Select<Value: Hashable>: View {
             toggle: { toggleOpen() },
             isDisabled: isDisabled
         ))
+        // GeometryReader 拿 trigger 实际宽度上传 @State, popover 用这个宽度
+        // 跟 trigger 对齐 (修 "下拉框宽度跟 select 不一致" bug).
+        .background(
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { triggerWidth = proxy.size.width }
+                    .onChange(of: proxy.size.width) { _, new in triggerWidth = new }
+            }
+        )
         // popover 用 .overlay(alignment:) 而不是 ZStack child — overlay 不参与
         // 父 view frame 计算, popover 完全脱离 layout flow 浮在 trigger 下方,
         // 不会顶下面 fieldRow / sectionCard / VStack sibling. 配合外层 zIndex
@@ -247,7 +261,9 @@ struct Select<Value: Hashable>: View {
                     onSelect: selectOption,
                     onClose: { isOpen = false }
                 )
-                .frame(minWidth: 240)
+                // popover 宽度 = trigger 宽度 (从 GeometryReader 拿). triggerWidth=0
+                // 时 (首帧未测量) 退到 240 防塌.
+                .frame(width: max(triggerWidth, 240))
                 // .overlay 容器把 child 高度隐式约束到 trigger frame; 加 fixedSize
                 // 让 popover 用 content 自身 ideal size, ScrollView / VStack 能正确
                 // 撑高 (修 "下拉只显示搜索框, 选项列表消失" bug).
