@@ -693,7 +693,82 @@ private struct NewGUIRootView: View {
                     }
                 }
 
-                Text("hvm-dbg gui click showcase.confirm.* → await dialog.confirm(...) 返回 .confirmed / .cancelled — 最近: \(probeClickLog)")
+                // PR-D5: InputDialog (单字段 / 多字段 / secure + validate)
+                fieldRow("InputDialog (PR-D5, async API)") {
+                    HVMUI.Button("单字段 (重命名)", variant: .secondary, icon: "pencil",
+                                 probeID: "showcase.input.rename") {
+                        Task { @MainActor in
+                            let r = await dialog.input(
+                                title: "重命名 VM",
+                                fields: [.init(label: "新名称",
+                                               placeholder: "ubuntu-24",
+                                               initialText: "ubuntu-old")],
+                                confirmLabel: "保存",
+                                probeID: "showcase.input.rename.dlg"
+                            )
+                            if case .submitted(let values) = r {
+                                probeClickLog = "rename → \(values[0])"
+                            } else {
+                                probeClickLog = "rename → cancelled"
+                            }
+                        }
+                    }
+                    HVMUI.Button("多字段 + validate", variant: .secondary, icon: "folder.badge.plus",
+                                 probeID: "showcase.input.shared") {
+                        Task { @MainActor in
+                            let r = await dialog.input(
+                                title: "添加共享目录",
+                                fields: [
+                                    .init(label: "host 路径",
+                                          placeholder: "/Users/me/code",
+                                          icon: "folder"),
+                                    .init(label: "name", placeholder: "code")
+                                ],
+                                validate: { values in
+                                    if !values[0].hasPrefix("/") {
+                                        return .invalid("host 路径必须是绝对路径 (以 / 开头)")
+                                    }
+                                    if values[1].isEmpty {
+                                        return .invalid("name 不能为空")
+                                    }
+                                    return .valid
+                                },
+                                confirmLabel: "添加",
+                                probeID: "showcase.input.shared.dlg"
+                            )
+                            if case .submitted(let values) = r {
+                                probeClickLog = "shared → \(values[0]) / \(values[1])"
+                            } else {
+                                probeClickLog = "shared → cancelled"
+                            }
+                        }
+                    }
+                    HVMUI.Button("密码 (secure)", variant: .secondary, icon: "lock",
+                                 probeID: "showcase.input.password") {
+                        Task { @MainActor in
+                            let r = await dialog.input(
+                                title: "解锁加密 VM",
+                                fields: [.init(label: "密码",
+                                               placeholder: "请输入密码",
+                                               secure: true)],
+                                validate: { values in
+                                    values[0].count < 4
+                                        ? .invalid("密码至少 4 位")
+                                        : .valid
+                                },
+                                confirmLabel: "解锁",
+                                probeID: "showcase.input.password.dlg"
+                            )
+                            if case .submitted = r {
+                                probeClickLog = "password → submitted"
+                            } else {
+                                probeClickLog = "password → cancelled"
+                            }
+                        }
+                    }
+                }
+
+                Text("hvm-dbg gui click showcase.confirm.* / input.* → 最近: \(probeClickLog)")
                     .font(HVMTheme.font.monoSm)
                     .foregroundStyle(HVMTheme.color.textTertiary)
             }

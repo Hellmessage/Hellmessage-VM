@@ -5,7 +5,7 @@
 > 跟 [docs/v1/ROADMAP.md](v1/ROADMAP.md) 不同 — ROADMAP 是历史 v2 残余清单, 已基本归档.
 > 本文件聚焦**当前进行中**的工作 + **新发现的待办**.
 >
-> **最后更新**: 2026-05-29 (Phase D 进行中 4/7, D1+D2+D3+D4 已合, 剩 D5~D7; Esc 关 dialog 后 hover 需 click 激活 known issue 留待 D7 后深挖)
+> **最后更新**: 2026-05-29 (Phase D 进行中 5/7, D1+D2+D3+D4+D5 已合, 剩 D6~D7; Esc 关 dialog 后 hover 需 click 激活 known issue 留待 D7 后深挖)
 
 ---
 
@@ -26,12 +26,12 @@
 - [x] **C7** probeID 必传 (breaking change: 6 组件 `probeID: String?` → `probeID: String`) + 派生 probe id (Select trigger/search) + 命名规范 `<scene>.<role>.<element>` 升进 NEW_GUI.md R6 + CLAUDE.md "UI 控件使用约束" 节 — commit `2179639`
 - [x] **C8** Showcase 整理 — 顺序重组 (header → 操作类 Button → 输入类 TextField → 开关类 Toggle → 复杂类 Select → 容器装饰 Section/Icon → Theme token 参考) + sectionCard helper delegate `HVMUI.Section` (统一组件不留独立 helper) + 每节加 description 副文案. 视觉回归 baseline 截图**不存进 repo** (PNG 占空间, 临时用 hvm-dbg gui screenshot 即可)
 
-### Phase D (Dialog) — 进行中 4/7
+### Phase D (Dialog) — 进行中 5/7
 - [x] **D1** DialogHost overlay + DialogPresenter + ObservableObject + @EnvironmentObject + DialogHandle stack 多 dialog 嵌套支持; **未**迁移 Select popover (留独立后续 PR, 当前 zIndex 反向 hack 暂留)
 - [x] **D2** FocusTrap (content .disabled when isPresenting) + EscRouter (.focusable + .focusEffectDisabled + .onKeyPress(.escape) 关栈顶) + dialog 永远在顶 (.zIndex 999_999) + Esc 卡死 fix (dismissTop 前 dialogFocused=false) + 嵌套 Esc 噔噔提示音 fix (.onChange of stack.count re-focus)
 - [x] **D3** HVMUI.AlertDialog (info / warn / error / success 4 档) + dialog.alert async API + 派生 probe id (`<probeID>.confirm` / `.close`) + present onDismiss 回调让任何关闭路径都 resume continuation
 - [x] **D4** HVMUI.ConfirmDialog (含 destructive 主按钮) + dialog.confirm async API + ResumeCoordinator 保证 Esc/X/取消/主按钮 任一关闭路径只 resume 一次 ConfirmResult
-- [ ] **D5** HVMUI.InputDialog (单字段 + 多字段表单 + validation hook)
+- [x] **D5** HVMUI.InputDialog (InputField / InputValidation / InputResult enums) + dialog.input async API + 多字段表单 + 实时 validation hook (validate → .invalid 主按钮 disabled + 字段下红字提示) + 派生 probe id `<probeID>.field.<idx>` + 复用 HVMUI.TextField/SecureField
 - [ ] **D6** HVMUI.WizardDialog (步骤指示器 + 上下一步 + 取消)
 - [ ] **D7** Dialog probe id 命名规范固化 + 文档
 
