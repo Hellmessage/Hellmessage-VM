@@ -169,28 +169,22 @@ struct DialogHostModifier: ViewModifier {
                     }
                 }
                 .transition(.opacity)
-                // EscRouter: 让 dialog 渲染层 focusable, onKeyPress(.escape) 关栈顶.
-                // .focusable() 必须有, 否则 SwiftUI 不路由 keyboard event 到这.
-                // .focusEffectDisabled() 禁系统默认 focus ring (那道蓝色细线绕
-                // dialog ZStack 全屏 边缘画, 顶部露出难看), 仍接收 onKeyPress.
+                // EscRouter: SwiftUI .focused + .onKeyPress 路径, dismissTop 前
+                // 显式 dialogFocused = false 释放 first responder, 防 dialog
+                // 消失后 first responder 卡死.
                 .focusable()
                 .focusEffectDisabled()
                 .focused($dialogFocused)
                 .onAppear { dialogFocused = true }
                 .onChange(of: presenter.stack.count) { _, newCount in
-                    // 嵌套 dialog 关一层后栈还有 (外层 dialog 仍在), 主动 re-focus
-                    // 让下次 Esc 仍能关. 否则用户实测: 内层 Esc 关后, 外层失去
-                    // focus, 按 Esc 系统"噔噔"提示音, 需点界面才能恢复.
+                    // 嵌套 dialog 关一层后, 外层仍在, 主动 re-focus 让下次 Esc 仍能关
                     if newCount > 0 {
                         dialogFocused = true
                     }
                 }
                 .onKeyPress(.escape) {
                     if presenter.isPresenting {
-                        // 关闭前显式 unfocus, 防止 focus state 卡住导致主窗口
-                        // 事件 routing 失效 (用户实测: 不 unfocus 时 Esc 关 dialog
-                        // 后整个界面冻结, 需切别 app 再切回来才恢复).
-                        // 注: 如果嵌套, 上面 .onChange 会把 focus 还回来.
+                        // 关闭前显式 unfocus 释放 first responder, 防卡死
                         dialogFocused = false
                         presenter.dismissTop()
                         return .handled

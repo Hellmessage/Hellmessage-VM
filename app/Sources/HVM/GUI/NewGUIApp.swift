@@ -663,7 +663,37 @@ private struct NewGUIRootView: View {
                     }
                 }
 
-                Text("hvm-dbg gui click showcase.alert.error → await dialog.alert(...) 弹错误提示, X/确定/Esc 任一关闭都 resume")
+                // PR-D4: ConfirmDialog (async API + destructive 可选)
+                fieldRow("ConfirmDialog (PR-D4, async API)") {
+                    HVMUI.Button("普通确认", variant: .secondary,
+                                 probeID: "showcase.confirm.normal") {
+                        Task { @MainActor in
+                            let r = await dialog.confirm(
+                                title: "保存修改?",
+                                message: "未保存的修改将丢失.",
+                                confirmLabel: "保存",
+                                probeID: "showcase.confirm.normal.dlg"
+                            )
+                            probeClickLog = "confirm.normal → \(r)"
+                        }
+                    }
+                    HVMUI.Button("危险操作 (destructive)", variant: .destructive,
+                                 icon: "trash",
+                                 probeID: "showcase.confirm.destructive") {
+                        Task { @MainActor in
+                            let r = await dialog.confirm(
+                                title: "删除 VM?",
+                                message: "VM 'ubuntu-24' 的所有数据将被删除. 此操作不可恢复.",
+                                confirmLabel: "删除",
+                                destructive: true,
+                                probeID: "showcase.confirm.destructive.dlg"
+                            )
+                            probeClickLog = "confirm.destructive → \(r)"
+                        }
+                    }
+                }
+
+                Text("hvm-dbg gui click showcase.confirm.* → await dialog.confirm(...) 返回 .confirmed / .cancelled — 最近: \(probeClickLog)")
                     .font(HVMTheme.font.monoSm)
                     .foregroundStyle(HVMTheme.color.textTertiary)
             }

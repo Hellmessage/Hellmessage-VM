@@ -5,7 +5,7 @@
 > 跟 [docs/v1/ROADMAP.md](v1/ROADMAP.md) 不同 — ROADMAP 是历史 v2 残余清单, 已基本归档.
 > 本文件聚焦**当前进行中**的工作 + **新发现的待办**.
 >
-> **最后更新**: 2026-05-29 (Phase D 进行中 3/7, D1+D2+D3 已合, 剩 D4~D7)
+> **最后更新**: 2026-05-29 (Phase D 进行中 4/7, D1+D2+D3+D4 已合, 剩 D5~D7; Esc 关 dialog 后 hover 需 click 激活 known issue 留待 D7 后深挖)
 
 ---
 
@@ -26,11 +26,11 @@
 - [x] **C7** probeID 必传 (breaking change: 6 组件 `probeID: String?` → `probeID: String`) + 派生 probe id (Select trigger/search) + 命名规范 `<scene>.<role>.<element>` 升进 NEW_GUI.md R6 + CLAUDE.md "UI 控件使用约束" 节 — commit `2179639`
 - [x] **C8** Showcase 整理 — 顺序重组 (header → 操作类 Button → 输入类 TextField → 开关类 Toggle → 复杂类 Select → 容器装饰 Section/Icon → Theme token 参考) + sectionCard helper delegate `HVMUI.Section` (统一组件不留独立 helper) + 每节加 description 副文案. 视觉回归 baseline 截图**不存进 repo** (PNG 占空间, 临时用 hvm-dbg gui screenshot 即可)
 
-### Phase D (Dialog) — 进行中 3/7
+### Phase D (Dialog) — 进行中 4/7
 - [x] **D1** DialogHost overlay + DialogPresenter + ObservableObject + @EnvironmentObject + DialogHandle stack 多 dialog 嵌套支持; **未**迁移 Select popover (留独立后续 PR, 当前 zIndex 反向 hack 暂留)
 - [x] **D2** FocusTrap (content .disabled when isPresenting) + EscRouter (.focusable + .focusEffectDisabled + .onKeyPress(.escape) 关栈顶) + dialog 永远在顶 (.zIndex 999_999) + Esc 卡死 fix (dismissTop 前 dialogFocused=false) + 嵌套 Esc 噔噔提示音 fix (.onChange of stack.count re-focus)
 - [x] **D3** HVMUI.AlertDialog (info / warn / error / success 4 档) + dialog.alert async API + 派生 probe id (`<probeID>.confirm` / `.close`) + present onDismiss 回调让任何关闭路径都 resume continuation
-- [ ] **D4** HVMUI.ConfirmDialog (含 destructive 主按钮)
+- [x] **D4** HVMUI.ConfirmDialog (含 destructive 主按钮) + dialog.confirm async API + ResumeCoordinator 保证 Esc/X/取消/主按钮 任一关闭路径只 resume 一次 ConfirmResult
 - [ ] **D5** HVMUI.InputDialog (单字段 + 多字段表单 + validation hook)
 - [ ] **D6** HVMUI.WizardDialog (步骤指示器 + 上下一步 + 取消)
 - [ ] **D7** Dialog probe id 命名规范固化 + 文档
@@ -41,7 +41,17 @@
 
 ---
 
-## 已知 work-around (PR-D1 彻底解决)
+## 已知 work-around / known issue
+
+### Dialog 关闭后 hover 需 click 一次激活 (PR-D2/D3/D4 已知)
+
+- **现象**: Esc 关 dialog 后, 鼠标移动到界面任何按钮**不显示 hover 高亮**, 需鼠标 click 一次界面任意位置才激活 hover. (X 按钮关 / 主按钮关 / 取消按钮关 都 OK, 只有 Esc 关后有此问题)
+- **根因推测**: SwiftUI `.focused($dialogFocused)` 在 Esc 关 dialog 时让 dialog 渲染层失去 first responder, 主 view 的 NSTrackingArea 没自动重新 fire mouseMoved 事件让 hover 重启
+- **尝试过的失败修法**: NSEvent local monitor / NSApp.activate + makeKey / makeFirstResponder(nil) / CGWarpMouseCursorPosition 均无效或引入新 bug (界面卡死)
+- **当前 work-around**: 无, 用户需 click 一次激活
+- **后续考虑**: D2 之外的 EscRouter 路径 (例 NSWindow keyEquivalent override, 或者业务页接入时单独处理), 留 D7 Probe 规范 / PR-D8 之后再深挖
+
+### PR-D1 work-around 清理 (PR-D8 OverlayContainer 迁移)
 
 这些是 PR-C4 修 popover 时的治标手段, 后续 PR-D1 OverlayContainer 落地后应清掉.
 
