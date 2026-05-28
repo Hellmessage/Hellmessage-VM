@@ -5,7 +5,7 @@
 > 跟 [docs/v1/ROADMAP.md](v1/ROADMAP.md) 不同 — ROADMAP 是历史 v2 残余清单, 已基本归档.
 > 本文件聚焦**当前进行中**的工作 + **新发现的待办**.
 >
-> **最后更新**: 2026-05-29
+> **最后更新**: 2026-05-29 (PR-C5 已合, Phase C 进度 5/8)
 
 ---
 
@@ -21,7 +21,7 @@
 - [x] **C2** HVMUI.TextField + HVMUI.SecureField (size + 7 状态 + focus ring + a11y + 设计规范 R1-R9) — commit `81d510f`
 - [x] **C3** HVMUI.Toggle + HVMUI.Checkbox (3 size + spring + indeterminate + probe) — commit `6580347`, fixes `07573af` `e10f81b`
 - [x] **C4** HVMUI.Select (下拉 + 搜索 + 键盘导航 + generic value + probe) — commit `0d76252`, fixes `f0d4787` `03dbdaf` `94b9770` `458828a` `d6fbc6d`
-- [ ] **C5** HVMUI.Section + HVMUI.Divider + HVMUI.Badge — 后续业务页骨架基石; Section 需含 R8 layered shadow
+- [x] **C5** HVMUI.Section + HVMUI.Divider + HVMUI.Badge (业务页骨架基石; layered shadow + double border + 6 variant Badge + h/v Divider) — commit `bcbe0ad`
 - [ ] **C6** HVMUI.Tooltip + HVMUI.KbdHint + HVMUI.Icon — 辅助组件
 - [ ] **C7** Probe 命名规范固化 — `<scene>.<role>.<element>` 落进 docs/v3/HVM_DBG_GUI_PROTOCOL.md
 - [ ] **C8** Components Showcase 整理 — 当前 NewGUIRootView 已是 Showcase, 末轮做 visual regression baseline 截图存档

@@ -84,9 +84,10 @@ private struct NewGUIRootView: View {
                 // 顺序压住. 治标方案; PR-D1 OverlayContainer 后用 root-level
                 // ZStack 渲染浮窗, 彻底解决.
                 VStack(alignment: .leading, spacing: HVMTheme.space.xl) {
-                    headerBlock.zIndex(110)
-                    selectsBlock.zIndex(100)
-                    buttonsBlock.zIndex(90)
+                    headerBlock.zIndex(120)
+                    sectionsBlock.zIndex(115)
+                    selectsBlock.zIndex(110)
+                    buttonsBlock.zIndex(100)
                     togglesBlock.zIndex(80)
                     fieldsBlock.zIndex(70)
                     colorPaletteBlock.zIndex(60)
@@ -528,6 +529,100 @@ private struct NewGUIRootView: View {
                 .foregroundStyle(HVMTheme.color.textSecondary)
             HStack(alignment: .top, spacing: HVMTheme.space.md) {
                 content()
+            }
+        }
+    }
+
+    // PR-C5 — HVMUI.Section / Divider / Badge
+    private var sectionsBlock: some View {
+        sectionCard(title: "Section / Divider / Badge (PR-C5)") {
+            VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
+                // Section variants (default / elevated)
+                fieldRow("Section variants") {
+                    HVMUI.Section("默认卡片", description: "default — bgRaised + 轻 shadow") {
+                        Text("section content goes here")
+                            .font(HVMTheme.font.base)
+                            .foregroundStyle(HVMTheme.color.textPrimary)
+                    }
+                    .frame(maxWidth: 280)
+
+                    HVMUI.Section("Elevated", description: "elevated — bgOverlay + 重 shadow", variant: .elevated) {
+                        Text("Dialog / popover 卡片风")
+                            .font(HVMTheme.font.base)
+                            .foregroundStyle(HVMTheme.color.textPrimary)
+                    }
+                    .frame(maxWidth: 280)
+                }
+
+                // Section with footer
+                HVMUI.Section("Section with footer", description: "footer 区会自动加 Divider 跟 content 隔开") {
+                    VStack(alignment: .leading, spacing: HVMTheme.space.sm) {
+                        Text("⌘ 主操作放 footer 右侧")
+                            .font(HVMTheme.font.base)
+                            .foregroundStyle(HVMTheme.color.textPrimary)
+                        Text("⌘ 次要操作放 footer 左侧, 取消放最左")
+                            .font(HVMTheme.font.base)
+                            .foregroundStyle(HVMTheme.color.textPrimary)
+                    }
+                } footer: {
+                    HStack(spacing: HVMTheme.space.sm) {
+                        HVMUI.Button("取消", variant: .secondary) { }
+                        Spacer()
+                        HVMUI.Button("丢弃", variant: .ghost) { }
+                        HVMUI.Button("保存", variant: .primary) { }
+                    }
+                }
+
+                // Dividers
+                fieldRow("Dividers") {
+                    VStack(spacing: 0) {
+                        Text("上方内容")
+                            .font(HVMTheme.font.sm)
+                            .foregroundStyle(HVMTheme.color.textSecondary)
+                        HVMUI.Divider()
+                        Text("下方内容")
+                            .font(HVMTheme.font.sm)
+                            .foregroundStyle(HVMTheme.color.textSecondary)
+                    }
+                    .padding(HVMTheme.space.md)
+                    .background(HVMTheme.color.bgRaised)
+                    .frame(width: 180)
+
+                    HStack(spacing: 0) {
+                        Text("左")
+                            .font(HVMTheme.font.sm)
+                            .foregroundStyle(HVMTheme.color.textSecondary)
+                        HVMUI.Divider(.vertical, padding: .md)
+                        Text("中")
+                            .font(HVMTheme.font.sm)
+                            .foregroundStyle(HVMTheme.color.textSecondary)
+                        HVMUI.Divider(.vertical, padding: .md)
+                        Text("右")
+                            .font(HVMTheme.font.sm)
+                            .foregroundStyle(HVMTheme.color.textSecondary)
+                    }
+                    .padding(HVMTheme.space.md)
+                    .background(HVMTheme.color.bgRaised)
+                    .frame(height: 56)
+                }
+
+                // Badges
+                fieldRow("Badge variants") {
+                    HVMUI.Badge("Running", variant: .success, icon: "circle.fill")
+                    HVMUI.Badge("Warning", variant: .warn, icon: "exclamationmark.triangle")
+                    HVMUI.Badge("Error", variant: .error, icon: "xmark.circle.fill")
+                    HVMUI.Badge("Info", variant: .info, icon: "info.circle")
+                    HVMUI.Badge("Recommended", variant: .accent)
+                    HVMUI.Badge("Linux", variant: .neutral)
+                }
+
+                fieldRow("Badge sizes + numbers") {
+                    HVMUI.Badge("PR-C5", variant: .accent, size: .sm)
+                    HVMUI.Badge("PR-C5", variant: .accent, size: .md)
+                    HVMUI.Badge("3", variant: .error, size: .sm)
+                    HVMUI.Badge("12", variant: .info, size: .md)
+                    HVMUI.Badge("Encrypted", variant: .accent, icon: "lock.fill", size: .sm)
+                }
             }
         }
     }
