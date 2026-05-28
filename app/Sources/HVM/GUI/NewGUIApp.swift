@@ -82,6 +82,7 @@ private struct NewGUIRootView: View {
                 VStack(alignment: .leading, spacing: HVMTheme.space.xl) {
                     headerBlock
                     buttonsBlock
+                    selectsBlock
                     togglesBlock
                     fieldsBlock
                     colorPaletteBlock
@@ -259,6 +260,106 @@ private struct NewGUIRootView: View {
                 MotionDemoTile(label: "fast (120ms)", animation: HVMTheme.motion.easeOutFast)
                 MotionDemoTile(label: "base (200ms)", animation: HVMTheme.motion.easeOut)
                 MotionDemoTile(label: "slow (320ms)", animation: HVMTheme.motion.easeOutSlow)
+            }
+        }
+    }
+
+    // PR-C4 — HVMUI.Select (下拉 + 搜索 + 键盘导航 + probe)
+    enum DemoEngine: Hashable { case vz, qemu }
+    @State private var engineSelection: DemoEngine? = .vz
+    @State private var isoSelection: String? = nil
+    @State private var cpuSelection: Int = 4
+
+    private var selectsBlock: some View {
+        sectionCard(title: "Select (PR-C4)") {
+            VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
+                fieldRow("Basic") {
+                    HVMUI.Select(
+                        "引擎",
+                        selection: $engineSelection,
+                        options: [
+                            .init(value: .vz,   label: "VZ",   hint: "Apple 原生 (推荐)",
+                                  icon: "applelogo"),
+                            .init(value: .qemu, label: "QEMU", hint: "Windows ARM64",
+                                  icon: "cpu")
+                        ],
+                        probeID: "showcase.select.engine"
+                    )
+                    .frame(maxWidth: 280)
+
+                    HVMUI.Select(
+                        "CPU",
+                        selection: $cpuSelection,
+                        options: (1...16).map {
+                            .init(value: $0, label: "\($0) 核")
+                        },
+                        probeID: "showcase.select.cpu"
+                    )
+                    .frame(maxWidth: 160)
+                }
+
+                // searchable + 大量选项
+                fieldRow("Searchable (10 ISO)") {
+                    HVMUI.Select(
+                        "ISO 镜像",
+                        selection: $isoSelection,
+                        options: [
+                            .init(value: "ubuntu-24.04-arm64.iso",     label: "Ubuntu 24.04 LTS"),
+                            .init(value: "ubuntu-22.04-arm64.iso",     label: "Ubuntu 22.04 LTS"),
+                            .init(value: "debian-12-arm64.iso",        label: "Debian 12"),
+                            .init(value: "fedora-40-arm64.iso",        label: "Fedora 40"),
+                            .init(value: "alpine-3.20-arm64.iso",      label: "Alpine 3.20"),
+                            .init(value: "archlinux-arm64.iso",        label: "Arch Linux"),
+                            .init(value: "openSUSE-leap-15.6.iso",     label: "openSUSE Leap 15.6"),
+                            .init(value: "rocky-9-arm64.iso",          label: "Rocky Linux 9"),
+                            .init(value: "centos-stream-9-arm64.iso",  label: "CentOS Stream 9"),
+                            .init(value: "kali-2024.3-arm64.iso",      label: "Kali Linux 2024.3")
+                        ],
+                        placeholder: "选择 ISO 镜像...",
+                        size: .md,
+                        icon: "opticaldisc",
+                        searchable: true,
+                        probeID: "showcase.select.iso"
+                    )
+                    .frame(maxWidth: 320)
+                }
+
+                fieldRow("States") {
+                    HVMUI.Select(
+                        "错误态",
+                        selection: $engineSelection,
+                        options: [.init(value: .vz, label: "VZ")],
+                        errorMessage: "未配置启动引擎",
+                        probeID: "showcase.select.error"
+                    )
+                    .frame(maxWidth: 240)
+
+                    HVMUI.Select(
+                        "加载中",
+                        selection: $engineSelection,
+                        options: [],
+                        placeholder: "拉取选项...",
+                        isLoading: true
+                    )
+                    .frame(maxWidth: 200)
+
+                    HVMUI.Select(
+                        "Disabled",
+                        selection: .constant(DemoEngine.vz),
+                        options: [.init(value: .vz, label: "VZ")],
+                        disabled: true
+                    )
+                    .frame(maxWidth: 200)
+                }
+
+                HStack(spacing: HVMTheme.space.sm) {
+                    Text("hvm-dbg gui type --identifier showcase.select.engine --text QEMU")
+                        .font(HVMTheme.font.monoSm)
+                        .foregroundStyle(HVMTheme.color.textTertiary)
+                    Text("engine: \(engineSelection.map { String(describing: $0) } ?? "—")")
+                        .font(HVMTheme.font.xs)
+                        .foregroundStyle(HVMTheme.color.accent)
+                }
             }
         }
     }
