@@ -9,7 +9,7 @@
 
 ---
 
-## 当前主线 — 新 GUI 重构 (docs/v3/NEW_GUI.md)
+## 当前主线 — 新 GUI 重构 (docs/v4/NEW_GUI.md)
 
 ### Phase T (Theme) — ✅ 全合
 - [x] **T1** Theme/ 7 个 token 文件 (HVMColor / Font / Space / Radius / Border / Motion / HVMTheme namespace) — commit `a991024`
@@ -53,7 +53,7 @@
 
 ---
 
-## 未决事项 (Decisions, docs/v3/NEW_GUI.md)
+## 未决事项 (Decisions, docs/v4/NEW_GUI.md)
 
 | ID | 决策 | 当前状态 |
 |---|---|---|
@@ -70,16 +70,16 @@
 
 ## 业务页迁移 (新 GUI 基础设施全合后)
 
-每个业务页独立子稿 `docs/v3/NEW_GUI_<feature>.md`. 引 NEW_GUI.md 作 R1-R9 + Theme/Components/Dialog 基础设施前置依赖.
+每个业务页独立子稿 `docs/v4/NEW_GUI_<feature>.md`. 引 NEW_GUI.md 作 R1-R9 + Theme/Components/Dialog 基础设施前置依赖.
 
-- [ ] `docs/v3/NEW_GUI_MAIN_LAYOUT.md` — sidebar + detail 两栏主窗口骨架 + 工具栏
-- [ ] `docs/v3/NEW_GUI_VM_LIST.md` — VM 列表项 (running/stopped/encrypted 状态 / 加密锁图标 / context menu)
-- [ ] `docs/v3/NEW_GUI_VM_DETAIL.md` — 详情页 (overview / sharing / network / disk / 加密 等 section)
-- [ ] `docs/v3/NEW_GUI_CREATE_VM.md` — 创建 VM Wizard (复用 HVMUI.WizardDialog)
-- [ ] `docs/v3/NEW_GUI_ENCRYPTION.md` — 加密 / 解密 / rekey dialog
-- [ ] `docs/v3/NEW_GUI_FILE_TRANSFER.md` — 文件传输 dialog
-- [ ] `docs/v3/NEW_GUI_NETWORK.md` — 网络配置 + vmnet daemon 控制
-- [ ] `docs/v3/NEW_GUI_FRAMEBUFFER.md` — VM 窗口 framebuffer 嵌入 (HDP 接入)
+- [ ] `docs/v4/NEW_GUI_MAIN_LAYOUT.md` — sidebar + detail 两栏主窗口骨架 + 工具栏
+- [ ] `docs/v4/NEW_GUI_VM_LIST.md` — VM 列表项 (running/stopped/encrypted 状态 / 加密锁图标 / context menu)
+- [ ] `docs/v4/NEW_GUI_VM_DETAIL.md` — 详情页 (overview / sharing / network / disk / 加密 等 section)
+- [ ] `docs/v4/NEW_GUI_CREATE_VM.md` — 创建 VM Wizard (复用 HVMUI.WizardDialog)
+- [ ] `docs/v4/NEW_GUI_ENCRYPTION.md` — 加密 / 解密 / rekey dialog
+- [ ] `docs/v4/NEW_GUI_FILE_TRANSFER.md` — 文件传输 dialog
+- [ ] `docs/v4/NEW_GUI_NETWORK.md` — 网络配置 + vmnet daemon 控制
+- [ ] `docs/v4/NEW_GUI_FRAMEBUFFER.md` — VM 窗口 framebuffer 嵌入 (HDP 接入)
 
 ---
 
@@ -115,4 +115,4 @@
 
 - 完成的项 `[x]` 标记 + 加 commit hash 引用
 - 下次 session 开始时先读这份, 看上次卡在哪
-- 完成全 Phase C/D/L 后, 本文件可压缩, 把已合 PR 归档到 docs/v3/NEW_GUI.md 的"实现历史"小节
+- 完成全 Phase C/D/L 后, 本文件可压缩, 把已合 PR 归档到 docs/v4/NEW_GUI.md 的"实现历史"小节

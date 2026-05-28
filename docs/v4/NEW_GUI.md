@@ -2,7 +2,7 @@
 
 > 状态: **实现中** 2026-05-28 (D1 已决; PR-T1 / T2 / C1 / C2 已合; 组件设计规范 R1-R9 落入"组件设计规范"节作为后续 PR 验收基线)
 >
-> 入口已就绪 (commit b9e969d): `app/Sources/HVM/GUI/NewGUIApp.swift` + Makefile `GUI ?= new` 透传 `-Xswiftc -DNEW_GUI`. 老 GUI (`app/Sources/HVM/UI/**`) 一行不动作为回退. 本稿覆盖**基础设施层**: Theme token / Components / Dialog 框架. **业务页 (VM 列表 / 详情页 / 创建向导等) 不在本稿范围**, 后续每业务页单独立 `docs/v3/NEW_GUI_<XXX>.md` 子提案.
+> 入口已就绪 (commit b9e969d): `app/Sources/HVM/GUI/NewGUIApp.swift` + Makefile `GUI ?= new` 透传 `-Xswiftc -DNEW_GUI`. 老 GUI (`app/Sources/HVM/UI/**`) 一行不动作为回退. 本稿覆盖**基础设施层**: Theme token / Components / Dialog 框架. **业务页 (VM 列表 / 详情页 / 创建向导等) 不在本稿范围**, 后续每业务页单独立 `docs/v4/NEW_GUI_<XXX>.md` 子提案.
 
 ## 目标
 
@@ -518,7 +518,7 @@ Showcase 是组件库的 living doc, 后续 PR-L1 lint 时还要做 visual regre
 - 回写 `docs/v1/NEW_GUI.md` 现状描述
 - `CLAUDE.md` 加 "新 GUI UI 控件使用约束" 节 (跟老 GUI 那节平行, 取代旧约束)
 - `docs/v3/README.md` 索引该稿标 "代码已合入"
-- 后续每业务页迁移单独立 `docs/v3/NEW_GUI_<feature>.md` 子稿
+- 后续每业务页迁移单独立 `docs/v4/NEW_GUI_<feature>.md` 子稿
 
 ## 未决事项 (Decisions)
 
@@ -537,14 +537,14 @@ Showcase 是组件库的 living doc, 后续 PR-L1 lint 时还要做 visual regre
 
 每业务页独立子稿, 引本稿作"基础设施前置依赖":
 
-- `docs/v3/NEW_GUI_MAIN_LAYOUT.md` — sidebar + detail 两栏主窗口骨架 + 工具栏
-- `docs/v3/NEW_GUI_VM_LIST.md` — VM 列表项 (running/stopped/encrypted 状态 / 加密锁图标 / context menu)
-- `docs/v3/NEW_GUI_VM_DETAIL.md` — 详情页 (overview / sharing / network / disk / 加密 等 section)
-- `docs/v3/NEW_GUI_CREATE_VM.md` — 创建 VM Wizard (复用本稿 HVMWizardDialog)
-- `docs/v3/NEW_GUI_ENCRYPTION.md` — 加密 / 解密 / rekey dialog (复用 HVMInputDialog)
-- `docs/v3/NEW_GUI_FILE_TRANSFER.md` — 文件传输 dialog
-- `docs/v3/NEW_GUI_NETWORK.md` — 网络配置 + vmnet daemon 控制
-- `docs/v3/NEW_GUI_FRAMEBUFFER.md` — VM 窗口 framebuffer 嵌入 (HDP 接入)
+- `docs/v4/NEW_GUI_MAIN_LAYOUT.md` — sidebar + detail 两栏主窗口骨架 + 工具栏
+- `docs/v4/NEW_GUI_VM_LIST.md` — VM 列表项 (running/stopped/encrypted 状态 / 加密锁图标 / context menu)
+- `docs/v4/NEW_GUI_VM_DETAIL.md` — 详情页 (overview / sharing / network / disk / 加密 等 section)
+- `docs/v4/NEW_GUI_CREATE_VM.md` — 创建 VM Wizard (复用本稿 HVMWizardDialog)
+- `docs/v4/NEW_GUI_ENCRYPTION.md` — 加密 / 解密 / rekey dialog (复用 HVMInputDialog)
+- `docs/v4/NEW_GUI_FILE_TRANSFER.md` — 文件传输 dialog
+- `docs/v4/NEW_GUI_NETWORK.md` — 网络配置 + vmnet daemon 控制
+- `docs/v4/NEW_GUI_FRAMEBUFFER.md` — VM 窗口 framebuffer 嵌入 (HDP 接入)
 
 子稿评审独立于本稿, 但都必须在本稿合入后才动手.
 

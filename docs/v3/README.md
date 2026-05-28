@@ -18,8 +18,9 @@
 | [SHARED_FOLDER.md](SHARED_FOLDER.md) | QEMU 共享目录 (SPICE WebDAV, Win + Linux 统一; Swift 原生 WebDAV server) | **代码已合入** 2026-05-24 (PR-0~7 一晚一次性落; 协议层 e2e 验过, 真机 guest 安装步留给用户) |
 | [INPUT_CAPTURE.md](INPUT_CAPTURE.md) | 键盘捕获 / 释放重构 (UTM 风格): modifier 镜像修卡键 + 左右键区分 + Cmd+Opt captured 双态 + CGS 全局热键禁用 | **代码已合入** 2026-05-24 (一次性 PR, hotfix 性质; 真机 e2e 留给用户) |
 | [HOST_FILE_PASTE.md](HOST_FILE_PASTE.md) | host Finder Cmd+C 文件 → VM Cmd+V 自动传 (SPICE VD_AGENT_FILE_XFER, 落 guest ~/Downloads) | **代码已合入** 2026-05-28 (PR-1~4 一次性落; 真机 e2e 留给用户) |
-| [NEW_GUI.md](NEW_GUI.md) | 新 GUI 基础设施 (Linear 风 Theme token + 自绘 Dialog 框架 + 基础组件库 + HVMUI namespace); 业务页留子稿 | **实现中** 2026-05-28, PR-T1 / T2 / C1 / C2 已合, 加 R1-R9 组件设计规范作 PR 验收基线 |
 | [TODO.md](TODO.md) | QEMU 加密 BUG / 遗漏清单 + 工具链 | **TODO 清单 v1**, 大多已 Done; 仍存的低优项已挪 [../v1/ROADMAP.md](../v1/ROADMAP.md) "残余项指引" |
+
+新 GUI 重构主线挪到独立目录 [../v4/](../v4/README.md) (含 NEW_GUI.md + 后续业务页子稿). v3 / v4 平行: v3 是 v2 → v3 已基本合的能力归档; v4 是 GUI 体系重做.
 
 ## 与 v1 / CHANGELOG 的关系
 
@@ -42,4 +43,4 @@
 
 ---
 
-**最后更新**: 2026-05-28 (NEW_GUI 设计稿挂出, 待用户敲定 accent 色后开 PR-T1; 此前 HOST_FILE_PASTE 已合入)
+**最后更新**: 2026-05-29 (NEW_GUI.md 挪到 [../v4/](../v4/README.md), 单独立 GUI 重构主线; v3 索引仅保留 v2→v3 合入归档)
