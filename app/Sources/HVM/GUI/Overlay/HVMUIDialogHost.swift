@@ -119,13 +119,23 @@ struct DialogHandle {
 
 /// 根视图 ViewModifier — 把 dialog 渲染到 root-level ZStack, 脱离父级 ScrollView /
 /// sectionCard / VStack 层级.
+///
+/// PR-D2 加入交互层:
+/// - **FocusTrap**: dialog 显示时 .disabled(true) 背景 content, 让背景 focusable
+///   views (button/textfield 等) 失活, Tab 自然循环锁在 dialog 内 (SwiftUI 内置
+///   focus 不会跑到 disabled view)
+/// - **EscRouter**: dialog 渲染层 .focusable() + .onKeyPress(.escape) 关栈顶
+///   dialog. 没 dialog 时不拦 Esc, 透给业务 (例如 framebuffer 接 Esc 给 guest)
 struct DialogHostModifier: ViewModifier {
     @StateObject private var presenter = DialogPresenter()
+    @FocusState private var dialogFocused: Bool
 
     func body(content: Content) -> some View {
         ZStack {
             content
                 .environmentObject(presenter)
+                // FocusTrap: 背景 disabled 让 focusable views 失活, Tab 不跑出 dialog
+                .disabled(presenter.isPresenting)
 
             // Dialog 渲染层 — 极高 zIndex, 浮在所有内容之上.
             if presenter.isPresenting {
@@ -144,6 +154,41 @@ struct DialogHostModifier: ViewModifier {
                     }
                 }
                 .transition(.opacity)
+                // EscRouter: 让 dialog 渲染层 focusable, onKeyPress(.escape) 关栈顶.
+                // .focusable() 必须有, 否则 SwiftUI 不路由 keyboard event 到这.
+                // .focusEffectDisabled() 禁系统默认 focus ring (那道蓝色细线绕
+                // dialog ZStack 全屏 边缘画, 顶部露出难看), 仍接收 onKeyPress.
+                .focusable()
+                .focusEffectDisabled()
+                .focused($dialogFocused)
+                .onAppear { dialogFocused = true }
+                .onChange(of: presenter.stack.count) { _, newCount in
+                    // 嵌套 dialog 关一层后栈还有 (外层 dialog 仍在), 主动 re-focus
+                    // 让下次 Esc 仍能关. 否则用户实测: 内层 Esc 关后, 外层失去
+                    // focus, 按 Esc 系统"噔噔"提示音, 需点界面才能恢复.
+                    if newCount > 0 {
+                        dialogFocused = true
+                    }
+                }
+                .onKeyPress(.escape) {
+                    if presenter.isPresenting {
+                        // 关闭前显式 unfocus, 防止 focus state 卡住导致主窗口
+                        // 事件 routing 失效 (用户实测: 不 unfocus 时 Esc 关 dialog
+                        // 后整个界面冻结, 需切别 app 再切回来才恢复).
+                        // 注: 如果嵌套, 上面 .onChange 会把 focus 还回来.
+                        dialogFocused = false
+                        presenter.dismissTop()
+                        return .handled
+                    }
+                    return .ignored
+                }
+                // 显式高 zIndex 确保 dialog 永远浮在 content 内任何高 zIndex
+                // view (Tooltip .zIndex(2000) / Select popover .zIndex(1000) /
+                // 业务页未来可能加的高 zIndex) 之上.
+                // 注: 不用 .greatestFiniteMagnitude (1.8e308) — SwiftUI 浮点
+                // 比较算法在跟其他 view 高 zIndex 共存时不稳定, dialog 会消失.
+                // 999_999 实际超过所有可能业务 zIndex.
+                .zIndex(999_999)
             }
         }
         .animation(HVMTheme.motion.easeOut, value: presenter.stack.count)

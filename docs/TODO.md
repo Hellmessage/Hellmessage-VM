@@ -5,7 +5,7 @@
 > 跟 [docs/v1/ROADMAP.md](v1/ROADMAP.md) 不同 — ROADMAP 是历史 v2 残余清单, 已基本归档.
 > 本文件聚焦**当前进行中**的工作 + **新发现的待办**.
 >
-> **最后更新**: 2026-05-29 (Phase D 进行中 1/7, D1 已合, 剩 D2~D7)
+> **最后更新**: 2026-05-29 (Phase D 进行中 2/7, D1+D2 已合, 剩 D3~D7)
 
 ---
 
@@ -26,9 +26,9 @@
 - [x] **C7** probeID 必传 (breaking change: 6 组件 `probeID: String?` → `probeID: String`) + 派生 probe id (Select trigger/search) + 命名规范 `<scene>.<role>.<element>` 升进 NEW_GUI.md R6 + CLAUDE.md "UI 控件使用约束" 节 — commit `2179639`
 - [x] **C8** Showcase 整理 — 顺序重组 (header → 操作类 Button → 输入类 TextField → 开关类 Toggle → 复杂类 Select → 容器装饰 Section/Icon → Theme token 参考) + sectionCard helper delegate `HVMUI.Section` (统一组件不留独立 helper) + 每节加 description 副文案. 视觉回归 baseline 截图**不存进 repo** (PNG 占空间, 临时用 hvm-dbg gui screenshot 即可)
 
-### Phase D (Dialog) — 进行中 1/7
+### Phase D (Dialog) — 进行中 2/7
 - [x] **D1** DialogHost overlay + DialogPresenter + ObservableObject + @EnvironmentObject + DialogHandle stack 多 dialog 嵌套支持; **未**迁移 Select popover (留独立后续 PR, 当前 zIndex 反向 hack 暂留)
-- [ ] **D2** FocusTrap + EscRouter (tab 锁卡片 + esc 栈顶关)
+- [x] **D2** FocusTrap (content .disabled when isPresenting) + EscRouter (.focusable + .focusEffectDisabled + .onKeyPress(.escape) 关栈顶) + dialog 永远在顶 (.zIndex 999_999) + Esc 卡死 fix (dismissTop 前 dialogFocused=false) + 嵌套 Esc 噔噔提示音 fix (.onChange of stack.count re-focus)
 - [ ] **D3** HVMUI.AlertDialog (info / warn / error / success 四档)
 - [ ] **D4** HVMUI.ConfirmDialog (含 destructive 主按钮)
 - [ ] **D5** HVMUI.InputDialog (单字段 + 多字段表单 + validation hook)
