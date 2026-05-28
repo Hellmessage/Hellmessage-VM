@@ -15,6 +15,13 @@
 //   - FilePasteBridge 只关心 onFileXferStatus callback
 //   - 两条 callback 是不同 slot, 互不抢
 //
+// 同步实现, NOT async/await:
+//   实测 IPC handler 里 await `Task.sleep` (在 withTaskGroup 中) 永远不 fire — Task 调度
+//   被 IPC dispatch 的 `sem.wait()` GCD 线程 + @MainActor Task 跨界栈卡住 (调试日志 "等
+//   CAN_SEND_DATA" 之后 90s 无动静). 改成纯 DispatchSemaphore.wait(timeout:) 直接走 kernel
+//   timer, 跟 Swift Concurrency 调度解耦, 也避免 cooperative pool 饥饿.
+//   整 pipeline 包在 Task.detached 里, await 一次拿结果即可 — 不与 main actor 抢调度.
+//
 // 边界:
 //   - 文件夹: skip + 通知 "暂不支持"
 //   - 单文件 > 4 GiB: skip (跟 SPICE 协议 + QGA 一致)
@@ -22,12 +29,11 @@
 //   - 串行不并发: vdagent socket 单 client + SPICE 协议 chunks 不可 interleave
 
 import Foundation
+import Darwin
 import OSLog
 
 private let log = Logger(subsystem: "com.hellmessage.vm", category: "FilePaste")
 
-/// 非 actor; 内部用 NSLock 保护 mailbox state. 调用方走 await, 实际工作在 cooperative
-/// executor 非 main 线程. 跟 VdagentClient 一样 @unchecked Sendable 兜底.
 public final class FilePasteBridge: @unchecked Sendable {
 
     /// 单文件 4 GiB 软上限. SPICE FILE_XFER_DATA size 字段是 u64, 协议本身能装更大,
@@ -36,10 +42,10 @@ public final class FilePasteBridge: @unchecked Sendable {
 
     /// 等 guest 回 CAN_SEND_DATA 的上限. 30s 通常足够; 超过说明 guest 内 spice-vdagent
     /// 没装 / 没响应.
-    public static let canSendTimeoutSec: Double = 30
+    public static let canSendTimeoutSec: Int = 30
 
     /// 等终态 (SUCCESS / 错误) 的上限. 大文件按 50 MiB/s 估算: 4 GiB ~ 80s; 600s 留余量.
-    public static let finalStatusTimeoutSec: Double = 600
+    public static let finalStatusTimeoutSec: Int = 600
 
     public struct PasteResult: Sendable {
         public let successful: [String]   // 成功传完的 host 文件路径
@@ -64,12 +70,15 @@ public final class FilePasteBridge: @unchecked Sendable {
 
     private let vdagent: VdagentClient
     private let stateLock = NSLock()
-    /// 每个 transfer id 一个 mailbox 收 STATUS. vdagent callback 写, awaitStatus 读.
-    private var mailboxes: [UInt32: Mailbox] = [:]
+    /// 每个 transfer id 一个 slot. vdagent callback 写, waitNextStatus 读.
+    private var slots: [UInt32: TransferSlot] = [:]
 
-    private struct Mailbox {
+    /// 单 transfer 的 STATUS 邮箱. 用 DispatchSemaphore 计数: 收到一个 status → signal();
+    /// 等的人 wait(timeout:) 醒来 → pop 一个 status. 多 status 可堆积 (理论 CAN_SEND_DATA
+    /// → SUCCESS 是两次).
+    private final class TransferSlot {
         var queue: [VdagentClient.FileXferResult] = []
-        var continuation: CheckedContinuation<VdagentClient.FileXferResult, Never>?
+        let sem = DispatchSemaphore(value: 0)
     }
 
     public init(vdagent: VdagentClient) {
@@ -90,74 +99,76 @@ public final class FilePasteBridge: @unchecked Sendable {
         vdagent.onFileXferStatus = nil
     }
 
-    // MARK: - mailbox
+    // MARK: - slot 管理
 
-    /// vdagent 内部 queue 上调; 写 mailbox 或唤醒已挂着的 continuation.
+    /// vdagent 内部 queue 上调; 入 status 队列 + signal 信号量. 没人等也没事, 下次 wait 立即取走.
     private func recordStatus(id: UInt32, result: VdagentClient.FileXferResult) {
         stateLock.lock()
-        var mb = mailboxes[id] ?? Mailbox()
-        if let cont = mb.continuation {
-            mb.continuation = nil
-            mailboxes[id] = mb
-            stateLock.unlock()
-            cont.resume(returning: result)
-        } else {
-            mb.queue.append(result)
-            mailboxes[id] = mb
-            stateLock.unlock()
-        }
+        let slot = slots[id] ?? TransferSlot()
+        slot.queue.append(result)
+        slots[id] = slot
+        stateLock.unlock()
+        // signal 必须在 unlock 后, 否则 sem.wait 醒来抢 stateLock 跟自己死锁? 不会, sem 是
+        // 跨 lock 安全的, 但分开调用语义更清晰
+        slot.sem.signal()
     }
 
-    /// 等下一条 STATUS. 已有 buffered 直接返; 没有就挂 continuation.
-    private func nextStatus(id: UInt32) async -> VdagentClient.FileXferResult {
-        return await withCheckedContinuation {
-            (cont: CheckedContinuation<VdagentClient.FileXferResult, Never>) in
-            stateLock.lock()
-            var mb = mailboxes[id] ?? Mailbox()
-            if !mb.queue.isEmpty {
-                let r = mb.queue.removeFirst()
-                mailboxes[id] = mb
-                stateLock.unlock()
-                cont.resume(returning: r)
-            } else {
-                mb.continuation = cont
-                mailboxes[id] = mb
-                stateLock.unlock()
-            }
-        }
-    }
-
-    /// 等 STATUS 或 timeoutSec 秒后超时返 nil. 不取消传输; 调用方决定是否 cleanup.
-    private func awaitStatus(id: UInt32, timeoutSec: Double) async -> VdagentClient.FileXferResult? {
-        return await withTaskGroup(of: VdagentClient.FileXferResult??.self) { group in
-            group.addTask { [weak self] in
-                guard let self else { return .some(nil) }
-                return .some(await self.nextStatus(id: id))
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(timeoutSec * 1_000_000_000))
-                return .some(nil)
-            }
-            let first = await group.next() ?? .some(nil)
-            group.cancelAll()
-            return first ?? nil
-        }
-    }
-
-    private func cleanupMailbox(id: UInt32) {
+    /// 同步等下一条 STATUS. timeoutSec 上限后返 nil. 必须在非 main 线程调 (DispatchSemaphore.wait
+    /// 会阻塞当前线程).
+    private func waitNextStatus(id: UInt32, timeoutSec: Int) -> VdagentClient.FileXferResult? {
+        // 1. 取 / 创建 slot, 先看看有没有 buffered status (跟之前 record 抢到序)
         stateLock.lock()
-        mailboxes.removeValue(forKey: id)
+        let slot = slots[id] ?? TransferSlot()
+        slots[id] = slot
+        if !slot.queue.isEmpty {
+            let r = slot.queue.removeFirst()
+            stateLock.unlock()
+            // 还要 drain 一次 sem (我们没 wait 但 record 已 signal)
+            _ = slot.sem.wait(timeout: .now())
+            return r
+        }
+        stateLock.unlock()
+
+        // 2. 阻塞等 sem 或超时. wait(timeout:) 是 kernel timer, 跟 Swift Concurrency 调度无关
+        let waitResult = slot.sem.wait(timeout: .now() + .seconds(timeoutSec))
+        if waitResult == .timedOut {
+            return nil
+        }
+
+        // 3. signal 到了, 锁 + pop
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard let s = slots[id], !s.queue.isEmpty else {
+            // 罕见 race (slot 被另一路径清掉); 当 timeout 处理
+            return nil
+        }
+        return s.queue.removeFirst()
+    }
+
+    private func cleanupSlot(id: UInt32) {
+        stateLock.lock()
+        slots.removeValue(forKey: id)
         stateLock.unlock()
     }
 
-    // MARK: - 公共入口
+    // MARK: - 公共入口 (async wrapper)
 
     /// 串行处理 urls. 每个 url 独立 transfer, 之间不并发 (vdagent 单 socket + 协议不可 interleave).
-    /// 整批最大耗时 = ∑ 单文件传输; 大批量大文件时调用方应自行做超时控制.
+    /// 内部走 Task.detached 跑同步 pipeline, 不阻 main actor.
     public func handlePasteFiles(_ urls: [URL]) async -> PasteResult {
+        return await Task.detached(priority: .userInitiated) { [self] in
+            self.handlePasteFilesSync(urls)
+        }.value
+    }
+
+    // MARK: - 同步 pipeline (跑在 Task.detached 内, 用 DispatchSemaphore 等)
+
+    private func handlePasteFilesSync(_ urls: [URL]) -> PasteResult {
         var success: [String] = []
         var skip: [Skip] = []
         var fail: [Fail] = []
+
+        fputs("HVMHost(qemu): FilePasteBridge.handlePasteFilesSync entered urls=\(urls.count)\n", stderr)
 
         if vdagent.isFileXferDisabledByGuest {
             log.warning("FilePasteBridge: guest 端 FILE_XFER 已禁用 (cap bit 8 置位)")
@@ -196,8 +207,8 @@ public final class FilePasteBridge: @unchecked Sendable {
                 skip.append(Skip(path: path, reason: "文件超过 4 GiB 上限, 请走共享目录"))
                 continue
             }
-            // 3. 实际传输
-            switch await streamOne(url: url, size: size) {
+            // 3. 实际传输 (同步, 走 DispatchSemaphore)
+            switch streamOneSync(url: url, size: size) {
             case .ok:
                 success.append(path)
             case .failed(let reason):
@@ -207,41 +218,39 @@ public final class FilePasteBridge: @unchecked Sendable {
         return PasteResult(successful: success, skipped: skip, failed: fail)
     }
 
-    // MARK: - 单文件流式
-
     private enum OneResult { case ok; case failed(String) }
 
-    private func streamOne(url: URL, size: UInt64) async -> OneResult {
+    private func streamOneSync(url: URL, size: UInt64) -> OneResult {
         let basename = url.lastPathComponent
+        fputs("HVMHost(qemu): streamOneSync name=\(basename) size=\(size)\n", stderr)
+
         let id = vdagent.sendFileXferStart(name: basename, size: size)
+        fputs("HVMHost(qemu): sendFileXferStart→ id=\(id), 等 CAN_SEND_DATA\n", stderr)
 
         // 等 CAN_SEND_DATA (或终态错误)
-        guard let s1 = await awaitStatus(id: id, timeoutSec: Self.canSendTimeoutSec) else {
-            cleanupMailbox(id: id)
-            return .failed("等 CAN_SEND_DATA 超时 (\(Int(Self.canSendTimeoutSec))s); guest 端 spice-vdagent 可能未安装或未启")
+        guard let s1 = waitNextStatus(id: id, timeoutSec: Self.canSendTimeoutSec) else {
+            cleanupSlot(id: id)
+            fputs("HVMHost(qemu): CAN_SEND_DATA TIMEOUT id=\(id)\n", stderr)
+            return .failed("等 CAN_SEND_DATA 超时 (\(Self.canSendTimeoutSec)s); guest 端 spice-vdagent 可能未安装或未启")
         }
+        fputs("HVMHost(qemu): 收到 status id=\(id) raw=\(s1.rawValue)\n", stderr)
         guard s1 == .canSendData else {
-            cleanupMailbox(id: id)
+            cleanupSlot(id: id)
             return .failed("guest 拒绝传输: \(describe(s1))")
         }
 
-        // 串 chunks. 单 chunk payload = fileXferChunkSize (2000 B).
+        // 流 chunks. 单 chunk payload = fileXferChunkSize (2000 B).
         let fh: FileHandle
         do {
             fh = try FileHandle(forReadingFrom: url)
         } catch {
             vdagent.sendFileXferStatus(id: id, result: .cancelled)
-            cleanupMailbox(id: id)
+            cleanupSlot(id: id)
             return .failed("打开 host 文件失败: \(error)")
         }
         defer { try? fh.close() }
 
         var sent: UInt64 = 0
-        // 简单 backpressure: 每 N chunks 让出一次 cooperative pool, 防止读快写慢导致
-        // vdagent.queue 积压数百 MB Data block. 256 chunks ~ 512 KiB, await 让其它 task
-        // (包括 vdagent send queue 的 drain) 跑.
-        let yieldEveryChunks = 256
-        var sinceYield = 0
         do {
             while true {
                 guard let chunk = try fh.read(upToCount: VdagentClient.fileXferChunkSize) else {
@@ -250,24 +259,22 @@ public final class FilePasteBridge: @unchecked Sendable {
                 if chunk.isEmpty { break }
                 vdagent.sendFileXferData(id: id, chunk: chunk)
                 sent &+= UInt64(chunk.count)
-                sinceYield += 1
-                if sinceYield >= yieldEveryChunks {
-                    sinceYield = 0
-                    await Task.yield()
-                }
             }
         } catch {
             vdagent.sendFileXferStatus(id: id, result: .error)
-            cleanupMailbox(id: id)
+            cleanupSlot(id: id)
             return .failed("读取 host 文件失败: \(error)")
         }
+        fputs("HVMHost(qemu): 数据流完, 等终态 id=\(id) sent=\(sent)\n", stderr)
 
         // 等终态
-        guard let s2 = await awaitStatus(id: id, timeoutSec: Self.finalStatusTimeoutSec) else {
-            cleanupMailbox(id: id)
-            return .failed("等 SUCCESS 超时 (\(Int(Self.finalStatusTimeoutSec))s); guest 端可能挂了")
+        guard let s2 = waitNextStatus(id: id, timeoutSec: Self.finalStatusTimeoutSec) else {
+            cleanupSlot(id: id)
+            fputs("HVMHost(qemu): final status TIMEOUT id=\(id)\n", stderr)
+            return .failed("等 SUCCESS 超时 (\(Self.finalStatusTimeoutSec)s); guest 端可能挂了")
         }
-        cleanupMailbox(id: id)
+        cleanupSlot(id: id)
+        fputs("HVMHost(qemu): 终态 id=\(id) raw=\(s2.rawValue)\n", stderr)
         if s2 == .success {
             log.info("FilePasteBridge done id=\(id, privacy: .public) name=\(basename, privacy: .public) size=\(size, privacy: .public)")
             return .ok

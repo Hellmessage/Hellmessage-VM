@@ -1151,11 +1151,12 @@ public final class AppModel {
                     )
                 }.value
             } catch {
+                let msg = "IPC 调用失败: \(error)"
                 self?.sharedErrors?.present(ErrorDialogModel(
-                    title: "粘贴失败",
-                    message: "IPC 调用失败: \(error)",
-                    details: nil, hint: nil
+                    title: "粘贴失败", message: msg, details: nil, hint: nil
                 ))
+                // VM 全屏 / detached 时主窗口 ErrorDialog 被盖住, 系统通知兜底让用户看到
+                HostFilePasteNotifier.notifyFailure(displayName: displayName, body: msg)
                 return
             }
             self?.handlePasteFilesResponse(resp, displayName: displayName)
@@ -1167,29 +1168,30 @@ public final class AppModel {
     ///   - 有 skip / fail → ErrorDialog 列出原因; 同时仍弹通知告知成功数量
     private func handlePasteFilesResponse(_ resp: IPCResponse, displayName: String) {
         guard resp.ok else {
+            let msg = resp.error?.message ?? "未知错误"
             sharedErrors?.present(ErrorDialogModel(
-                title: "粘贴失败",
-                message: resp.error?.message ?? "未知错误",
-                details: resp.error?.code,
-                hint: nil
+                title: "粘贴失败", message: msg,
+                details: resp.error?.code, hint: nil
             ))
+            HostFilePasteNotifier.notifyFailure(displayName: displayName, body: msg)
             return
         }
         guard let json = resp.data?["payload"],
               let data = json.data(using: .utf8),
               let payload = try? JSONDecoder().decode(IPCClipboardPasteFilesPayload.self, from: data) else {
+            let msg = "无法解析 clipboard.paste-files 响应"
             sharedErrors?.present(ErrorDialogModel(
-                title: "粘贴失败",
-                message: "无法解析 clipboard.paste-files 响应",
-                details: nil, hint: nil
+                title: "粘贴失败", message: msg, details: nil, hint: nil
             ))
+            HostFilePasteNotifier.notifyFailure(displayName: displayName, body: msg)
             return
         }
         let okCount = payload.successful.count
         if okCount > 0 {
             HostFilePasteNotifier.notifySuccess(displayName: displayName, count: okCount)
         }
-        // 有跳过 / 失败 → 弹 ErrorDialog 列原因 (即使 ok 项也都成功, 也要告知 partial)
+        // 有跳过 / 失败 → 弹 ErrorDialog 列原因, 同时发系统通知兜底 (VM 全屏 / detached 时主窗口
+        // ErrorDialog 被 framebuffer 盖住, 用户看不到 — 系统通知浮在所有窗口之上).
         if !payload.skipped.isEmpty || !payload.failed.isEmpty {
             var lines: [String] = []
             for s in payload.skipped {
@@ -1205,11 +1207,14 @@ public final class AppModel {
                 ? "成功 \(okCount) 个; 余下 \(lines.count) 个未传"
                 : "全部 \(lines.count) 个文件未传"
             sharedErrors?.present(ErrorDialogModel(
-                title: title,
-                message: summary,
+                title: title, message: summary,
                 details: lines.joined(separator: "\n"),
                 hint: "文件夹请先压缩; 超过 4 GiB 走共享目录"
             ))
+            // 通知 body 取前 3 行避免过长; 详情在 ErrorDialog 里
+            let bodyLines = lines.prefix(3).joined(separator: "\n")
+            let body = lines.count > 3 ? "\(summary)\n\(bodyLines)\n..." : "\(summary)\n\(bodyLines)"
+            HostFilePasteNotifier.notifyFailure(displayName: displayName, body: body)
         }
     }
 

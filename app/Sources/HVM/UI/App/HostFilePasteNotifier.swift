@@ -27,6 +27,12 @@ enum HostFilePasteNotifier {
         post(title: "已粘贴到 \(displayName)", body: body)
     }
 
+    /// 弹失败 / 部分跳过的通知. ErrorDialog 在主窗口里, VM 全屏 / detached 时会被盖住,
+    /// 系统通知则浮在所有窗口之上, 用户至少能看到摘要. 详情仍走 ErrorDialog 留底.
+    static func notifyFailure(displayName: String, body: String) {
+        post(title: "粘贴到 \(displayName) 失败", body: body)
+    }
+
     private static func post(title: String, body: String) {
         let center = UNUserNotificationCenter.current()
         let content = UNMutableNotificationContent()
