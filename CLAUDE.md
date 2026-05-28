@@ -367,6 +367,28 @@ Agent (Claude Code 等) 跨 session / 跨电脑都要保留, 写入项目 CLAUDE
 
 跟用户的所有对话回复一律用中文 (代码 / 命令 / 文件名 / log 原文等技术 token 保留英文). 包括: 任务汇报 / 方案说明 / 进度更新 / 错误解释 / 提问澄清. 不切英文, 不混用. 代码内中文注释已是项目约定 (见 "代码约束").
 
+### TODO 元数据回写合并到主 commit
+
+`docs/TODO.md` 这类**跟 PR 强绑定**的进度元数据更新, 跟当前主功能 commit 合并, **不**单独切 commit. 同理: 设计稿状态头从"实现中" → "代码已合入" / `docs/v4/README.md` 索引行同步 / NEW_GUI.md 的"PR 拆解"已合标记等.
+
+- 单独 commit TODO 改动只是 PR 的元数据回写, 没独立信息量, 让 git log 多 noise
+- 合并后, 一条 PR 的代码 + 文档 + 进度回写在一个 commit 一目了然
+- 操作: 主 commit 前一并 stage TODO.md / 设计稿状态 / 索引更新; commit type 用主功能的 (例 `feat(gui,docs)`)
+- 已分两 commit 但都未 push 时安全修复: `git reset --soft HEAD~2` 把改动放回 staged 区, 重新合并 commit (不算 amend, 不破坏 working tree)
+- 已 push 的不动 — Git Safety Protocol 优先
+
+**例外**: TODO 改动跟当前主 PR 完全无关 (例如修补遗漏的旧 PR 进度) / 纯设计稿大改 (例如增补设计规范节, 体量大独立成段) 可单独 commit.
+
+### 待开发项写入 docs/TODO.md, 不靠 session 记忆
+
+任何"现在不做但后续要做"的项 (待办 / 已知 work-around / 用户反馈待复现 / 设计变更暂缓 / 未决项), 立即写入 `docs/TODO.md` 对应小节, **不**留在 session 上下文里 "等会再处理".
+
+- session 上下文跨 conversation 会丢; TODO.md 跨 session 持久
+- TODO.md 已划好分区: 主线 PR 进度 / 已知 work-around / 未决事项 / 业务页迁移 / 老 GUI 残余 / 用户反馈待复现 / 跨主题低优
+- 新发现的待办: 立即 append 到对应分区, 用 `[ ]` 标未做
+- 完成时 `[ ] → [x]` + 加 commit hash 引用 (跟主 commit 一起回写, 见上条约束)
+- "下个 session 记得做 X" 这种话不允许出现 — 必须落 TODO.md
+
 ### 参考实现: UTM, 不再参考 hell-vm
 
 凡是 "其他 QEMU app / SPICE / vdagent / Win driver 怎么做" 问题, **默认查 UTM 源码**.

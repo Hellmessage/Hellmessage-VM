@@ -85,6 +85,7 @@ private struct NewGUIRootView: View {
                 // ZStack 渲染浮窗, 彻底解决.
                 VStack(alignment: .leading, spacing: HVMTheme.space.xl) {
                     headerBlock.zIndex(120)
+                    iconsBlock.zIndex(118)
                     sectionsBlock.zIndex(115)
                     selectsBlock.zIndex(110)
                     buttonsBlock.zIndex(100)
@@ -529,6 +530,56 @@ private struct NewGUIRootView: View {
                 .foregroundStyle(HVMTheme.color.textSecondary)
             HStack(alignment: .top, spacing: HVMTheme.space.md) {
                 content()
+            }
+        }
+    }
+
+    // PR-C6 — HVMUI.Icon / KbdHint / Tooltip (辅助组件)
+    private var iconsBlock: some View {
+        sectionCard(title: "Icon / KbdHint / Tooltip (PR-C6)") {
+            VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
+                // Icon sizes
+                fieldRow("Icon sizes (.xs / .sm / .md / .lg / .xl)") {
+                    HVMUI.Icon("gear", size: .xs)
+                    HVMUI.Icon("gear", size: .sm)
+                    HVMUI.Icon("gear", size: .md)
+                    HVMUI.Icon("gear", size: .lg)
+                    HVMUI.Icon("gear", size: .xl)
+                }
+
+                // Icon colors
+                fieldRow("Icon colors") {
+                    HVMUI.Icon("checkmark.circle.fill", size: .lg, color: .success)
+                    HVMUI.Icon("exclamationmark.triangle.fill", size: .lg, color: .warn)
+                    HVMUI.Icon("xmark.circle.fill", size: .lg, color: .error)
+                    HVMUI.Icon("info.circle.fill", size: .lg, color: .info)
+                    HVMUI.Icon("sparkles", size: .lg, color: .accent)
+                    HVMUI.Icon("ellipsis", size: .lg, color: .secondary)
+                }
+
+                // KbdHint
+                fieldRow("KbdHint") {
+                    HVMUI.KbdHint("⌘+S")
+                    HVMUI.KbdHint(keys: [.cmd, .shift], char: "P")
+                    HVMUI.KbdHint(keys: [.cmd, .opt], char: "I", size: .sm)
+                    HVMUI.KbdHint(keys: [.enter], size: .md)
+                    HVMUI.KbdHint(keys: [.esc], size: .sm)
+                }
+
+                // Tooltip demo — hover 按钮 500ms 后出 tooltip
+                fieldRow("Tooltip (hover 500ms 后出)") {
+                    HVMUI.Button(icon: "trash", variant: .ghost) { }
+                        .hvmTooltip("删除当前 VM", kbd: "⌫")
+
+                    HVMUI.Button(icon: "plus", variant: .ghost) { }
+                        .hvmTooltip("创建新 VM", edge: .bottom, kbd: "⌘+N")
+
+                    HVMUI.Button("保存", variant: .primary) { }
+                        .hvmTooltip("保存当前修改", kbd: "⌘+S")
+
+                    HVMUI.Icon("info.circle", color: .info)
+                        .hvmTooltip("VM 配置说明: 至少 2GB 内存 + 1 CPU 核心", edge: .trailing)
+                }
             }
         }
     }
