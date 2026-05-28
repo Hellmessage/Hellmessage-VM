@@ -383,7 +383,7 @@ public enum QemuHostEntry {
             // 仅 Windows guest 起 — helper EXE 只有 Win ARM64 build, Linux guest 没意义.
             // 启动后立即异步 connect, helper 没就绪不报错 (silently retry 5s, 等 guest helper
             // 进程拉起来). PR-3 接 PasteboardBridge.onFileURLs callback 走 publishFiles 完整通路.
-            // PR-4 helper 自动安装.
+            // PR-4 helper 自动安装 (QGA 推 EXE + 注册表自启 + 立即拉起).
             if config.guestOS == .windows {
                 let clipBridge = HVMFileClipboardBridge(
                     socketPath: hvmClipboardSocketURL.path,
@@ -402,6 +402,19 @@ public enum QemuHostEntry {
                     }
                 }
                 fputs("HVMHost(qemu): HVM file-clipboard bridge 已启动 (chardev: \(hvmClipboardSocketURL.lastPathComponent))\n", stderr)
+
+                // 6.4d helper EXE 自动安装. QGA 推 EXE + 写 Run 注册表 + 立即 schtasks 拉起.
+                // 已装走 marker 跳过. 安装失败 fail-soft (log warn, VM 继续启动).
+                // 后台异步跑, 不阻塞主流程 (QGA 推 ~280 KB 通常 < 5s).
+                let qgaPath = qgaSocketURL.path
+                Task.detached(priority: .userInitiated) {
+                    do {
+                        let r = try await GuestHelperInstaller.install(qgaSocketPath: qgaPath)
+                        fputs("HVMHost(qemu): GuestHelper installer: installed=\(r.installed) — \(r.message)\n", stderr)
+                    } catch {
+                        fputs("HVMHost(qemu): ⚠ GuestHelper installer 失败 (文件剪贴板功能不可用, 其他 VM 功能正常): \(error)\n", stderr)
+                    }
+                }
             }
 
             // 6.4b SPICE WebDAV server (共享目录, docs/v3/SHARED_FOLDER.md):

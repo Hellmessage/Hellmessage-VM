@@ -91,6 +91,22 @@ if [ -f "$ROOT/scripts/install-vmnet-daemons.sh" ]; then
     chmod +x "$RESOURCES/scripts/install-vmnet-daemons.sh"
 fi
 
+# 4.4b 拷贝 HVM Guest Helper EXE (arm64 Windows) + libunwind.dll 入 Resources/GuestHelper/.
+#      QemuHostEntry 启 Windows VM 后通过 QGA push 到 guest C:\Program Files\HVM Guest Helper\.
+#      详见 docs/v3/HOST_FILE_CLIPBOARD.md §4.5. 缺 EXE 时不 fail (Linux/macOS guest 不需要,
+#      Win guest 跑没 helper 也只是文件剪贴板不可用, 其他功能不受影响).
+#      libunwind.dll: helper EXE 用 llvm-mingw 链 LLVM 异常 unwinder, 默认动态依赖 libunwind.dll;
+#      不带这个 DLL Windows 启 helper 直接静默死掉 (api-ms-win-* DLL 加载失败前 ldr 就 abort).
+GH_SRC_EXE="$ROOT/guest-helper/dist/aarch64/hvm-guest-helper.exe"
+GH_SRC_DLL="$ROOT/guest-helper/dist/aarch64/libunwind.dll"
+if [ -f "$GH_SRC_EXE" ]; then
+    mkdir -p "$RESOURCES/GuestHelper"
+    cp "$GH_SRC_EXE" "$RESOURCES/GuestHelper/hvm-guest-helper.exe"
+    if [ -f "$GH_SRC_DLL" ]; then
+        cp "$GH_SRC_DLL" "$RESOURCES/GuestHelper/libunwind.dll"
+    fi
+fi
+
 # 4.5 嵌入 QEMU 后端 (软模式: third_party/qemu-stage/ 不存在则跳过, 仍出 .app)
 #     完整发布走 make build-all (会先 make qemu); 此处 make build 不强制要求 QEMU 就绪
 #     stage 即 qemu-build.sh 的最终成品 (已裁剪 / 嵌 swtpm / 清 xattr / 写 LICENSE+MANIFEST)

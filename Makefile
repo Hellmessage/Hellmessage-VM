@@ -68,6 +68,8 @@ $(BUNDLE_STAMP): $(HVM_BIN) $(HVM_CLI_BIN) $(HVM_DBG_BIN) \
                  $(PKG_DIR)/Resources/HVM.entitlements \
                  $(PKG_DIR)/Resources/QEMU.entitlements \
                  $(PKG_DIR)/Resources/Info.plist.template \
+                 $(wildcard guest-helper/dist/aarch64/hvm-guest-helper.exe) \
+                 $(wildcard guest-helper/dist/aarch64/libunwind.dll) \
                  | icon
 	@CONFIGURATION=$(CONFIGURATION) SIGN_IDENTITY="$(SIGN_IDENTITY)" bash scripts/bundle.sh
 	@mkdir -p $(@D)

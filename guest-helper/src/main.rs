@@ -1,3 +1,7 @@
+// Windows GUI subsystem (no console). 不加这条 release build 默认 console subsystem,
+// 自启时会闪一个黑窗口很丑. 调试用时改成 "console" 拿 stderr.
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 // hvm-guest-helper — HVM guest helper service for Windows.
 //
 // 详见 docs/v3/HOST_FILE_CLIPBOARD.md.
@@ -30,9 +34,21 @@ use virtio::{VirtioSerialPort, HVM_CLIPBOARD_PORT};
 const RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 fn main() {
-    // 日志初始化失败不致命 — 继续跑, 只是不写文件
+    // 始终至少试一下: 多级 fallback 让 init 几乎不可能全部失败.
+    // 失败不致命 (helper 还能跑, 只是没 log 排查难)
     let _ = log::init();
     hvmlog!("hvm-guest-helper v{} 启动", env!("CARGO_PKG_VERSION"));
+
+    // 额外兜底 marker: 写到 %TEMP% (用户总可写, 不受 UAC 限制).
+    // 让外部诊断"helper 是否真跑过"时有直接证据
+    // (Get-Item $env:TEMP\hvm-helper-start.txt).
+    let marker_path = std::env::temp_dir().join("hvm-helper-start.txt");
+    let _ = std::fs::write(
+        &marker_path,
+        format!("hvm-guest-helper v{} 启动 pid={}\n",
+                env!("CARGO_PKG_VERSION"), std::process::id()),
+    );
+    hvmlog!("startup marker: {}", marker_path.display());
 
     // 主循环: 打开 → 服务 → 出错关 → 等 5s → 再打开. 死循环, 进程靠 OS / scheduler kill.
     loop {
