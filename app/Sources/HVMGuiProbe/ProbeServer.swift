@@ -29,6 +29,10 @@ import HVMIPC
 @MainActor
 public protocol ProbeErrorPresenter: AnyObject {
     func presentTestError(title: String, message: String, details: String?, hint: String?)
+    /// 主动 dismiss 当前 dialog (验 dismiss 路径 + framebuffer 恢复)
+    func dismissCurrentTestError()
+    /// 主窗口拉到前台 (HVM 默认 close=hide 到 accessory, 测试需要主动 show)
+    func showMainWindow()
 }
 
 @MainActor
@@ -126,6 +130,13 @@ public enum ProbeServer {
         case "debug.trigger-error":
             return handleTriggerError(req)
 
+        case "debug.dismiss-error":
+            return handleDismissError(req)
+
+        case "debug.show-window":
+            errorPresenter?.showMainWindow()
+            return .success(id: req.id)
+
         default:
             return .failure(id: req.id,
                              code: "gui.unknown_op",
@@ -147,6 +158,17 @@ public enum ProbeServer {
         let hint = req.args["hint"]
         presenter.presentTestError(title: title, message: message, details: details, hint: hint)
         return .success(id: req.id, data: ["triggered": "true"])
+    }
+
+    /// 主动 dismiss 当前 dialog. 给 hvm-dbg 自动化测试 dismiss 后 framebuffer 恢复用.
+    @MainActor
+    private static func handleDismissError(_ req: IPCRequest) -> IPCResponse {
+        guard let presenter = errorPresenter else {
+            return .failure(id: req.id, code: "debug.no_presenter",
+                             message: "ErrorPresenter 未注入")
+        }
+        presenter.dismissCurrentTestError()
+        return .success(id: req.id, data: ["dismissed": "true"])
     }
 
     @MainActor

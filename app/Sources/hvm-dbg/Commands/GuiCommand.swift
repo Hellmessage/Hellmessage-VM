@@ -25,8 +25,43 @@ struct GuiCommand: AsyncParsableCommand {
             GuiTypeCommand.self,
             GuiReadCommand.self,
             GuiTriggerErrorCommand.self,
+            GuiDismissErrorCommand.self,
+            GuiShowWindowCommand.self,
         ]
     )
+}
+
+// MARK: - gui show-window
+
+struct GuiShowWindowCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "show-window",
+        abstract: "(测试用) HVM 在 accessory 模式时主动拉出主窗口"
+    )
+    func run() throws {
+        do {
+            _ = try GuiSocket.wrappedRequest(op: "debug.show-window")
+            print("✔ requested show main window")
+        } catch { bail(error) }
+    }
+}
+
+// MARK: - gui dismiss-error
+
+struct GuiDismissErrorCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "dismiss-error",
+        abstract: "(测试用) 主动 dismiss 当前 ErrorDialog (验 framebuffer 恢复路径)"
+    )
+
+    func run() throws {
+        do {
+            _ = try GuiSocket.wrappedRequest(op: "debug.dismiss-error")
+            print("✔ dismissed current ErrorDialog")
+        } catch {
+            bail(error)
+        }
+    }
 }
 
 // MARK: - gui trigger-error (debug only)

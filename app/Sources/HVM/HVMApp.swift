@@ -63,7 +63,7 @@ final class HVMAppDelegate: NSObject, NSApplicationDelegate {
         // 让 hvm-dbg gui xxx 自动化点击 / 截图 / 输入. 设计稿 docs/v3/HVM_DBG_GUI_PROTOCOL.md.
         // 注入 ErrorPresenter 适配器, 给 debug.trigger-error op 用 (验 dialog z-order).
         // adapter 必须用 strong ref 保活, ProbeServer 内只持 weak.
-        let adapter = ErrorPresenterProbeAdapter(presenter: errors)
+        let adapter = ErrorPresenterProbeAdapter(presenter: errors, appDelegate: self)
         self.probeErrorAdapter = adapter
         ProbeServer.setTestErrorPresenter(adapter)
         ProbeServer.start()
@@ -211,6 +211,9 @@ final class HVMAppDelegate: NSObject, NSApplicationDelegate {
         mainController?.showWindow(nil)
         mainController?.window?.makeKeyAndOrderFront(nil)
     }
+
+    /// 给 GUI probe 走 (HVMGuiProbe ErrorPresenterProbeAdapter.showMainWindow). 测试用.
+    func exitAccessoryModeProbe() { exitAccessoryMode() }
 
     private func createStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -372,10 +375,20 @@ public enum HVMAppLauncher {
 @MainActor
 final class ErrorPresenterProbeAdapter: ProbeErrorPresenter {
     private weak var presenter: ErrorPresenter?
-    init(presenter: ErrorPresenter) { self.presenter = presenter }
+    private weak var appDelegate: HVMAppDelegate?
+    init(presenter: ErrorPresenter, appDelegate: HVMAppDelegate?) {
+        self.presenter = presenter
+        self.appDelegate = appDelegate
+    }
     func presentTestError(title: String, message: String, details: String?, hint: String?) {
         presenter?.present(ErrorDialogModel(
             title: title, message: message, details: details, hint: hint
         ))
+    }
+    func dismissCurrentTestError() {
+        presenter?.dismissCurrent()
+    }
+    func showMainWindow() {
+        appDelegate?.exitAccessoryModeProbe()
     }
 }
