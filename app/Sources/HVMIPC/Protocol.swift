@@ -143,6 +143,34 @@ public enum IPCOp: String, Sendable {
     /// host (GUI) 通知 VMHost 切换剪贴板共享 enabled, args.enabled = "1" / "0".
     /// 立即生效 (不必重启 VM). 持久化由 GUI 侧负责 (改 yaml).
     case clipboardSetEnabled = "clipboard.setEnabled"
+    /// host (GUI) 把用户 Cmd+V 选中的 host 文件 list 推给 VMHost,
+    /// VMHost 走 SPICE vdagent VD_AGENT_FILE_XFER_* 流式传给 guest spice-vdagent,
+    /// guest 落 ~/Downloads. args.paths = JSON 编码的 host 绝对路径数组.
+    /// 设计稿 docs/v3/HOST_FILE_PASTE.md. 仅 QEMU 后端 + Linux/Windows guest.
+    /// 长事务: GUI 侧 timeoutSec 应 ≥ 600 (跟 FileTransferDialog 一致).
+    case clipboardPasteFiles = "clipboard.paste-files"
+}
+
+/// clipboard.paste-files 响应. 三分桶 (成功 / 跳过 / 失败).
+/// GUI 侧成功 → UNUserNotification "已传 N 个文件到 ~/Downloads",
+/// 跳过 + 失败合并 → ErrorDialog 列出原因.
+public struct IPCClipboardPasteFilesPayload: Codable, Sendable {
+    public struct Item: Codable, Sendable {
+        public let path: String
+        public let reason: String        // 跳过 / 失败原因; 成功项填 ""
+        public init(path: String, reason: String) {
+            self.path = path
+            self.reason = reason
+        }
+    }
+    public let successful: [Item]
+    public let skipped: [Item]
+    public let failed: [Item]
+    public init(successful: [Item], skipped: [Item], failed: [Item]) {
+        self.successful = successful
+        self.skipped = skipped
+        self.failed = failed
+    }
 }
 
 /// dbg.display.info payload — guest 真实当前 framebuffer 尺寸.

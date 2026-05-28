@@ -694,6 +694,12 @@ final class QemuHostState {
     var vdagent: VdagentClient?
     /// host ↔ guest 剪贴板桥. nil 表示用户关掉了 clipboard sharing.
     var pasteboardBridge: PasteboardBridge?
+    /// host → guest 文件粘贴桥 (设计稿 docs/v3/HOST_FILE_PASTE.md).
+    /// 跟 PasteboardBridge 共享同一 VdagentClient (不同 callback slot, 不抢).
+    /// lazy: 第一个 clipboard.paste-files 请求到达时创建 + install.
+    /// clipboard sharing 关掉时**不**自动 uninstall — 文件粘贴是显式 Cmd+V 触发, 跟
+    /// 文本剪贴板 1Hz 轮询是不同语义, 不联动开关.
+    var filePasteBridge: FilePasteBridge?
     /// SPICE WebDAV server (共享目录, docs/v3/SHARED_FOLDER.md). nil = 该 VM config.sharedFolders 空.
     /// 跟 vdagent 同款 single-client socket, 由 VMHost 唯一持有. tearDown 不需特殊清理 (deinit 自动关 fd).
     var spiceWebdav: SpiceWebdavServer?
@@ -810,6 +816,7 @@ final class QemuHostState {
         case IPCOp.dbgListDir.rawValue:       return await handleDbgListDir(req: req)
         case IPCOp.displaySetMonitors.rawValue:  return handleDisplaySetMonitors(req: req)
         case IPCOp.clipboardSetEnabled.rawValue: return handleClipboardSetEnabled(req: req)
+        case IPCOp.clipboardPasteFiles.rawValue: return await handleClipboardPasteFiles(req: req)
 
         default:
             if req.op.hasPrefix("dbg.") {
@@ -1326,6 +1333,45 @@ final class QemuHostState {
         return .success(id: req.id)
     }
 
+    /// clipboard.paste-files — GUI 把用户 Cmd+V 选中的 host 文件 list 推给 VMHost,
+    /// VMHost 走 SPICE vdagent FILE_XFER_* 流式传给 guest. 长事务 (单文件 4 GiB 最长几分钟),
+    /// 客户端 SocketClient.request 应给足 timeoutSec (≥ 600).
+    /// args.paths = JSON 编码的 host 绝对路径数组.
+    private func handleClipboardPasteFiles(req: IPCRequest) async -> IPCResponse {
+        guard let pathsJSON = req.args["paths"] else {
+            return .failure(id: req.id, code: "ipc.bad_args",
+                            message: "需要 args.paths (host 绝对路径 JSON 数组)")
+        }
+        guard let pathsData = pathsJSON.data(using: .utf8),
+              let paths = try? JSONDecoder().decode([String].self, from: pathsData) else {
+            return .failure(id: req.id, code: "ipc.bad_args",
+                            message: "args.paths 不是合法 JSON 字符串数组")
+        }
+        guard !paths.isEmpty else {
+            return .failure(id: req.id, code: "ipc.bad_args", message: "paths 为空")
+        }
+        guard let vdagent = self.vdagent else {
+            return .failure(id: req.id, code: "backend.vdagent_unavailable",
+                            message: "vdagent client 未初始化 (VM 启动早期?)")
+        }
+        // lazy install: PasteboardBridge 跟 FilePasteBridge 共享 vdagent, 不同 callback slot
+        if filePasteBridge == nil {
+            let bridge = FilePasteBridge(vdagent: vdagent)
+            bridge.install()
+            filePasteBridge = bridge
+            fputs("HVMHost(qemu): FilePasteBridge installed (lazy on first paste)\n", stderr)
+        }
+        let urls = paths.map { URL(fileURLWithPath: $0) }
+        // await 期间 main actor 让出, 其它 IPC 请求 (status / stop) 不被阻塞.
+        let r = await filePasteBridge!.handlePasteFiles(urls)
+        let payload = IPCClipboardPasteFilesPayload(
+            successful: r.successful.map { .init(path: $0, reason: "") },
+            skipped:    r.skipped.map    { .init(path: $0.path, reason: $0.reason) },
+            failed:     r.failed.map     { .init(path: $0.path, reason: $0.reason) }
+        )
+        return .encoded(id: req.id, payload: payload, kind: "clipboard paste files")
+    }
+
     /// dbg.display.resize — 模拟 GUI 拖窗口触发 host → guest resize.
     /// 双通路并发: HDP RESIZE_REQUEST + vdagent MONITORS_CONFIG.
     /// **要求**: GUI 没在 attach (iosurface / vdagent chardev 都是 single-client).
@@ -1506,6 +1552,8 @@ final class QemuHostState {
         thumbnailTimer = nil
         pasteboardBridge?.stop()
         pasteboardBridge = nil
+        filePasteBridge?.uninstall()
+        filePasteBridge = nil
         vdagent?.disconnect()
         vdagent = nil
         ipcServer?.stop()

@@ -22,10 +22,14 @@
 //     - VD_AGENT_CLIPBOARD_REQUEST (8)      — "把那个 mime 内容发我"
 //     - VD_AGENT_CLIPBOARD (4)              — 实际数据
 //     - VD_AGENT_CLIPBOARD_RELEASE (9)      — "我的剪贴板没了"
+//     - VD_AGENT_FILE_XFER_START (12)       — host → guest 起文件传输
+//     - VD_AGENT_FILE_XFER_STATUS (13)      — 双向状态码 (CAN_SEND_DATA / SUCCESS / 错误)
+//     - VD_AGENT_FILE_XFER_DATA (14)        — chunk 数据
 //
 // 协商 caps:
 //   CLIPBOARD_BY_DEMAND (5) + CLIPBOARD_SELECTION (6).
 //   不协商基础 CLIPBOARD (3) — 那条是无 GRAB/REQUEST 的 push, 跟我们 pull 模式冲突.
+//   FILE_XFER 无单独 enable cap, 只看 guest 是否置 CAP_FILE_XFER_DISABLED (8); 置位即禁用.
 //
 // 失败策略:
 //   - socket / write 错误 silently swallow + log.warn — vdagent 通道挂了不能阻塞
@@ -52,10 +56,19 @@ public final class VdagentClient: @unchecked Sendable {
     private static let VD_AGENT_CLIPBOARD_GRAB: UInt32           = 7
     private static let VD_AGENT_CLIPBOARD_REQUEST: UInt32        = 8
     private static let VD_AGENT_CLIPBOARD_RELEASE: UInt32        = 9
+    private static let VD_AGENT_FILE_XFER_START: UInt32          = 12
+    private static let VD_AGENT_FILE_XFER_STATUS: UInt32         = 13
+    private static let VD_AGENT_FILE_XFER_DATA: UInt32           = 14
 
     // capabilities 位编号 (见 vd_agent.h enum VDAgentCap)
     private static let VD_AGENT_CAP_CLIPBOARD_BY_DEMAND: UInt32  = 5
     private static let VD_AGENT_CAP_CLIPBOARD_SELECTION: UInt32  = 6
+    private static let VD_AGENT_CAP_FILE_XFER_DISABLED: UInt32   = 8
+
+    /// FILE_XFER DATA chunk payload 上限 (字节). SPICE upstream VD_AGENT_MAX_DATA = 2048,
+    /// 减去 chunk header (8B) + message header (20B) + DATA id/size (12B) = 2008.
+    /// 取 2000 保守; 1 MiB 文件需 ~525 chunks, 1 GiB 需 ~537K chunks.
+    public static let fileXferChunkSize: Int = 2000
 
     // selection 编号 (CLIPBOARD = 通用剪贴板, Win/Mac 唯一; PRIMARY/SECONDARY 是 X11 概念)
     private static let SELECTION_CLIPBOARD: UInt8 = 0
@@ -93,6 +106,33 @@ public final class VdagentClient: @unchecked Sendable {
     /// guest 通过 GRAB 通知 host "我有 UTF-8 文本", host 回 REQUEST 后 guest 发 CLIPBOARD,
     /// 整个流程结束后这个 callback 被调一次. 在内部 queue 上调; 调用者负责切到目标线程.
     public var onClipboardTextReceived: ((String) -> Void)?
+
+    /// FILE_XFER STATUS 回调. 由 read loop 触发, 在内部 queue 上调; 调用者负责切到目标线程.
+    /// 一次文件传输 (id) 会触发多次: 通常 CAN_SEND_DATA → ... → SUCCESS, 中途失败 → 错误码.
+    /// 终态码 (SUCCESS / CANCELLED / ERROR / NOT_ENOUGH_SPACE / SESSION_LOCKED /
+    /// VDAGENT_NOT_CONNECTED / DISABLED) 之后 id 不再用.
+    public var onFileXferStatus: ((UInt32, FileXferResult) -> Void)?
+
+    /// FILE_XFER 协议状态码. 序数严格按 spice-protocol/spice/vd_agent.h.
+    public enum FileXferResult: UInt32, Sendable {
+        case canSendData = 0
+        case cancelled = 1
+        case error = 2
+        case success = 3
+        case notEnoughSpace = 4
+        case sessionLocked = 5
+        case vdagentNotConnected = 6
+        case disabled = 7
+    }
+
+    /// guest 是否禁用了 FILE_XFER (CAP_FILE_XFER_DISABLED 置位 = 禁用).
+    /// caps 未协商时返 false (允许尝试, 由 send 失败兜底).
+    public var isFileXferDisabledByGuest: Bool {
+        return (remoteCaps & (UInt32(1) << VdagentClient.VD_AGENT_CAP_FILE_XFER_DISABLED)) != 0
+    }
+
+    /// 单调递增 transfer id 分配器. queue 内访问.
+    private var nextTransferId: UInt32 = 1
 
     public init(socketPath: String) {
         self.socketPath = socketPath
@@ -184,6 +224,75 @@ public final class VdagentClient: @unchecked Sendable {
 
     /// 仅 queue 内访问: host 这边正在持有 (尚未发送 / 等 guest REQUEST) 的 UTF-8 文本.
     private var pendingHostText: String?
+
+    // MARK: - FILE_XFER 公共 API
+
+    /// 分配一个新 transfer id 并发 FILE_XFER_START 给 guest.
+    /// START body = id(u32) + GKeyFile-style ASCII text ("[vdagent-file-xfer]\nname=<basename>\nsize=<bytes>\n").
+    /// 返回的 id 用于后续 sendFileXferData / onFileXferStatus 关联.
+    /// guest 在 caps 里置 CAP_FILE_XFER_DISABLED 时, caller 应先查 isFileXferDisabledByGuest
+    /// 跳过, 但这里允许写 — guest 自己会回 DISABLED status, 路径仍走得通.
+    @discardableResult
+    public func sendFileXferStart(name: String, size: UInt64) -> UInt32 {
+        // id 分配走 queue.sync 取原子值, 避免外部 caller 拿不到 id (queue.async 是 fire-and-forget).
+        var tmp: UInt32 = 0
+        queue.sync { [weak self] in
+            guard let self else { return }
+            tmp = self.nextTransferId
+            // wrap-around 防御: u32 在 4G transfers 后回卷; 我们到不了那一步, 但留兜底.
+            self.nextTransferId = (self.nextTransferId == UInt32.max) ? 1 : (self.nextTransferId + 1)
+        }
+        let assignedId = tmp   // immutable 重绑, 让 @Sendable closure 安全捕获
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.ensureConnectedLocked()
+            guard self.sockFD >= 0 else {
+                log.warning("vdagent FILE_XFER_START dropped: not connected (id=\(assignedId, privacy: .public) name=\(name, privacy: .public))")
+                return
+            }
+            // GKeyFile body: 简单 INI-style 文本, name 不含路径 (caller 应已取 basename).
+            // size 用十进制字符串; spice-vdagent 端用 g_key_file_parse_data_from_data 解析.
+            let meta = "[vdagent-file-xfer]\nname=\(name)\nsize=\(size)\n"
+            var body = Data(capacity: 4 + meta.utf8.count)
+            VdagentClient.appendU32(assignedId, to: &body)
+            body.append(contentsOf: meta.utf8)
+            self.sendMessageLocked(type: VdagentClient.VD_AGENT_FILE_XFER_START, payload: body)
+            log.info("vdagent FILE_XFER_START id=\(assignedId, privacy: .public) name=\(name, privacy: .public) size=\(size, privacy: .public)")
+        }
+        return assignedId
+    }
+
+    /// 发一个 FILE_XFER_DATA chunk. payload 应 ≤ fileXferChunkSize (caller 切片).
+    /// 调用前应已收到对应 id 的 CAN_SEND_DATA (在 onFileXferStatus 回调里).
+    /// DATA body = id(u32) + size(u64, 本 chunk 字节数) + payload bytes.
+    public func sendFileXferData(id: UInt32, chunk: Data) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            guard self.sockFD >= 0 else {
+                log.warning("vdagent FILE_XFER_DATA dropped: not connected (id=\(id, privacy: .public))")
+                return
+            }
+            var body = Data(capacity: 12 + chunk.count)
+            VdagentClient.appendU32(id, to: &body)
+            VdagentClient.appendU64(UInt64(chunk.count), to: &body)
+            body.append(chunk)
+            self.sendMessageLocked(type: VdagentClient.VD_AGENT_FILE_XFER_DATA, payload: body)
+        }
+    }
+
+    /// 主动给 guest 发一个 STATUS (通常是 host 端取消 / 错误时). result=CANCELLED/ERROR 等.
+    /// 协议双向 STATUS: guest → host 是常规反馈, host → guest 用于通知中止.
+    public func sendFileXferStatus(id: UInt32, result: FileXferResult) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            guard self.sockFD >= 0 else { return }
+            var body = Data(capacity: 8)
+            VdagentClient.appendU32(id, to: &body)
+            VdagentClient.appendU32(result.rawValue, to: &body)
+            self.sendMessageLocked(type: VdagentClient.VD_AGENT_FILE_XFER_STATUS, payload: body)
+            log.info("vdagent FILE_XFER_STATUS host→guest id=\(id, privacy: .public) result=\(result.rawValue, privacy: .public)")
+        }
+    }
 
     // MARK: - 内部: connect / disconnect
 
@@ -443,6 +552,8 @@ public final class VdagentClient: @unchecked Sendable {
             handleGuestClipboardLocked(payload)
         case VdagentClient.VD_AGENT_CLIPBOARD_RELEASE:
             log.info("vdagent CLIPBOARD_RELEASE from guest")
+        case VdagentClient.VD_AGENT_FILE_XFER_STATUS:
+            handleFileXferStatusLocked(payload)
         default:
             // MOUSE_STATE / DISPLAY_CONFIG / etc. — 不处理
             break
@@ -541,6 +652,21 @@ public final class VdagentClient: @unchecked Sendable {
         }
         log.info("vdagent CLIPBOARD recv from guest sel=\(selection, privacy: .public) (\(textBytes.count, privacy: .public) bytes)")
         onClipboardTextReceived?(text)
+    }
+
+    /// guest → host FILE_XFER_STATUS 解析. payload = id(u32) + result(u32) [+ detail bytes...].
+    /// detail 部分目前忽略 (spice-vdagent 几乎不带 detail; 即使有也是 text 给用户看).
+    private func handleFileXferStatusLocked(_ payload: Data) {
+        guard payload.count >= 8 else {
+            log.warning("vdagent FILE_XFER_STATUS payload 太短 \(payload.count, privacy: .public)")
+            return
+        }
+        let id = readU32(payload, 0)
+        let raw = readU32(payload, 4)
+        let result = FileXferResult(rawValue: raw)
+            ?? .error  // 未知 result 当 error 处理, 让 caller 落 fail 路径
+        log.info("vdagent FILE_XFER_STATUS guest→host id=\(id, privacy: .public) result=\(raw, privacy: .public)")
+        onFileXferStatus?(id, result)
     }
 
     /// 按 useSelectionPrefix 解析 payload 头. 返回 (selection, mime 起始 offset).

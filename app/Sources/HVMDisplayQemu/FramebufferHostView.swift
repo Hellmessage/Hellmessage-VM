@@ -131,6 +131,13 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
     /// VMConfig.macStyleShortcuts 设置.
     public var macStyleShortcuts: Bool = true
 
+    /// host → guest 文件粘贴 closure (docs/v3/HOST_FILE_PASTE.md).
+    /// keyDown 拦到 Cmd+V 且 NSPasteboard 有 file URLs 时调; closure 由 GUI 层注入,
+    /// 内部通常走 Task.detached → IPC clipboard.paste-files → VMHost FilePasteBridge.
+    /// 仅 macStyleShortcuts=true 时拦截 (跟用户"Cmd 当主操作键"的预期一致).
+    /// closure 调用即视为已"吃掉"这次 Cmd+V — view 不再发 keystroke 给 guest.
+    public var onFilePaste: (([URL]) -> Void)?
+
     // MARK: - 键盘捕获双态
 
     /// captured 模式标记 (false = released, 默认).
@@ -435,10 +442,42 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
         guard inputCaptureEnabled else { return }
         syncCapsLockIfNeeded(modifierFlags: event.modifierFlags)
         if event.isARepeat { return }  // 不发 repeat, guest 自己 repeat
+
+        // 文件粘贴拦截 (Cmd+V + NSPasteboard 有 file URLs):
+        //   - 仅 macStyleShortcuts=true 拦 (用户在用 mac 习惯, Cmd 当 ctrl/主操作键)
+        //   - 排除 Cmd+Opt+V (Opt 跟 Cmd 同按是 capture toggle 副产物, 不抢)
+        //   - 排除 Shift / Ctrl 组合 (Cmd+Shift+V 等是其他业务快捷键)
+        //   - NSPasteboard 没 file URLs → 走老路径 (cmd+v → ctrl+v 文本粘贴)
+        // 注: 这里在 normal-key qcode 发送之前判断, 避免双发.
+        if macStyleShortcuts,
+           let onFilePaste,
+           event.modifierFlags.contains(.command),
+           !event.modifierFlags.contains(.option),
+           !event.modifierFlags.contains(.shift),
+           !event.modifierFlags.contains(.control),
+           event.charactersIgnoringModifiers == "v" {
+            if let urls = Self.readPasteboardFileURLs(), !urls.isEmpty {
+                onFilePaste(urls)
+                return  // *不* 走 keystroke 路径; closure 已 own 这次 Cmd+V
+            }
+        }
+
         if let qcode = HVMQCode.qcode(forKeyCode: event.keyCode) {
             forwarder?.keyDown(qcode: qcode)
             pressedNormalKeyQcodes.insert(qcode)
         }
+    }
+
+    /// 读 NSPasteboard 里的 file URLs. 仅取 isFileURL = true 的, 排除 https / RTF 等
+    /// 其他 NSURL 写入者. 没有 file URLs 返 nil 让 caller 走老路径 (文本粘贴).
+    private static func readPasteboardFileURLs() -> [URL]? {
+        let pb = NSPasteboard.general
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: options) as? [URL],
+           !urls.isEmpty {
+            return urls
+        }
+        return nil
     }
     public override func keyUp(with event: NSEvent) {
         guard inputCaptureEnabled else { return }

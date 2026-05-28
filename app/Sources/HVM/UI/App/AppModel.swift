@@ -1107,6 +1107,112 @@ public final class AppModel {
         return payload
     }
 
+    // MARK: - host → guest 文件粘贴 (Cmd+V, docs/v3/HOST_FILE_PASTE.md)
+
+    /// 用户在 FramebufferHostView 按 Cmd+V 选中文件 → 走 IPC clipboard.paste-files
+    /// 让 VMHost 子进程通过 SPICE vdagent 流式发给 guest, guest 落 ~/Downloads.
+    /// 成功 → 原生通知; 失败/部分跳过 → ErrorPresenter (走 sharedErrors).
+    /// 长事务 — IPC SocketClient.request 走 Task.detached 不阻塞 main.
+    public func pasteFilesToVM(item: VMListItem, urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        let displayName = item.displayName
+        guard let holder = BundleLock.inspect(bundleURL: item.bundleURL),
+              !holder.socketPath.isEmpty else {
+            sharedErrors?.present(ErrorDialogModel(
+                title: "粘贴失败",
+                message: "VM 未运行 (找不到 IPC socket)",
+                details: nil, hint: "先确认 VM 在跑, 再 Cmd+V"
+            ))
+            return
+        }
+        let socketPath = holder.socketPath
+        // urls → host 绝对路径 JSON 数组
+        let paths = urls.map { $0.path }
+        guard let pathsData = try? JSONEncoder().encode(paths),
+              let pathsStr = String(data: pathsData, encoding: .utf8) else {
+            sharedErrors?.present(ErrorDialogModel(
+                title: "粘贴失败", message: "无法编码 host 文件路径",
+                details: nil, hint: nil
+            ))
+            return
+        }
+        let req = IPCRequest(
+            op: IPCOp.clipboardPasteFiles.rawValue,
+            args: ["paths": pathsStr]
+        )
+        // 长事务: 多文件 ~ 几分钟级; 1800s timeout 兜底, 单文件 600s 由 host 侧 awaitStatus
+        // 控制. Task.detached 防 main 阻塞.
+        Task { @MainActor [weak self] in
+            let resp: IPCResponse
+            do {
+                resp = try await Task.detached(priority: .userInitiated) {
+                    try SocketClient.request(
+                        socketPath: socketPath, request: req, timeoutSec: 1800
+                    )
+                }.value
+            } catch {
+                self?.sharedErrors?.present(ErrorDialogModel(
+                    title: "粘贴失败",
+                    message: "IPC 调用失败: \(error)",
+                    details: nil, hint: nil
+                ))
+                return
+            }
+            self?.handlePasteFilesResponse(resp, displayName: displayName)
+        }
+    }
+
+    /// 把 clipboard.paste-files 响应翻译成 UI 反馈:
+    ///   - 全部成功 → 原生通知 "已粘贴 N 个文件到 ~/Downloads"
+    ///   - 有 skip / fail → ErrorDialog 列出原因; 同时仍弹通知告知成功数量
+    private func handlePasteFilesResponse(_ resp: IPCResponse, displayName: String) {
+        guard resp.ok else {
+            sharedErrors?.present(ErrorDialogModel(
+                title: "粘贴失败",
+                message: resp.error?.message ?? "未知错误",
+                details: resp.error?.code,
+                hint: nil
+            ))
+            return
+        }
+        guard let json = resp.data?["payload"],
+              let data = json.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(IPCClipboardPasteFilesPayload.self, from: data) else {
+            sharedErrors?.present(ErrorDialogModel(
+                title: "粘贴失败",
+                message: "无法解析 clipboard.paste-files 响应",
+                details: nil, hint: nil
+            ))
+            return
+        }
+        let okCount = payload.successful.count
+        if okCount > 0 {
+            HostFilePasteNotifier.notifySuccess(displayName: displayName, count: okCount)
+        }
+        // 有跳过 / 失败 → 弹 ErrorDialog 列原因 (即使 ok 项也都成功, 也要告知 partial)
+        if !payload.skipped.isEmpty || !payload.failed.isEmpty {
+            var lines: [String] = []
+            for s in payload.skipped {
+                let name = (s.path as NSString).lastPathComponent
+                lines.append("跳过 · \(name): \(s.reason)")
+            }
+            for f in payload.failed {
+                let name = (f.path as NSString).lastPathComponent
+                lines.append("失败 · \(name): \(f.reason)")
+            }
+            let title = (okCount > 0) ? "部分文件未粘贴" : "粘贴失败"
+            let summary = (okCount > 0)
+                ? "成功 \(okCount) 个; 余下 \(lines.count) 个未传"
+                : "全部 \(lines.count) 个文件未传"
+            sharedErrors?.present(ErrorDialogModel(
+                title: title,
+                message: summary,
+                details: lines.joined(separator: "\n"),
+                hint: "文件夹请先压缩; 超过 4 GiB 走共享目录"
+            ))
+        }
+    }
+
     /// 给 push 建议默认远端 path. Win → `C:\Users\Public\Downloads\<basename>`;
     /// Linux/macOS → `/tmp/<basename>`. 用户在 dialog 内可改.
     public static func suggestPushRemotePath(hostURL: URL, guestOS: GuestOSType?) -> String {

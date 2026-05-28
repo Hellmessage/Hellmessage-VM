@@ -91,6 +91,17 @@
   - dialog 三态: form / running (closeAction = nil 不可关) / done; 取消语义 v1 不支持中断 chunk 循环
   - IPC 走 `Task.detached` 跑 `SocketClient.request` (长事务 600s 不能阻 main)
   - VZ 后端走 `VZSharedDirectory` + virtiofs 的方案推后单独提案
+- **Cmd+V 文件粘贴** (设计稿 `docs/v3/HOST_FILE_PASTE.md`, 跟 FileTransferDialog 走不同通路):
+  - 用户在 Finder Cmd+C 文件 → 切到 VM framebuffer view 按 Cmd+V → 自动走 SPICE vdagent VD_AGENT_FILE_XFER_* 流到 guest, 落 **guest `~/Downloads`** (不是当前焦点目录, 那个能力推 v2 自家 guest agent)
+  - **仅 QEMU 后端 + Linux/Windows guest** (vdagent 通路). VZ 后端 / macOS guest 不接 (vdagent 不存在)
+  - **拦截条件**: `FramebufferHostView.keyDown` + `macStyleShortcuts=true` + Cmd 单按 (排除 Cmd+Opt / Cmd+Shift / Cmd+Ctrl) + NSPasteboard 有 file URLs. 三条全过才吃掉这次 Cmd+V; 任一不过走老的文本粘贴路径
+  - **vdagent 单 socket 多协议复用** — `PasteboardBridge` (文本) / `FilePasteBridge` (文件) / `SpiceWebdavServer` (共享目录) 共享同一 `QemuHostState.shared.vdagent` 实例, 不同 callback slot 不抢; 启动顺序 vdagent connect → PasteboardBridge install (按 config) → FilePasteBridge **lazy install** (第一次 `clipboard.paste-files` 请求到达时)
+  - **边界**: 文件夹 skip + 通知 "暂不支持"; 单文件 > 4 GiB skip + 引导走共享目录; 多文件串行不并发 (vdagent socket 单 client + SPICE chunks 不可 interleave); v1 不支持中途取消
+  - **chunk 大小硬约束**: `VdagentClient.fileXferChunkSize = 2000` 字节. SPICE upstream `VD_AGENT_MAX_DATA = 2048`, 减 chunk header (8B) + msg header (20B) + DATA id/size (12B) = 2008, 取 2000 保守. **禁止**放大这个常量 (会让 spice-vdagent 解码失败)
+  - **超时**: CAN_SEND_DATA 30s (探 guest spice-vdagent 是否在线) / 终态 SUCCESS 600s (单文件 4 GiB @ 50 MiB/s 上限). 超时不 hang, 返 fail 让 GUI 弹 ErrorDialog
+  - **GUI 反馈**: 成功 → `UNUserNotificationCenter` 原生通知 (首次 requestAuthorization, 拒绝 → silently 不通知); 失败 / 部分跳过 → `ErrorDialog` 列原因. **禁止** NSAlert
+  - **host → guest 文件传输统一走 vdagent file_xfer (后续方向)** — 当前 `FileTransferDialog` 还走 QGA (1-10 MB/s), 后续应迁到 vdagent (~50 MB/s) 统一通路. 暂保留两条通路, v1.1 决策合并
+  - **测试**: `hvm-dbg paste-files <vm> --file ...` 模拟整条通路, 不依赖 framebuffer view 的 NSPasteboard 拦截 (server 端走相同 `clipboard.paste-files` IPC, 但绕过 Cmd+V 触发)
 - **键盘捕获 / 释放快捷键** (UTM 风格, 设计稿 `docs/v3/INPUT_CAPTURE.md`):
   - **统一 `Cmd+Opt`** 切换捕获 (VZ + QEMU 两后端一致). 老的 `Cmd+Ctrl` 因跟 macOS 系统快捷键 (Mission Control / 截图 / 第三方 app) 严重冲突已废弃, **禁止**再用
   - **QEMU 后端 captured 模式**: `CGSSetGlobalHotKeyOperatingMode(.disable)` (Skylight 私有 API, `HVMDisplayQemu/CGSPrivate.swift`) 禁用 macOS 全局热键, cmd+tab / cmd+space 也送 guest. 右上角 `⌘⌥ 退出捕获` overlay 显式提示
@@ -221,6 +232,7 @@ QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场�
 - 需要启动/停止 VM 走 `hvm-cli` 或 `hvm-dbg`, 不靠 HVM GUI
 - 需要在 guest 内做操作(看桌面、点按钮、键入命令)走 `hvm-dbg` 子命令
 - 需要 host ↔ guest 复制文件走 `hvm-dbg file push/pull`(QEMU 后端, qemu-guest-agent `guest-file-*` API; 1-10 MB/s; 软警告 100 MiB / 硬上限 4 GiB; 设计稿 `docs/v3/FILE_COPY.md`)
+- 想测 host → guest 文件粘贴 (Cmd+V 通路) 走 `hvm-dbg paste-files <vm> --file ...`(走 SPICE vdagent file_xfer, 落 guest `~/Downloads`; 模拟 GUI Cmd+V 但绕过 NSPasteboard 拦截; 设计稿 `docs/v3/HOST_FILE_PASTE.md`)
 - 需要长期 host ↔ guest 共享 host 目录走"共享目录" (SPICE WebDAV; `hvm-cli shared-folder add` / GUI 详情页 Sharing 区; 详见 `docs/v1/SHARING.md`)
 - 调试 WebDAV 协议层走 `hvm-dbg webdav-test` (44 case 离线单测) + `hvm-dbg webdav-serve --listen` (起 server 监听本地 socket 给 curl / Python client 测)
 - `hvm-dbg` 扩展原则: 零新协议实现, 只复用已暴露的公开 VZ API 封装

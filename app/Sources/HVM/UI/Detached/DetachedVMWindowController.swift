@@ -194,10 +194,20 @@ final class DetachedVMWindowController: NSWindowController, NSWindowDelegate {
         self.toolbarHost = toolbar
 
         let fb = FramebufferHostView(frame: .zero)
-        fb.macStyleShortcuts = item.config?.macStyleShortcuts ?? false
+        // 加密 VM 直接走密码弹窗启动时 item.config nil, 跟 VMConfig 默认 (true) 对齐
+        // 防 cmd+c → Win+c 卡在 guest 失效
+        fb.macStyleShortcuts = item.config?.macStyleShortcuts ?? true
         fb.translatesAutoresizingMaskIntoConstraints = false
         fb.setContentHuggingPriority(.defaultLow, for: .vertical)
         fb.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        // Cmd+V 文件粘贴 — 跟主嵌入 view 同款 closure, 走 AppModel.pasteFilesToVM IPC.
+        // 详见 docs/v3/HOST_FILE_PASTE.md.
+        let detachedVmID = self.vmID
+        fb.onFilePaste = { [weak self] urls in
+            guard let self else { return }
+            guard let it = self.model.list.first(where: { $0.id == detachedVmID }) else { return }
+            self.model.pasteFilesToVM(item: it, urls: urls)
+        }
         self.fbView = fb
 
         let toolbarDivider = makeDivider()

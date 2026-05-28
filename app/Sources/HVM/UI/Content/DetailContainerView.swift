@@ -436,11 +436,22 @@ final class DetailContainerView: NSView {
         let bottomDivider = makeHorizontalDivider()
 
         let fbView = FramebufferHostView(frame: .zero)
-        // 加密 VM 解锁前 config nil; macStyleShortcuts 默认 false (Win VM 不需要)
-        fbView.macStyleShortcuts = item.config?.macStyleShortcuts ?? false
+        // 加密 VM 直接走密码弹窗启动时 item.config 为 nil (unlockedConfigs 未填),
+        // 兜底必须跟 VMConfig 默认 (true) 一致, 否则 cmd → meta_l (Win 键), Win/Linux
+        // guest 内 cmd+c → Win+c 而非 ctrl+c, 复制粘贴失效.
+        fbView.macStyleShortcuts = item.config?.macStyleShortcuts ?? true
         fbView.translatesAutoresizingMaskIntoConstraints = false
         fbView.setContentHuggingPriority(.defaultLow, for: .vertical)
         fbView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        // Cmd+V 拦截 — 用户在 NSPasteboard 复制了文件 (Finder 等) 切到 VM 按 Cmd+V
+        // → 走 SPICE vdagent file_xfer 流到 guest ~/Downloads (docs/v3/HOST_FILE_PASTE.md).
+        // 主窗口嵌入 view 跟 detached 窗口 view 各持一份 closure, 行为一致.
+        let vmId = id
+        fbView.onFilePaste = { [weak self] urls in
+            guard let self else { return }
+            guard let it = self.model.list.first(where: { $0.id == vmId }) else { return }
+            self.model.pasteFilesToVM(item: it, urls: urls)
+        }
 
         addSubview(topBar)
         addSubview(topDivider)
