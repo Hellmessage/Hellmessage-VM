@@ -182,6 +182,11 @@ struct Button: View {
                     .stroke(borderColor, lineWidth: borderWidth)
             )
             .overlay(focusRing)
+            // disabled 用 opacity 0.4 整体降透 (保留 variant 身份感: primary 青字降透
+            // 后仍能看出是青色 primary, 不像 bgDisabled 灰底+灰字完全失去 primary
+            // 视觉). 按钮一般不嵌在 sectionCard 同色容器内, 不存在 Toggle 那种"压平"
+            // 问题; loading 用 opacity 0.65 居中, 比 disabled 浅一档暗示"忙不可点".
+            .opacity(buttonOpacity)
             .animation(HVMTheme.motion.easeOutFast, value: hovered)
             .animation(HVMTheme.motion.easeOut, value: isFocused)
             .animation(HVMTheme.motion.easeOut, value: isLoading)
@@ -220,8 +225,15 @@ struct Button: View {
 
     // MARK: - 外观计算 (variant + state 矩阵, 全 token)
 
+    /// disabled 走 opacity 0.4 整体降透 (保留 variant 身份感), loading 走 0.65 (比
+    /// disabled 更可读, 暗示 "忙" 不是 "禁"). active 1.0.
+    private var buttonOpacity: Double {
+        if isDisabled { return 0.4 }
+        if isLoading  { return 0.65 }
+        return 1.0
+    }
+
     private var textColor: Color {
-        if isDisabled { return HVMTheme.color.textTertiary }
         switch variant {
         case .primary:
             return HVMTheme.color.textOnAccent
@@ -235,14 +247,6 @@ struct Button: View {
     }
 
     private var bgColor: Color {
-        if isDisabled {
-            switch variant {
-            case .primary:
-                return HVMTheme.color.bgDisabled
-            case .secondary, .ghost, .icon, .destructive:
-                return HVMTheme.color.transparent
-            }
-        }
         switch variant {
         case .primary:
             return hovered ? HVMTheme.color.accentHover : HVMTheme.color.accent
@@ -254,14 +258,6 @@ struct Button: View {
     }
 
     private var borderColor: Color {
-        if isDisabled {
-            switch variant {
-            case .primary, .ghost, .icon:
-                return HVMTheme.color.transparent
-            case .secondary, .destructive:
-                return HVMTheme.color.borderDefault
-            }
-        }
         switch variant {
         case .primary, .ghost, .icon:
             return HVMTheme.color.transparent

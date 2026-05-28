@@ -1,7 +1,8 @@
 // HVMUISelect.swift — 新 GUI 下拉选择 (PR-C4)
 //
-// 自家绘制 (不用 NSPopUpButton / NSMenu), trigger 复用 HVMUI.FieldChrome.
-// 下拉用 SwiftUI .popover 容器但内容完全自绘, 选项列表 / 搜索 / 键盘导航全自家管.
+// 自家绘制 (不用 NSPopUpButton / NSMenu / SwiftUI .popover), trigger 复用
+// HVMUI.FieldChrome, 下拉用 ZStack overlay 浮窗 — 无系统 vibrancy / arrow /
+// 阴影侵入, 完全自家绘 (bgOverlay + 边框 + 圆角 lg + 自家 shadow).
 //
 // 用法:
 //   HVMUI.Select("引擎", selection: $engine, options: [
@@ -169,63 +170,85 @@ struct Select<Value: Hashable>: View {
         .animation(HVMTheme.motion.easeOut, value: errorMessage != nil)
     }
 
+    /// 切换 popover 打开 / 关闭. trigger button 跟 trigger probe (<probeID>.trigger)
+    /// 都调它. hvm-dbg gui click <probeID>.trigger 自动化测下拉展开.
+    private func toggleOpen() {
+        if isDisabled || isLoading { return }
+        if isOpen { isOpen = false } else { openPopover() }
+    }
+
     private var trigger: some View {
-        SwiftUI.Button {
-            if !isDisabled && !isLoading {
-                openPopover()
+        ZStack(alignment: .topLeading) {
+            // 真正的按钮 trigger
+            SwiftUI.Button {
+                toggleOpen()
+            } label: {
+                HStack(spacing: HVMTheme.space.sm) {
+                    if let icon = icon ?? currentOption?.icon {
+                        Image(systemName: icon)
+                            .font(size.font)
+                            .foregroundStyle(HVMTheme.color.textSecondary)
+                    }
+
+                    SwiftUI.Text(currentOption?.label ?? placeholder)
+                        .font(size.font)
+                        .foregroundStyle(currentOption == nil
+                                         ? HVMTheme.color.textTertiary
+                                         : HVMTheme.color.textPrimary)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 0)
+
+                    if isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                            .scaleEffect(size.spinnerScale)
+                            .progressViewStyle(.circular)
+                    } else {
+                        Image(systemName: isOpen ? "chevron.up" : "chevron.down")
+                            .font(size.font)
+                            .foregroundStyle(HVMTheme.color.textSecondary)
+                    }
+                }
             }
-        } label: {
-            HStack(spacing: HVMTheme.space.sm) {
-                if let icon = icon ?? currentOption?.icon {
-                    Image(systemName: icon)
-                        .font(size.font)
-                        .foregroundStyle(HVMTheme.color.textSecondary)
-                }
+            .buttonStyle(.plain)
+            .focused($triggerFocused)
+            .disabled(isDisabled)
+            .modifier(FieldChrome(
+                size: size,
+                isFocused: triggerFocused || isOpen,
+                isHovered: isHovered && !isDisabled,
+                isError: errorMessage != nil,
+                isDisabled: isDisabled
+            ))
+            .onHover { isHovered = $0 }
+            // implicit trigger probe — <probeID>.trigger 接 .button(toggleOpen).
+            // 业务侧不用显式传, 自动派生; hvm-dbg gui click 自动化展开下拉用.
+            .modifier(ProbeSelectTriggerModifier(
+                probeID: probeID.map { "\($0).trigger" },
+                label: (label ?? placeholder) + " (打开/关闭下拉)",
+                toggle: { toggleOpen() },
+                isDisabled: isDisabled
+            ))
 
-                SwiftUI.Text(currentOption?.label ?? placeholder)
-                    .font(size.font)
-                    .foregroundStyle(currentOption == nil
-                                     ? HVMTheme.color.textTertiary
-                                     : HVMTheme.color.textPrimary)
-                    .lineLimit(1)
-
-                Spacer(minLength: 0)
-
-                if isLoading {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(size.spinnerScale)
-                        .progressViewStyle(.circular)
-                } else {
-                    Image(systemName: isOpen ? "chevron.up" : "chevron.down")
-                        .font(size.font)
-                        .foregroundStyle(HVMTheme.color.textSecondary)
-                }
+            // 自家 overlay 浮窗 — 完全自绘, 无系统 vibrancy / arrow / 阴影
+            if isOpen {
+                PopoverContent(
+                    options: filteredOptions,
+                    searchable: searchable,
+                    searchText: $searchText,
+                    highlightedIndex: $highlightedIndex,
+                    currentValue: selection,
+                    onSelect: selectOption,
+                    onClose: { isOpen = false }
+                )
+                .frame(minWidth: 240)
+                .offset(y: size.height + HVMTheme.space.xs)
+                .zIndex(1000)
+                .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
             }
         }
-        .buttonStyle(.plain)
-        .focused($triggerFocused)
-        .disabled(isDisabled)
-        .modifier(FieldChrome(
-            size: size,
-            isFocused: triggerFocused || isOpen,
-            isHovered: isHovered && !isDisabled,
-            isError: errorMessage != nil,
-            isDisabled: isDisabled
-        ))
-        .onHover { isHovered = $0 }
-        .popover(isPresented: $isOpen, arrowEdge: .bottom) {
-            PopoverContent(
-                options: filteredOptions,
-                searchable: searchable,
-                searchText: $searchText,
-                highlightedIndex: $highlightedIndex,
-                currentValue: selection,
-                onSelect: selectOption,
-                onClose: { isOpen = false }
-            )
-            .frame(minWidth: 240, maxWidth: 360)
-        }
+        .animation(HVMTheme.motion.easeOut, value: isOpen)
     }
 
     private func openPopover() {
@@ -289,8 +312,11 @@ private struct PopoverContent<Value: Hashable>: View {
         .clipShape(RoundedRectangle(cornerRadius: HVMTheme.radius.lg))
         .overlay(
             RoundedRectangle(cornerRadius: HVMTheme.radius.lg)
-                .stroke(HVMTheme.color.borderDefault, lineWidth: HVMTheme.border.hairline)
+                .stroke(HVMTheme.color.borderEmphasis, lineWidth: HVMTheme.border.hairline)
         )
+        // 自家 layered shadow — 让 popover 视觉"飘起来", 不依赖系统 NSPopover
+        .shadow(color: .black.opacity(0.45), radius: 16, x: 0, y: 8)
+        .shadow(color: .black.opacity(0.25), radius: 4,  x: 0, y: 2)
         .onAppear {
             if searchable { searchFocused = true }
         }
@@ -385,7 +411,28 @@ private struct PopoverContent<Value: Hashable>: View {
 
 }  // extension HVMUI 结束
 
-/// Probe 集成 — 用 .textField role (ProbeAction 没 generic .select).
+/// Trigger 按钮的 implicit probe — <probeID>.trigger 接 .button(toggleOpen).
+/// 让 hvm-dbg gui click <probeID>.trigger 能展开/收起下拉, 自动化测下拉内容用.
+private struct ProbeSelectTriggerModifier: ViewModifier {
+    let probeID: String?
+    let label: String
+    let toggle: @MainActor @Sendable () -> Void
+    let isDisabled: Bool
+
+    func body(content: Content) -> some View {
+        if let probeID, !isDisabled {
+            content.hvmProbe(
+                id: probeID,
+                label: label,
+                action: .button(toggle)
+            )
+        } else {
+            content
+        }
+    }
+}
+
+/// Select 主 probe — 用 .textField role (ProbeAction 没 generic .select).
 /// 必须 @Binding selection + options 数组才能在 getter / setter closure 里动态算
 /// 最新值; 如果传 snapshot 字符串, ProbeRegistry.register 之后值不再更新.
 private struct ProbeSelectModifier<Value: Hashable>: ViewModifier {

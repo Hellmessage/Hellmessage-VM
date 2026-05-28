@@ -81,8 +81,8 @@ private struct NewGUIRootView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: HVMTheme.space.xl) {
                     headerBlock
-                    buttonsBlock
                     selectsBlock
+                    buttonsBlock
                     togglesBlock
                     fieldsBlock
                     colorPaletteBlock
@@ -628,8 +628,13 @@ private struct NewGUIRootView: View {
         }
         .padding(HVMTheme.space.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(HVMTheme.color.bgRaised)
-        .clipShape(RoundedRectangle(cornerRadius: HVMTheme.radius.lg))
+        // bg + border 用 RoundedRectangle 自家绘 (不走 .clipShape) — 让 Select 等
+        // 内部组件的 popover overlay 能浮出卡片边界, 不被 clipShape 裁掉.
+        // 视觉上 bgRaised fill + borderDefault stroke 跟原 .clipShape 一致.
+        .background(
+            RoundedRectangle(cornerRadius: HVMTheme.radius.lg)
+                .fill(HVMTheme.color.bgRaised)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: HVMTheme.radius.lg)
                 .stroke(HVMTheme.color.borderDefault,
