@@ -1,6 +1,6 @@
 # 新 GUI 重构 — Linear 风 + 自绘 Dialog + 全局 Theme
 
-> 状态: **实现中** 2026-05-28 (D1 已决, PR-T1 + T2 进行中)
+> 状态: **实现中** 2026-05-28 (D1 已决; PR-T1 / T2 / C1 / C2 已合; 组件设计规范 R1-R9 落入"组件设计规范"节作为后续 PR 验收基线)
 >
 > 入口已就绪 (commit b9e969d): `app/Sources/HVM/GUI/NewGUIApp.swift` + Makefile `GUI ?= new` 透传 `-Xswiftc -DNEW_GUI`. 老 GUI (`app/Sources/HVM/UI/**`) 一行不动作为回退. 本稿覆盖**基础设施层**: Theme token / Components / Dialog 框架. **业务页 (VM 列表 / 详情页 / 创建向导等) 不在本稿范围**, 后续每业务页单独立 `docs/v3/NEW_GUI_<XXX>.md` 子提案.
 
@@ -346,6 +346,104 @@ dialog.wizard.step.<index>      (步骤指示器点击, 仅前进 step 可点)
 - 老 `ErrorDialog` / `EncryptionPasswordDialog` / `CreateVMDialog` 等留在 `app/Sources/HVM/UI/Dialogs/`, 仅 `GUI=old` 路径用
 - 新 GUI 从零写, 不 import 老的; 老 dialog 类型不引为参考 (设计稿留底)
 - 新老共存期 (本稿 PR 全部合入后到业务页迁移完): 用户主力跑 `GUI=new`, 用 `GUI=old` 跑日常 VM 任务. 互不污染
+
+## 组件设计规范 **必须遵守** (2026-05-28 增补)
+
+每个组件 (Button / TextField / SecureField / Toggle / Select / 等) 合入前必须满足以下硬约束. 任一项不满足, PR 不予合入. 同时也是 PR-C* / PR-D* 各 PR 的验收 baseline.
+
+### R1. namespace 与命名
+
+- **所有组件嵌进 `enum HVMUI` namespace**, 不许顶层 `HVMXxx` struct/class (会跟老 GUI `HVMTextField` / `HVMToggle` / `HVMModal` / `HVMCard` / `HVMPopupPanel` 撞名)
+- 类型名去 `HVM` 前缀: `HVMUI.Button` / `HVMUI.TextField` / `HVMUI.SecureField` / `HVMUI.Select` / 等
+- 文件名走 `HVMUI<Type>.swift` 模式 (`HVMUIButton.swift` / `HVMUITextField.swift`) — SwiftPM 输出 .o 用文件名, 不能跟老 GUI `HVMTextField.swift` 重名
+- 共享辅助 (`FieldSize` / `FieldChrome` / `ProbeXxxModifier`) 同 namespace 嵌入: `HVMUI.FieldSize` / `HVMUI.FieldChrome`
+- fileprivate 局部 helper (例 `HVMButtonPressStyle`) 不嵌 namespace, 保持文件级私有
+
+### R2. 状态完备性 (所有数据 / 输入类组件)
+
+| 状态 | 必须支持 | API 形态 |
+|---|---|---|
+| empty / filled | ✅ | binding 内容驱动 |
+| hover | ✅ | `@State isHovered`, `.onHover { isHovered = $0 }` |
+| focus | ✅ | `@FocusState isFocused` + focus ring 渐现 (`HVMTheme.motion.easeOut`) |
+| pressed | ✅ (Button) | `ButtonStyle.Configuration.isPressed` |
+| disabled | ✅ | `disabled: Bool` param, opacity 0.4 + `.allowsHitTesting(false)` + 跳过 probe 注册 |
+| loading | ✅ (输入字段 / 异步按钮) | `isLoading: Bool` param, 右侧 ProgressView |
+| error | ✅ (输入 / select) | `errorMessage: String?` param, 非 nil 时边框 `borderError` + 下方红字 |
+
+**禁止半残实现** (例: 只支持 empty/filled 不接 focus). 任一字段类组件少实现一种状态 → PR 退回.
+
+### R3. size 响应式
+
+数据 / 输入类组件必须暴露 `size: HVMUI.FieldSize` 参数, 三档 `.sm / .md / .lg`, 高度 28 / 36 / 44, 字号 / padding / spinner 同步缩放. 业务侧按容器宽度选档:
+- sidebar 内联 → `.sm`
+- 表单 / dialog → `.md` (default)
+- 单字段 hero → `.lg`
+
+按钮统一 `.md` 高度 (32) — 按钮 size 在 PR-C1 重做时再加 (Decision 内)
+
+### R4. 全 token 化 (零硬编码)
+
+PR-L1 lint script 会扫整个 `app/Sources/HVM/GUI/` 拦 (Components 内对应自家文件除外):
+
+| 禁止 | 替换 |
+|---|---|
+| `Color(red:..., green:..., blue:...)` / `Color(hex:...)` | `HVMTheme.color.<name>` |
+| `Color.clear` / `Color.black` 等系统色直写 | `HVMTheme.color.transparent` (已加) / 等 |
+| `Font.system(size:...)` | `HVMTheme.font.<name>` |
+| `.padding(8)` / `.padding(.horizontal, 12)` 等硬数字 | `HVMTheme.space.<name>` |
+| `.cornerRadius(8)` 硬数字 | `HVMTheme.radius.<name>` |
+| `.border(width: 1, ...)` 硬数字 | `HVMTheme.border.<name>` + `HVMTheme.color.borderXxx` |
+| `.animation(.easeOut(duration: 0.2), ...)` 硬数字 | `HVMTheme.motion.<name>` |
+
+### R5. 键盘 + a11y (高可用)
+
+- **键盘**: 所有交互组件接 SwiftUI `@FocusState` (Tab 链自动); Enter 用 `.onSubmit { onSubmit?() }` 把语义透给上层 form/dialog; Esc 由 DialogHost 路由, 组件不管
+- **VoiceOver**: 
+  - `.accessibilityLabel(label ?? placeholder)` — 朗读标签
+  - `.accessibilityHint(errorMessage ?? placeholder)` — 状态提示
+  - `.accessibilityValue` (toggle / select) — 当前选中态
+  - 自定义 hint icon button (例 SecureField 的 eye toggle) 独立 `.accessibilityLabel`
+- **focus ring 视觉**: focus 时 ring 0 → 2px 渐现 (200ms `HVMTheme.motion.easeOut`), 用 `HVMTheme.color.borderFocus` (青 60%); error 态接管, focus ring 让位
+
+### R6. probe 接入 (HDP-GUI 自动化测试)
+
+- 所有交互组件支持可选 `probeID: String?` 参数. 非 nil + 未 `isDisabled` 时通过 fileprivate `ProbeXxxModifier` 挂 `.hvmProbe(id:label:action:.<role>)`
+- ProbeAction role 对应:
+  - Button → `.button(action)`
+  - TextField / SecureField → `.textField(getter, setter)` (binding 透传)
+  - Toggle / Checkbox → `.toggle(getter, setter)`
+  - Select → 复用 `.button(action)` + 后续可扩 `.select`
+- 命名规范 `<scene>.<role>.<element>` (例 `dialog.encrypt.field.password`, `toolbar.button.create`); Showcase 用 `showcase.<role>.<element>`
+- 业务侧 closure / binding 必须 `@MainActor @Sendable` (跟 ProbeAction 签名对齐, init 类型也要标)
+
+### R7. 模块化 / 可组合
+
+- **一组件一文件**, 文件 ≤ 350 行. 超过分子组件
+- **共享 chrome / behavior 抽 ViewModifier** (例 `HVMUI.FieldChrome` 给 TextField / SecureField / Select 复用); modifier 嵌 namespace
+- **不嵌 ObservableObject / ViewModel** — 组件保持 stateless + binding 驱动; loading / error 等异步态由调用方算后传 props
+- **不接 EnvironmentObject** — 组件不依赖全局 store, 只依赖参数 + Theme token
+- API 风格 modifier chain over 多 init 参数: 短期可接受参数 ≤ 11 个 init; 超过强制改 builder 模式 (`.icon(...).suffix(...).loading()`)
+
+### R8. 视觉精致 (Linear+ 加成)
+
+PR-C2 起所有组件必须接以下视觉细节, 否则视觉评 "扁平死"
+
+- **focus ring 渐现**: 0 → 2px (200ms easeOut), `borderFocus` 青 60%
+- **hover layer 渐亮**: 透明度 0 → 0.04 (120ms easeOutFast), `bgHover`
+- **状态切换过渡**: bg / border 全部带 `.animation(HVMTheme.motion.easeOut, value: ...)` 不允许跳变
+- **Section card** (PR-C5): layered shadow (inner highlight + drop shadow 1% 黑) 给"飘起来"感, 详见 PR-C5 验收
+- **micro-animation** (PR-C1 重做时加): button press scale 0.97 spring (已落) + icon swap morph (PR-C6 HVMIcon 接)
+
+### R9. 演示页同步 (Showcase 必填)
+
+每个组件 PR 合入时必须给 `NewGUIRootView` 加 Showcase 节, 至少演示:
+- 全部 variant (Button) / 全部 size (字段类)
+- 所有状态 (empty / focused / error / loading / disabled)
+- icon + suffix 组合
+- probe 反馈 (底部 mono 行显示 hvm-dbg gui 命令 + 当前 binding 值)
+
+Showcase 是组件库的 living doc, 后续 PR-L1 lint 时还要做 visual regression baseline (设计稿 PR-C8 已记).
 
 ## 风险与待验证
 

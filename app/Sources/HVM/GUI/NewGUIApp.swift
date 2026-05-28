@@ -81,6 +81,7 @@ private struct NewGUIRootView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: HVMTheme.space.xl) {
                     headerBlock
+                    fieldsBlock
                     buttonsBlock
                     colorPaletteBlock
                     typographyBlock
@@ -261,34 +262,122 @@ private struct NewGUIRootView: View {
         }
     }
 
+    // PR-C2 — HVMTextField + HVMSecureField (size + state 完备 + a11y + probe)
+    @State private var vmName: String = ""
+    @State private var cpuCount: String = "4"
+    @State private var ipsw: String = ""
+    @State private var password: String = ""
+    @State private var simulateLoading: Bool = false
+
+    private var fieldsBlock: some View {
+        sectionCard(title: "TextField / SecureField (PR-C2)") {
+            VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
+                // 三档 size
+                fieldRow("Sizes (.sm / .md / .lg)") {
+                    HVMUI.TextField("名称", text: $vmName, placeholder: "我的 VM",
+                                 size: .sm, probeID: "showcase.field.name.sm")
+                        .frame(maxWidth: 200)
+                    HVMUI.TextField("名称", text: $vmName, placeholder: "我的 VM",
+                                 size: .md, probeID: "showcase.field.name.md")
+                        .frame(maxWidth: 240)
+                    HVMUI.TextField("名称", text: $vmName, placeholder: "我的 VM",
+                                 size: .lg, probeID: "showcase.field.name.lg")
+                        .frame(maxWidth: 280)
+                }
+
+                // icon + suffix
+                fieldRow("Icon + Suffix") {
+                    HVMUI.TextField("CPU", text: $cpuCount, placeholder: "4",
+                                 icon: "cpu", suffix: "核",
+                                 probeID: "showcase.field.cpu")
+                        .frame(maxWidth: 200)
+                    HVMUI.TextField("IPSW", text: $ipsw, placeholder: "选择固件路径...",
+                                 icon: "doc.badge.arrow.up",
+                                 probeID: "showcase.field.ipsw")
+                        .frame(maxWidth: 320)
+                }
+
+                // 错误 + loading + disabled
+                fieldRow("States") {
+                    HVMUI.TextField("Error", text: $vmName, placeholder: "至少 1 字符",
+                                 errorMessage: vmName.isEmpty ? "VM 名称不能为空" : nil,
+                                 probeID: "showcase.field.error")
+                        .frame(maxWidth: 240)
+                    HVMUI.TextField("Loading", text: $cpuCount, placeholder: "validating...",
+                                 isLoading: true,
+                                 probeID: "showcase.field.loading")
+                        .frame(maxWidth: 200)
+                    HVMUI.TextField("Disabled", text: .constant("read-only"),
+                                 placeholder: "", disabled: true)
+                        .frame(maxWidth: 200)
+                }
+
+                // SecureField 带 toggle
+                fieldRow("SecureField") {
+                    HVMUI.SecureField("密码", text: $password,
+                                   placeholder: "至少 8 字符",
+                                   showToggle: true,
+                                   errorMessage: password.count > 0 && password.count < 8
+                                       ? "密码至少 8 字符" : nil,
+                                   probeID: "showcase.field.password")
+                        .frame(maxWidth: 320)
+                }
+
+                // probe 反馈
+                HStack(spacing: HVMTheme.space.sm) {
+                    Text("hvm-dbg gui type --identifier showcase.field.name.md --text foo")
+                        .font(HVMTheme.font.monoSm)
+                        .foregroundStyle(HVMTheme.color.textTertiary)
+                    Text("当前 name: \(vmName.isEmpty ? "—" : vmName)")
+                        .font(HVMTheme.font.xs)
+                        .foregroundStyle(HVMTheme.color.accent)
+                }
+            }
+        }
+    }
+
+    private func fieldRow<Content: View>(
+        _ label: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: HVMTheme.space.sm) {
+            Text(label)
+                .font(HVMTheme.font.sm)
+                .foregroundStyle(HVMTheme.color.textSecondary)
+            HStack(alignment: .top, spacing: HVMTheme.space.md) {
+                content()
+            }
+        }
+    }
+
     // PR-C1 — 5 variant + hover/press/disabled + icon + probe
     private var buttonsBlock: some View {
         sectionCard(title: "Buttons (PR-C1)") {
             VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
                 buttonRow("Variants") {
-                    HVMButton("Primary", variant: .primary,
+                    HVMUI.Button("Primary", variant: .primary,
                               probeID: "showcase.button.primary") { probeClickLog = "primary" }
-                    HVMButton("Secondary", variant: .secondary,
+                    HVMUI.Button("Secondary", variant: .secondary,
                               probeID: "showcase.button.secondary") { probeClickLog = "secondary" }
-                    HVMButton("Ghost", variant: .ghost,
+                    HVMUI.Button("Ghost", variant: .ghost,
                               probeID: "showcase.button.ghost") { probeClickLog = "ghost" }
-                    HVMButton("Destructive", variant: .destructive,
+                    HVMUI.Button("Destructive", variant: .destructive,
                               probeID: "showcase.button.destructive") { probeClickLog = "destructive" }
-                    HVMButton(icon: "gear", variant: .icon,
+                    HVMUI.Button(icon: "gear", variant: .icon,
                               probeID: "showcase.button.icon") { probeClickLog = "icon" }
                 }
 
                 buttonRow("With icon") {
-                    HVMButton("Create VM", variant: .primary, icon: "plus") { }
-                    HVMButton("Delete", variant: .destructive, icon: "trash") { }
-                    HVMButton("Settings", variant: .ghost, icon: "gearshape") { }
+                    HVMUI.Button("Create VM", variant: .primary, icon: "plus") { }
+                    HVMUI.Button("Delete", variant: .destructive, icon: "trash") { }
+                    HVMUI.Button("Settings", variant: .ghost, icon: "gearshape") { }
                 }
 
                 buttonRow("Disabled") {
-                    HVMButton("Primary", variant: .primary, disabled: true) { }
-                    HVMButton("Secondary", variant: .secondary, disabled: true) { }
-                    HVMButton("Destructive", variant: .destructive, disabled: true) { }
-                    HVMButton(icon: "gear", variant: .icon, disabled: true) { }
+                    HVMUI.Button("Primary", variant: .primary, disabled: true) { }
+                    HVMUI.Button("Secondary", variant: .secondary, disabled: true) { }
+                    HVMUI.Button("Destructive", variant: .destructive, disabled: true) { }
+                    HVMUI.Button(icon: "gear", variant: .icon, disabled: true) { }
                 }
 
                 HStack(spacing: HVMTheme.space.sm) {

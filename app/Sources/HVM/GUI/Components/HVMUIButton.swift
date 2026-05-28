@@ -1,4 +1,4 @@
-// HVMButton.swift — 新 GUI 按钮组件 (PR-C1)
+// HVMUIButton.swift — 新 GUI 按钮组件 (PR-C1)
 //
 // 5 variant (互斥):
 //   .primary       — accent 青底, 主操作 (Dialog 主按钮 / 保存 / 创建)
@@ -8,9 +8,9 @@
 //   .icon          — 纯图标 32×32, ghost 同款外观但更紧凑 (Dialog 关闭 X / titlebar)
 //
 // 用法:
-//   HVMButton("保存", variant: .primary, probeID: "dialog.X.button.save") { save() }
-//   HVMButton("删除", variant: .destructive, icon: "trash.fill") { delete() }
-//   HVMButton(icon: "gear", variant: .ghost, probeID: "toolbar.button.settings") { ... }
+//   HVMUI.Button("保存", variant: .primary, probeID: "dialog.X.button.save") { save() }
+//   HVMUI.Button("删除", variant: .destructive, icon: "trash.fill") { delete() }
+//   HVMUI.Button(icon: "gear", variant: .ghost, probeID: "toolbar.button.settings") { ... }
 //
 // 状态:
 //   - hover  : bg 加深 120ms ease-out (HVMTheme.motion.easeOutFast)
@@ -26,7 +26,9 @@
 import SwiftUI
 import HVMGuiProbe
 
-struct HVMButton: View {
+extension HVMUI {
+
+struct Button: View {
     enum Variant {
         case primary, secondary, ghost, destructive, icon
     }
@@ -77,7 +79,7 @@ struct HVMButton: View {
     }
 
     var body: some View {
-        let button = Button(action: action) {
+        let button = SwiftUI.Button(action: action) {
             HStack(spacing: HVMTheme.space.sm) {
                 if let icon {
                     Image(systemName: icon)
@@ -162,6 +164,8 @@ struct HVMButton: View {
         }
     }
 }
+
+}  // extension HVMUI 结束
 
 /// 按钮 press 反馈: scale 0.97 spring. 不影响其它外观, 仅做交互动效.
 /// 不用 .scaleEffect on hover state — hover 走色变, press 走形变, 两通道独立.
