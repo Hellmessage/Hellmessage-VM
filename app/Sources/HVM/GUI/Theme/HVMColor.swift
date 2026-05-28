@@ -24,7 +24,7 @@ extension HVMTheme {
         static let textPrimary   = Color(hex: 0xF7F8F8)
         static let textSecondary = Color(hex: 0x8A8F98)
         static let textTertiary  = Color(hex: 0x62666D)
-        static let textOnAccent  = Color(hex: 0x0A0A0A)
+        static let textOnAccent  = Color(hex: 0xFFFFFF)
 
         // 边框
         static let borderDefault  = Color(hex: 0xFFFFFF, alpha: 0.08)
