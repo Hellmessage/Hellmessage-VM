@@ -1152,14 +1152,33 @@ public final class AppModel {
                 }.value
             } catch {
                 let msg = "IPC 调用失败: \(error)"
+                Self.activateMainWindow()
                 self?.sharedErrors?.present(ErrorDialogModel(
                     title: "粘贴失败", message: msg, details: nil, hint: nil
                 ))
-                // VM 全屏 / detached 时主窗口 ErrorDialog 被盖住, 系统通知兜底让用户看到
+                // 系统通知兜底 — VM 占满主窗口时即便 dialog 在 z-order 顶层, 用户视觉中心
+                // 仍在 framebuffer 上, 通知中心 toast 更显眼
                 HostFilePasteNotifier.notifyFailure(displayName: displayName, body: msg)
                 return
             }
             self?.handlePasteFilesResponse(resp, displayName: displayName)
+        }
+    }
+
+    /// 把 HVM 主窗口拉到前台并激活. 用于错误对话框出现前确保用户能看到主窗口 —
+    /// 如果用户当前焦点在别的 app, dialog 默默出现没用; 如果焦点在 HVM 但走神在 VM
+    /// 窗口里, 仍需 dialog 浮在 framebuffer 上.
+    private static func activateMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        // 顺手提升 HVM 主窗口 (key window) 到最上层; 已经在前台的就 noop
+        if let key = NSApp.keyWindow ?? NSApp.mainWindow {
+            key.orderFrontRegardless()
+        } else {
+            // 没 key/main window (例如全部 miniaturize) → 翻一遍 windows 拉最近一个非 detached 的
+            for w in NSApp.windows where w.isVisible && !(w.title.isEmpty) {
+                w.makeKeyAndOrderFront(nil)
+                break
+            }
         }
     }
 
@@ -1169,6 +1188,7 @@ public final class AppModel {
     private func handlePasteFilesResponse(_ resp: IPCResponse, displayName: String) {
         guard resp.ok else {
             let msg = resp.error?.message ?? "未知错误"
+            Self.activateMainWindow()
             sharedErrors?.present(ErrorDialogModel(
                 title: "粘贴失败", message: msg,
                 details: resp.error?.code, hint: nil
@@ -1180,6 +1200,7 @@ public final class AppModel {
               let data = json.data(using: .utf8),
               let payload = try? JSONDecoder().decode(IPCClipboardPasteFilesPayload.self, from: data) else {
             let msg = "无法解析 clipboard.paste-files 响应"
+            Self.activateMainWindow()
             sharedErrors?.present(ErrorDialogModel(
                 title: "粘贴失败", message: msg, details: nil, hint: nil
             ))
@@ -1193,6 +1214,7 @@ public final class AppModel {
         // 有跳过 / 失败 → 弹 ErrorDialog 列原因, 同时发系统通知兜底 (VM 全屏 / detached 时主窗口
         // ErrorDialog 被 framebuffer 盖住, 用户看不到 — 系统通知浮在所有窗口之上).
         if !payload.skipped.isEmpty || !payload.failed.isEmpty {
+            Self.activateMainWindow()
             var lines: [String] = []
             for s in payload.skipped {
                 let name = (s.path as NSString).lastPathComponent

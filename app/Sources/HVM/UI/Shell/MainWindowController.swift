@@ -114,6 +114,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let overlay = PassthroughHostingView(rootView: DialogOverlay(model: model, errors: errors, confirms: confirms))
         overlay.translatesAutoresizingMaskIntoConstraints = false
         overlay.sizingOptions = .minSize
+        // FramebufferHostView (MTKView) 的 CAMetalLayer 跟普通 CALayer 兄弟做合成时
+        // z-order 不稳: 实测有时帧画会 "穿透" 兄弟层渲染到 overlay 之上, 用户看到 dialog
+        // 被 VM 桌面覆盖. 显式拉高 overlay.layer.zPosition 强制它永远在最上层 (siblings
+        // 顺序虽已让 overlay 最后 add, 但 Metal 异步呈现路径不严格走 sublayer 顺序合成).
+        overlay.wantsLayer = true
+        overlay.layer?.zPosition = 1000
         // 实时检测, 避开 withObservationTracking 异步 onChange 的 timing race
         overlay.isAnyDialogActive = { [weak model, weak errors, weak confirms] in
             guard let model, let errors, let confirms else { return false }
