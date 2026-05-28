@@ -43,6 +43,18 @@ import HVMGuiProbe
 
 extension HVMUI {
 
+/// 全局 select 协调器 — 保证一次最多一个下拉框打开. 每个 Select 持 UUID,
+/// openPopover() 时调 coordinator.openSelectID = self.id, 其他 Select 监听
+/// .onChange 发现不是自己的 ID 就强制关闭 isOpen.
+/// @Observable singleton 让 SwiftUI 自动追踪 mutation 触发 re-render.
+@MainActor
+@Observable
+final class SelectCoordinator {
+    static let shared = SelectCoordinator()
+    var openSelectID: UUID? = nil
+    private init() {}
+}
+
 /// Select 选项 — generic value 类型 (常用 enum / String / Int).
 struct SelectOption<Value: Hashable>: Identifiable {
     let id = UUID()
@@ -129,6 +141,12 @@ struct Select<Value: Hashable>: View {
     @State private var searchText = ""
     @State private var highlightedIndex: Int = 0
     @FocusState private var triggerFocused: Bool
+    /// 每个 Select 唯一 ID, 给 SelectCoordinator 做"当前打开的 select"识别用.
+    /// @State 让它在 view 生命周期内稳定 (普通 let 在 SwiftUI struct 重建时也稳定但
+    /// 用 @State 显示意图: "这是 view 内部状态而不是 props").
+    @State private var instanceID = UUID()
+    /// 全局协调器 ref (singleton, MainActor isolated).
+    private let coordinator = SelectCoordinator.shared
 
     private var currentOption: SelectOption<Value>? {
         guard let selection else { return nil }
@@ -172,6 +190,12 @@ struct Select<Value: Hashable>: View {
             }
         }
         .animation(HVMTheme.motion.easeOut, value: errorMessage != nil)
+        // 监听协调器 — 其他 Select 打开时把自己关掉, 保证一次最多一个 popover
+        .onChange(of: coordinator.openSelectID) { _, newID in
+            if newID != instanceID && isOpen {
+                isOpen = false
+            }
+        }
     }
 
     /// 切换 popover 打开 / 关闭. trigger button 跟 trigger probe (<probeID>.trigger)
@@ -269,6 +293,8 @@ struct Select<Value: Hashable>: View {
         searchText = ""
         highlightedIndex = options.firstIndex(where: { $0.value == selection }) ?? 0
         isOpen = true
+        // 告诉协调器 "我打开了" — 其他 Select 监听到会关掉自己
+        coordinator.openSelectID = instanceID
     }
 
     private func selectOption(_ option: SelectOption<Value>) {
