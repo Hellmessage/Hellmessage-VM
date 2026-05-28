@@ -83,7 +83,7 @@ public final class VdagentClient: @unchecked Sendable {
     private static let MIME_UTF8_TEXT: UInt32   = 1
     private static let MIME_IMAGE_PNG: UInt32   = 2
     // 未实现: MIME_IMAGE_BMP=3, MIME_IMAGE_TIFF=4, MIME_IMAGE_JPG=5
-    // 未实现: MIME_FILE_LIST=6 (UTM 风格 paste-where-you-paste 文件粘贴, 推后单独提案)
+    static let MIME_FILE_LIST: UInt32           = 6   // UTM 风格 paste-where-you-paste
 
     // MARK: - 状态
 
@@ -250,9 +250,30 @@ public final class VdagentClient: @unchecked Sendable {
     }
 
     /// 仅 queue 内访问: host 这边正在持有 (尚未发送 / 等 guest REQUEST) 的内容.
-    /// text + image 双轨, GRAB 同时广告两边 mime, guest 自己挑 REQUEST 哪个.
+    /// text + image + file_list 三轨, GRAB 同时广告所有 mime, guest 自己挑 REQUEST 哪个.
     private var pendingHostText: String?
-    private var pendingHostImage: Data?    // PNG bytes
+    private var pendingHostImage: Data?      // PNG bytes
+    /// pendingHostFileList: 已上传到 guest 的文件路径列表 (guest 视角绝对路径). 例:
+    /// ["C:\\Users\\Public\\hvm-clipboard\\foo.png"]. 真正 CLIPBOARD 应答时打成 text/uri-list
+    /// (file:/// CRLF 分隔) 发给 guest, guest vdagent 把 CF_HDROP 推到 Windows clipboard.
+    private var pendingHostFileList: [String]?
+
+    /// (实验/探针 / UTM-style 文件剪贴板) 设置 guest 端文件列表 (guest 视角的绝对路径).
+    /// 调用方上传文件到 guest 之后调本方法, 触发 GRAB 广告 mime=6.
+    /// 传空数组等同 release.
+    public func sendClipboardFileList(_ guestPaths: [String]) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.pendingHostFileList = guestPaths.isEmpty ? nil : guestPaths
+            self.ensureConnectedLocked()
+            guard self.sockFD >= 0, self.capsNegotiated else { return }
+            if self.pendingHostText == nil && self.pendingHostImage == nil && self.pendingHostFileList == nil {
+                self.sendReleaseLocked()
+            } else {
+                self.sendGrabLocked()
+            }
+        }
+    }
 
     // MARK: - FILE_XFER 公共 API
 
@@ -383,6 +404,7 @@ public final class VdagentClient: @unchecked Sendable {
         remoteCaps = 0
         pendingHostText = nil
         pendingHostImage = nil
+        pendingHostFileList = nil
     }
 
     /// queue 内调用: 没连或断了就 lazy 重连一次.
@@ -464,12 +486,14 @@ public final class VdagentClient: @unchecked Sendable {
     /// queue 内调用. 发 GRAB 声明 host 端有 UTF-8 文本.
     /// useSelectionPrefix=true 数据布局: selection(1B) + pad(3B) + N × uint32 mime types
     /// useSelectionPrefix=false 直接: N × uint32 mime types (Win 版 vdagent 走这条)
-    /// queue 内调用. 发 GRAB 声明 host 端有哪些 mime 可用. 同时广告 text + image PNG,
-    /// guest 按需 REQUEST 哪条 mime (Telegram 优先 image, Notepad 优先 text).
+    /// queue 内调用. 发 GRAB 声明 host 端有哪些 mime 可用. 同时广告 text + image PNG +
+    /// (实验) FILE_LIST, guest 按需 REQUEST 哪条 mime (Telegram 优先 image, Notepad 优先 text,
+    /// Explorer 优先 FILE_LIST).
     private func sendGrabLocked() {
         var mimes: [UInt32] = []
         if pendingHostText  != nil { mimes.append(VdagentClient.MIME_UTF8_TEXT) }
         if pendingHostImage != nil { mimes.append(VdagentClient.MIME_IMAGE_PNG) }
+        if pendingHostFileList != nil { mimes.append(VdagentClient.MIME_FILE_LIST) }
         guard !mimes.isEmpty else { return }
 
         var body = Data()
@@ -704,6 +728,7 @@ public final class VdagentClient: @unchecked Sendable {
     /// guest 发 REQUEST 要 host 端剪贴板内容. 按 mime 分派:
     ///   - UTF8_TEXT (1) → 发 pendingHostText
     ///   - IMAGE_PNG (2) → 发 pendingHostImage
+    ///   - FILE_LIST (6) → 发 text/uri-list with guest 端路径
     ///   - 其他 → skip log
     private func handleGuestRequestLocked(_ payload: Data) {
         let (selection, mimeOff) = parseSelectionPrefix(payload)
@@ -727,9 +752,35 @@ public final class VdagentClient: @unchecked Sendable {
             }
             log.info("vdagent guest REQUEST IMAGE_PNG sel=\(selection, privacy: .public) → 发 CLIPBOARD (\(img.count, privacy: .public) bytes PNG)")
             sendClipboardImageLocked(image: img, selection: selection)
+        case VdagentClient.MIME_FILE_LIST:
+            // 注: 探针实验 (2026-05-28) 实测 UTM Guest Tools vdagent.exe 不实现 FILE_LIST,
+            // 永远不会走到这里. 留代码备用 — 万一未来 vdagent 升级支持了能直接用.
+            // 真正的 UTM-style 文件剪贴板走 HVMFileClipboardBridge + 自家 helper EXE
+            // (docs/v3/HOST_FILE_CLIPBOARD.md), 跟 vdagent 完全独立通路.
+            guard let paths = pendingHostFileList, !paths.isEmpty else {
+                log.info("vdagent guest REQUEST FILE_LIST sel=\(selection, privacy: .public) 但 pendingHostFileList 为空, skip")
+                return
+            }
+            // text/uri-list 格式: file:// URI CRLF 分隔
+            let uriList = paths.map { "file://\($0)" }.joined(separator: "\r\n") + "\r\n"
+            sendClipboardFileListLocked(uriList: uriList, selection: selection)
         default:
             log.info("vdagent guest REQUEST 不支持的 mime=\(mime, privacy: .public), sel=\(selection, privacy: .public), skip")
         }
+    }
+
+    /// CLIPBOARD 应答 FILE_LIST (mime=6), payload = text/uri-list UTF-8 bytes
+    private func sendClipboardFileListLocked(uriList: String, selection: UInt8 = SELECTION_CLIPBOARD) {
+        let utf8 = Array(uriList.utf8)
+        var body = Data(capacity: 8 + utf8.count)
+        if useSelectionPrefix {
+            body.append(selection)
+            body.append(0); body.append(0); body.append(0)
+        }
+        VdagentClient.appendU32(VdagentClient.MIME_FILE_LIST, to: &body)
+        body.append(contentsOf: utf8)
+        sendMessageLocked(type: VdagentClient.VD_AGENT_CLIPBOARD, payload: body)
+        log.info("vdagent CLIPBOARD FILE_LIST sent sel=\(selection, privacy: .public) (\(utf8.count, privacy: .public) bytes)")
     }
 
     /// guest 真发数据过来了 (host 先 REQUEST 触发, 或 guest 主动 GRAB 后 host REQUEST 的回应).

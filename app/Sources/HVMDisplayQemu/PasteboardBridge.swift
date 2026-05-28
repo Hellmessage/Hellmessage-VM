@@ -105,12 +105,16 @@ public final class PasteboardBridge {
 
         // 同时取 text + image PNG. 任一非空就推 guest, 全空就 release.
         // GRAB 会广告所有有内容的 mime, guest REQUEST 时按需取.
+        //
+        // NOTE: file URLs (Cmd+C on Finder file) 走独立的 HVMFileClipboardBridge (HOST_FILE_CLIPBOARD.md
+        // 设计稿), 不走 SPICE vdagent. 探针实验 (2026-05-28) 实测 UTM Guest Tools vdagent.exe
+        // 不实现 CLIPBOARD_FILE_LIST mime=6, 改走自家 guest helper EXE + 独立 virtio-serial.
+        // 这里 PasteboardBridge 只管 text + image 两条 vdagent 通路.
         let text: String? = pb.string(forType: .string)
         let image: Data? = Self.readImagePNG(pb)
         let hasText = (text?.isEmpty == false)
         let hasImage = (image != nil)
         if !hasText && !hasImage {
-            // 用户清空了 host pasteboard / 复制了不识别的类型 — 通知 guest release
             vdagent.sendClipboardRelease()
             return
         }
