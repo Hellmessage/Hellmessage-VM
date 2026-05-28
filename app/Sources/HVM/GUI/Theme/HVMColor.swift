@@ -41,6 +41,12 @@ extension HVMTheme {
         static let warn    = Color(hex: 0xF59E0B)
         static let error   = Color(hex: 0xEF4444)
         static let info    = Color(hex: 0x3B82F6)
+
+        // destructive 按钮 hover bg (error 12% 红, 跟 borderError 配套)
+        static let destructiveHover = Color(hex: 0xEF4444, alpha: 0.12)
+
+        // 透明 (按钮 / 字段 ghost 态 bg; 业务侧禁止直写 Color.clear)
+        static let transparent = Color.clear
     }
 }
 

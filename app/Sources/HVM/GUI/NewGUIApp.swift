@@ -11,6 +11,7 @@
 
 import AppKit
 import SwiftUI
+import HVMGuiProbe
 
 @MainActor
 final class NewGUIAppDelegate: NSObject, NSApplicationDelegate {
@@ -44,6 +45,11 @@ final class NewGUIAppDelegate: NSObject, NSApplicationDelegate {
 
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+
+        // HDP-GUI probe server (HVM_GUI_PROBE=1 时 unix socket 接 hvm-dbg gui).
+        // 老 GUI 在 HVMAppDelegate 启的; 新 GUI 也得启, 不然 hvm-dbg gui ping 连不上.
+        // PR-C1 起新 GUI 接入自动化测试通路.
+        ProbeServer.start()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -65,6 +71,8 @@ public enum NewGUIAppLauncher {
 // MARK: - Root + Theme 演示页
 
 private struct NewGUIRootView: View {
+    @State private var probeClickLog: String = "—"
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             HVMTheme.color.bgBase
@@ -73,6 +81,7 @@ private struct NewGUIRootView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: HVMTheme.space.xl) {
                     headerBlock
+                    buttonsBlock
                     colorPaletteBlock
                     typographyBlock
                     spacingBlock
@@ -248,6 +257,62 @@ private struct NewGUIRootView: View {
                 MotionDemoTile(label: "fast (120ms)", animation: HVMTheme.motion.easeOutFast)
                 MotionDemoTile(label: "base (200ms)", animation: HVMTheme.motion.easeOut)
                 MotionDemoTile(label: "slow (320ms)", animation: HVMTheme.motion.easeOutSlow)
+            }
+        }
+    }
+
+    // PR-C1 — 5 variant + hover/press/disabled + icon + probe
+    private var buttonsBlock: some View {
+        sectionCard(title: "Buttons (PR-C1)") {
+            VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
+                buttonRow("Variants") {
+                    HVMButton("Primary", variant: .primary,
+                              probeID: "showcase.button.primary") { probeClickLog = "primary" }
+                    HVMButton("Secondary", variant: .secondary,
+                              probeID: "showcase.button.secondary") { probeClickLog = "secondary" }
+                    HVMButton("Ghost", variant: .ghost,
+                              probeID: "showcase.button.ghost") { probeClickLog = "ghost" }
+                    HVMButton("Destructive", variant: .destructive,
+                              probeID: "showcase.button.destructive") { probeClickLog = "destructive" }
+                    HVMButton(icon: "gear", variant: .icon,
+                              probeID: "showcase.button.icon") { probeClickLog = "icon" }
+                }
+
+                buttonRow("With icon") {
+                    HVMButton("Create VM", variant: .primary, icon: "plus") { }
+                    HVMButton("Delete", variant: .destructive, icon: "trash") { }
+                    HVMButton("Settings", variant: .ghost, icon: "gearshape") { }
+                }
+
+                buttonRow("Disabled") {
+                    HVMButton("Primary", variant: .primary, disabled: true) { }
+                    HVMButton("Secondary", variant: .secondary, disabled: true) { }
+                    HVMButton("Destructive", variant: .destructive, disabled: true) { }
+                    HVMButton(icon: "gear", variant: .icon, disabled: true) { }
+                }
+
+                HStack(spacing: HVMTheme.space.sm) {
+                    Text("hvm-dbg gui click --identifier showcase.button.primary")
+                        .font(HVMTheme.font.monoSm)
+                        .foregroundStyle(HVMTheme.color.textTertiary)
+                    Text("最近: \(probeClickLog)")
+                        .font(HVMTheme.font.xs)
+                        .foregroundStyle(HVMTheme.color.accent)
+                }
+            }
+        }
+    }
+
+    private func buttonRow<Content: View>(
+        _ label: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: HVMTheme.space.sm) {
+            Text(label)
+                .font(HVMTheme.font.sm)
+                .foregroundStyle(HVMTheme.color.textSecondary)
+            HStack(spacing: HVMTheme.space.md) {
+                content()
             }
         }
     }
