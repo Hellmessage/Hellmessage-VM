@@ -70,30 +70,42 @@ final class DialogPresenter: ObservableObject {
 
     /// 推一个浮窗到栈顶. content closure 接收 DialogHandle, 业务侧用它关闭自己.
     /// 返回 handle, 让外部也能控制关闭 (例如 Task.cancellation).
+    ///
+    /// onDismiss: dialog 关闭后回调 — 不论关闭路径 (X 按钮 / 主按钮 / Esc /
+    /// presenter.dismissAll), 都会触发一次. async API (例 .alert) 用它把
+    /// CheckedContinuation.resume() 接进所有关闭路径, 防业务 await 永远卡住.
     @discardableResult
     func present<Content: View>(
-        @ViewBuilder _ content: (DialogHandle) -> Content
+        @ViewBuilder _ content: (DialogHandle) -> Content,
+        onDismiss: (@MainActor @Sendable () -> Void)? = nil
     ) -> DialogHandle {
         let id = UUID()
         let handle = DialogHandle(id: id, presenter: self)
         let view = AnyView(content(handle))
-        stack.append(DialogEntry(id: id, contentView: view))
+        stack.append(DialogEntry(id: id, contentView: view, onDismiss: onDismiss))
         return handle
     }
 
-    /// 关闭栈顶 dialog (例如 Esc 键 / X 按钮触发)
+    /// 关闭栈顶 dialog (例如 Esc 键 / X 按钮触发). 触发 onDismiss callback.
     func dismissTop() {
-        _ = stack.popLast()
+        guard let last = stack.popLast() else { return }
+        last.onDismiss?()
     }
 
-    /// 关闭指定 dialog (handle.close() 调用)
+    /// 关闭指定 dialog (handle.close() 调用). 触发 onDismiss callback.
     func dismiss(id: UUID) {
-        stack.removeAll { $0.id == id }
+        guard let idx = stack.firstIndex(where: { $0.id == id }) else { return }
+        let entry = stack.remove(at: idx)
+        entry.onDismiss?()
     }
 
-    /// 一次性关闭所有 (例如登出 / 切 VM 等强制关闭场景)
+    /// 一次性关闭所有 (例如登出 / 切 VM 等强制关闭场景). 触发所有 onDismiss.
     func dismissAll() {
+        let entries = stack
         stack.removeAll()
+        for entry in entries {
+            entry.onDismiss?()
+        }
     }
 
     /// 当前栈深 (业务侧判断是否有 dialog 打开)
@@ -104,6 +116,9 @@ final class DialogPresenter: ObservableObject {
 fileprivate struct DialogEntry: Identifiable {
     let id: UUID
     let contentView: AnyView
+    /// 关闭时回调 — 不论关闭路径 (X / 主按钮 / Esc / dismissAll) 都触发.
+    /// async API 用它把 CheckedContinuation.resume() 接进所有关闭路径.
+    let onDismiss: (@MainActor @Sendable () -> Void)?
 }
 
 /// Dialog 操作 handle. present 返回, 业务侧用它关闭自己; weak presenter 防循环引用.

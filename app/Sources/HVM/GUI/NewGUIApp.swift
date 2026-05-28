@@ -566,12 +566,13 @@ private struct NewGUIRootView: View {
         }
     }
 
-    // PR-D1 — OverlayContainer demo (DialogHost + DialogPresenter)
+    // PR-D1 — OverlayContainer demo (DialogHost + DialogPresenter) + PR-D3 AlertDialog
     private var dialogDemoBlock: some View {
-        sectionCard(title: "OverlayContainer (PR-D1)",
-                    description: "全局 dialog 渲染容器 — popover 渲染到 root-level ZStack, 脱离 ScrollView/sectionCard 层级限制. AlertDialog/Confirm/Input/Wizard 后续 D3-D6 落地") {
+        sectionCard(title: "OverlayContainer + AlertDialog (PR-D1 / D3)",
+                    description: "全局 dialog 渲染容器 — popover 渲染到 root-level ZStack. Alert 4 档 (info/warn/error/success) async API. Confirm/Input/Wizard 后续 D4-D6") {
             VStack(alignment: .leading, spacing: HVMTheme.space.md) {
-                fieldRow("Try it") {
+                // PR-D1: 基础 dialog stack (SimpleDialogCard 自定义内容)
+                fieldRow("Custom dialog (PR-D1)") {
                     HVMUI.Button("打开简单 Dialog", variant: .primary,
                                  probeID: "showcase.dialog.show") {
                         dialog.present { handle in
@@ -611,7 +612,58 @@ private struct NewGUIRootView: View {
                     }
                 }
 
-                Text("hvm-dbg gui click showcase.dialog.show → 打开 dialog (zIndex 浮在 sectionCard / Buttons 节之上)")
+                // PR-D3: AlertDialog 4 档 (async API + 派生 probe id)
+                fieldRow("AlertDialog (PR-D3, async API)") {
+                    HVMUI.Button("Info", variant: .secondary, icon: "info.circle",
+                                 probeID: "showcase.alert.info") {
+                        Task { @MainActor in
+                            await dialog.alert(
+                                level: .info,
+                                title: "提示",
+                                message: "这是一个 info 级别的 alert dialog. async API 等用户关闭后才 resume.",
+                                hint: "可以传 hint 副文案",
+                                probeID: "showcase.alert.info.dlg"
+                            )
+                        }
+                    }
+                    HVMUI.Button("Warn", variant: .secondary, icon: "exclamationmark.triangle",
+                                 probeID: "showcase.alert.warn") {
+                        Task { @MainActor in
+                            await dialog.alert(
+                                level: .warn,
+                                title: "警告",
+                                message: "存在潜在问题但操作可以继续.",
+                                hint: "例: vmnet daemon 配置缺失但 VM 仍可启动",
+                                probeID: "showcase.alert.warn.dlg"
+                            )
+                        }
+                    }
+                    HVMUI.Button("Error", variant: .destructive, icon: "xmark.circle",
+                                 probeID: "showcase.alert.error") {
+                        Task { @MainActor in
+                            await dialog.alert(
+                                level: .error,
+                                title: "启动失败",
+                                message: "无法连接到 vmnet daemon.",
+                                hint: "检查 socket_vmnet 是否已安装 (brew install socket_vmnet)",
+                                probeID: "showcase.alert.error.dlg"
+                            )
+                        }
+                    }
+                    HVMUI.Button("Success", variant: .secondary, icon: "checkmark.circle",
+                                 probeID: "showcase.alert.success") {
+                        Task { @MainActor in
+                            await dialog.alert(
+                                level: .success,
+                                title: "完成",
+                                message: "VM 已成功导入并启动.",
+                                probeID: "showcase.alert.success.dlg"
+                            )
+                        }
+                    }
+                }
+
+                Text("hvm-dbg gui click showcase.alert.error → await dialog.alert(...) 弹错误提示, X/确定/Esc 任一关闭都 resume")
                     .font(HVMTheme.font.monoSm)
                     .foregroundStyle(HVMTheme.color.textTertiary)
             }
