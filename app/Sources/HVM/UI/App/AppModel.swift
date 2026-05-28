@@ -1112,6 +1112,13 @@ public final class AppModel {
     /// GUI "装 helper" 按钮入口. 通过 IPC 让 VMHost 子进程执行 GuestHelperInstaller.
     /// 走 Task.detached (长事务最多几秒 + QGA wait 可能等 10 min). 完成后通知用户.
     /// force=true 强制重装 (先清 marker).
+    ///
+    /// UX 反馈:
+    ///   - 进度: 主窗口弹 dialog "正在安装..." (用 ErrorDialog 当 info 弹) + 通知中心
+    ///   - 完成: 主窗口弹 dialog "已装 / 已就绪" + 通知中心
+    ///   - 失败: ErrorDialog + 通知
+    ///   dialog 是主反馈通路 (用户必须主动 dismiss → 看得见); 通知是浮窗 fallback (可能被 DND
+    ///   / 权限拒 silenced 没看到)
     public func installGuestHelper(item: VMListItem, force: Bool = false) {
         let displayName = item.displayName
         guard let holder = BundleLock.inspect(bundleURL: item.bundleURL),
@@ -1129,17 +1136,24 @@ public final class AppModel {
             op: IPCOp.clipboardInstallHelper.rawValue,
             args: force ? ["force": "1"] : [:]
         )
-        // 弹通知告知开始 (异步, 装完再弹结果通知)
+        // 进度反馈: dialog 主反馈 (强保证可见) + 系统通知 fallback (DND/权限可能 silenced)
+        let progressDialog = ErrorDialogModel(
+            title: "Guest Helper · 安装中",
+            message: "正在装 Guest Helper 到 \(displayName)...\n\n首次启动 Windows VM 时需等 qemu-ga 服务起来 (最长 60s) 再开装. 完成后会弹通知.",
+            details: nil,
+            hint: "可以关掉这个对话框, 安装在后台跑."
+        )
+        sharedErrors?.present(progressDialog)
         HostFilePasteNotifier.notifyInfo(
             displayName: displayName,
             title: "Guest Helper",
-            body: "正在安装... (首次启动 Windows VM 约需 30-60s)"
+            body: "正在安装..."
         )
         Task { @MainActor [weak self] in
             let resp: IPCResponse
             do {
                 resp = try await Task.detached(priority: .userInitiated) {
-                    // 给 600s — install 包含 wait-for-QGA (最多 10 min) + push + schtasks.
+                    // 给 700s — install 包含 wait-for-QGA (最多 10 min) + push + schtasks.
                     try SocketClient.request(socketPath: socketPath, request: req, timeoutSec: 700)
                 }.value
             } catch {
@@ -1147,16 +1161,25 @@ public final class AppModel {
                     title: "装 helper 失败", message: "IPC 调用失败: \(error)",
                     details: nil, hint: nil
                 ))
+                HostFilePasteNotifier.notifyInfo(displayName: displayName, title: "Guest Helper 失败", body: "\(error)")
                 return
             }
             guard let self else { return }
             if resp.ok {
                 let installed = resp.data?["installed"] == "true"
                 let message = resp.data?["message"] ?? ""
-                let title = installed ? "Guest Helper 已装" : "Guest Helper 已就绪"
+                let title = installed ? "Guest Helper · 已装" : "Guest Helper · 已就绪"
                 let body = installed
-                    ? "现在 Mac Cmd+C 文件 → Windows Ctrl+V 任意 app 自动粘贴"
-                    : (message.isEmpty ? "已是最新版本, 无需重装" : message)
+                    ? "现在 Mac Cmd+C 文件 → Windows Ctrl+V 任意 app 自动粘贴.\n\n首次粘贴 helper 已在 user session 跑起来, 可以直接试."
+                    : (message.isEmpty ? "已是最新版本, 无需重装." : message)
+                // 主反馈: 主窗口 dialog (强保证可见)
+                self.sharedErrors?.present(ErrorDialogModel(
+                    title: title,
+                    message: body,
+                    details: nil,
+                    hint: "可在 detail toolbar 的 ✨ 按钮重新触发安装."
+                ))
+                // fallback: 系统通知
                 HostFilePasteNotifier.notifyInfo(displayName: displayName, title: title, body: body)
             } else {
                 self.sharedErrors?.present(ErrorDialogModel(
@@ -1165,6 +1188,7 @@ public final class AppModel {
                     details: resp.error?.code,
                     hint: "Windows guest 需要 qemu-ga.exe 服务 (UTM Guest Tools 自带). 检查 guest 内 qemu-ga 是否在跑."
                 ))
+                HostFilePasteNotifier.notifyInfo(displayName: displayName, title: "Guest Helper 失败", body: resp.error?.message ?? "未知错误")
             }
         }
     }
