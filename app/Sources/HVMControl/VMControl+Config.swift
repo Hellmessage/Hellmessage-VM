@@ -94,6 +94,61 @@ public extension VMControl {
         try? DiskFactory.delete(at: absURL)   // 文件删失败不回滚 config (盘已从配置移除)
     }
 
+    // MARK: - 加密 VM 磁盘操作 (LUKS qcow2; 调用方传解锁后的 qcow2Disk + config subkey)
+
+    /// 加密 VM 加数据盘: QcowLuksFactory.create (LUKS) + EncryptedConfigIO 追加 DiskSpec.
+    static func addDiskEncrypted(bundleURL: URL, sizeGiB: UInt64,
+                                 diskKey: SymmetricKey, configKey: SymmetricKey) throws {
+        try assertStoppedIfNeeded(bundleURL: bundleURL, requireStopped: true)
+        var config = try EncryptedConfigIO.load(from: bundleURL, key: configKey)
+        // 加密 VM 必 qemu/qcow2
+        let uuid8 = DiskFactory.newDataDiskUUID8()
+        let fileName = BundleLayout.dataDiskFileName(uuid8: uuid8, engine: .qemu)
+        let relPath = "\(BundleLayout.disksDirName)/\(fileName)"
+        let absURL = bundleURL.appendingPathComponent(relPath)
+        let qemuImg = try QemuPaths.qemuImgBinary()
+        try QcowLuksFactory.create(at: absURL, sizeBytes: sizeGiB << 30, key: diskKey, qemuImg: qemuImg)
+        config.disks.append(DiskSpec(role: .data, path: relPath, sizeGiB: sizeGiB, format: .qcow2))
+        try EncryptedConfigIO.save(config: config, to: bundleURL, key: configKey)
+    }
+
+    /// 加密 VM 扩盘: QcowLuksFactory.grow. 只增不减.
+    static func resizeDiskEncrypted(bundleURL: URL, diskPath: String, toGiB: UInt64,
+                                    diskKey: SymmetricKey, configKey: SymmetricKey) throws {
+        try assertStoppedIfNeeded(bundleURL: bundleURL, requireStopped: true)
+        var config = try EncryptedConfigIO.load(from: bundleURL, key: configKey)
+        guard let idx = config.disks.firstIndex(where: { $0.path == diskPath }) else {
+            throw HVMError.storage(.ioError(errno: ENOENT, path: diskPath))
+        }
+        guard toGiB > config.disks[idx].sizeGiB else {
+            throw HVMError.storage(.shrinkNotSupported(
+                currentBytes: Int64(config.disks[idx].sizeGiB) << 30,
+                requestedBytes: Int64(toGiB) << 30))
+        }
+        let absURL = bundleURL.appendingPathComponent(diskPath)
+        let qemuImg = try QemuPaths.qemuImgBinary()
+        try QcowLuksFactory.grow(at: absURL, toBytes: toGiB << 30, key: diskKey, qemuImg: qemuImg)
+        config.disks[idx].sizeGiB = toGiB
+        try EncryptedConfigIO.save(config: config, to: bundleURL, key: configKey)
+    }
+
+    /// 加密 VM 删数据盘: 移除 DiskSpec + 删文件. 主盘不可删.
+    static func deleteDiskEncrypted(bundleURL: URL, diskPath: String,
+                                    configKey: SymmetricKey) throws {
+        try assertStoppedIfNeeded(bundleURL: bundleURL, requireStopped: true)
+        var config = try EncryptedConfigIO.load(from: bundleURL, key: configKey)
+        guard let idx = config.disks.firstIndex(where: { $0.path == diskPath }) else {
+            throw HVMError.storage(.ioError(errno: ENOENT, path: diskPath))
+        }
+        guard config.disks[idx].role == .data else {
+            throw HVMError.backend(.configInvalid(field: "disk", reason: "主盘不可删除"))
+        }
+        let absURL = bundleURL.appendingPathComponent(diskPath)
+        config.disks.remove(at: idx)
+        try EncryptedConfigIO.save(config: config, to: bundleURL, key: configKey)
+        try? DiskFactory.delete(at: absURL)
+    }
+
     // MARK: - 剪贴板共享 (可 running 热改)
 
     /// 切剪贴板共享: 落 config (requireStopped=false 可 running 改) + running 时 IPC 即时生效.

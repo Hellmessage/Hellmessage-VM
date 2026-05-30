@@ -339,7 +339,7 @@ public final class NewGUIStore {
 | **D4** | sidebar 宽度可拖? | 不可拖 v1 (固定 240), 可拖留 v1.1 | 本稿不决 |
 | **D5** | detail running 嵌画面 | 本稿不嵌 (标占位), 真画面走 `NEW_GUI_FRAMEBUFFER.md` | 已决推后 |
 | **D6** | Showcase 去留 | 退到 `HVM_GUI_SHOWCASE=1` env 保留 (组件 living doc), 不删 | ✅ 本稿 |
-| **D7** | 列表排序 | displayName 升序 v1; 自定义拖拽重排推后 | 本稿不决 |
+| **D7** | 列表排序 | **已加拖拽重排** (用户 2026-05-30 要求): `.draggable(vmId)` + `.dropDestination` 放到某行=移到其前; 顺序持久化 UserDefaults `com.hellmessage.vm.newgui.vmOrder`; 无自定义顺序时仍 displayName 升序; 新 VM 接末尾. 拖拽 hvm-dbg gui 无法模拟, 手动验 | 已实现 |
 | **D8** | VMSummary Equatable 是否含 config | 含 (VMConfig Equatable); 若 P0-2 实测慢改轻量 == | M2 实测后定 |
 
 ---

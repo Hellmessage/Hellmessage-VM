@@ -60,7 +60,13 @@ public final class NewGUIStore {
 
     private static let unlockTTL: TimeInterval = 300   // 5 分钟无活动 auto-lock
 
+    // MARK: - 自定义排序 (拖拽重排, 持久化到 UserDefaults; GUI 侧, 加密 VM 也适用)
+    @ObservationIgnored private var vmOrder: [UUID] = []
+    private static let orderKey = "com.hellmessage.vm.newgui.vmOrder"
+
     public init() {
+        vmOrder = (UserDefaults.standard.array(forKey: Self.orderKey) as? [String])?
+            .compactMap(UUID.init) ?? []
         refresh()
         // 启动即选中第一个 (有 VM 时)
         if selectedID == nil { selectedID = vms.first?.id }
@@ -106,6 +112,7 @@ public final class NewGUIStore {
                 fresh[i] = fresh[i].withUnlockedConfig(cfg)
             }
         }
+        fresh = applyOrder(fresh)
         if fresh != vms { vms = fresh }
         if let sel = selectedID, !fresh.contains(where: { $0.id == sel }) {
             selectedID = fresh.first?.id
@@ -118,6 +125,36 @@ public final class NewGUIStore {
     public var selected: VMSummary? {
         guard let selectedID else { return nil }
         return vms.first { $0.id == selectedID }
+    }
+
+    // MARK: - 拖拽重排
+
+    /// 按 vmOrder 排序: 已记顺序的在前 (按记录次序), 未记录的 (新 VM) 按 displayName 接在后面
+    private func applyOrder(_ list: [VMSummary]) -> [VMSummary] {
+        guard !vmOrder.isEmpty else { return list }   // 无自定义顺序 → 保持 catalog 的 displayName 序
+        let idx = Dictionary(vmOrder.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        return list.sorted { a, b in
+            switch (idx[a.id], idx[b.id]) {
+            case let (.some(x), .some(y)): return x < y
+            case (.some, .none):           return true
+            case (.none, .some):           return false
+            case (.none, .none):
+                return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
+            }
+        }
+    }
+
+    /// 把 srcId 移到 targetId 之前 (拖拽放到某行上). 持久化 + refresh.
+    public func moveVM(_ srcId: UUID, before targetId: UUID) {
+        guard srcId != targetId else { return }
+        var order = vms.map(\.id)          // 当前显示顺序 (含所有 VM)
+        guard let srcIdx = order.firstIndex(of: srcId) else { return }
+        order.remove(at: srcIdx)
+        guard let tgtIdx = order.firstIndex(of: targetId) else { return }
+        order.insert(srcId, at: tgtIdx)
+        vmOrder = order
+        UserDefaults.standard.set(order.map(\.uuidString), forKey: Self.orderKey)
+        refresh()
     }
 
     // MARK: - 动作 (失败写 lastError, 完成后 refresh)
@@ -171,6 +208,56 @@ public final class NewGUIStore {
                                          requireStopped: requireStopped,
                                          mutate: mutate)
             }
+        }
+    }
+
+    // MARK: - 磁盘 (业务页 #2, V4)
+
+    /// 加数据盘 (明文 DiskFactory / 加密 QcowLuksFactory)
+    public func addDisk(_ s: VMSummary, sizeGiB: UInt64) {
+        diskOp(s, "添加磁盘失败",
+               plain: { try VMControl.addDisk(bundleURL: s.bundleURL, sizeGiB: sizeGiB) },
+               enc: { keys in
+                   try VMControl.addDiskEncrypted(bundleURL: s.bundleURL, sizeGiB: sizeGiB,
+                                                  diskKey: keys.qcow2Disk, configKey: keys.config)
+               })
+    }
+
+    /// 扩盘 (主盘或数据盘, 只增不减)
+    public func resizeDisk(_ s: VMSummary, diskPath: String, toGiB: UInt64) {
+        diskOp(s, "扩容失败",
+               plain: { try VMControl.resizeDisk(bundleURL: s.bundleURL, diskPath: diskPath, toGiB: toGiB) },
+               enc: { keys in
+                   try VMControl.resizeDiskEncrypted(bundleURL: s.bundleURL, diskPath: diskPath, toGiB: toGiB,
+                                                     diskKey: keys.qcow2Disk, configKey: keys.config)
+               })
+    }
+
+    /// 删数据盘
+    public func deleteDisk(_ s: VMSummary, diskPath: String) {
+        diskOp(s, "删除磁盘失败",
+               plain: { try VMControl.deleteDisk(bundleURL: s.bundleURL, diskPath: diskPath) },
+               enc: { keys in
+                   try VMControl.deleteDiskEncrypted(bundleURL: s.bundleURL, diskPath: diskPath, configKey: keys.config)
+               })
+    }
+
+    /// 磁盘操作分流: 明文走 plain; 加密需已解锁 (传 subkeys) 走 enc, 完后刷新缓存 config
+    private func diskOp(_ s: VMSummary, _ failTitle: String,
+                        plain: () throws -> Void,
+                        enc: (EncryptionKDF.SubKeySet) throws -> Void) {
+        if s.isEncrypted {
+            guard let keys = unlockedSubKeys[s.id] else {
+                lastError = StoreError(title: "需先解锁", message: "请先解锁加密 VM 再操作磁盘.")
+                return
+            }
+            run(failTitle) {
+                try enc(keys)
+                self.unlockedConfigs[s.id] = try? EncryptedConfigIO.load(from: s.bundleURL, key: keys.config)
+                self.unlockedAt[s.id] = Date()
+            }
+        } else {
+            run(failTitle, plain)
         }
     }
 

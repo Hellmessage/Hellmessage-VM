@@ -77,6 +77,7 @@ private struct SidebarRow: View {
     @Environment(NewGUIStore.self) private var store
     @EnvironmentObject private var dialog: HVMUI.DialogPresenter
     @State private var hovered = false
+    @State private var isDropTarget = false
 
     private var isSelected: Bool { store.selectedID == vm.id }
 
@@ -120,6 +121,14 @@ private struct SidebarRow: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: HVMTheme.radius.md))
+            .overlay(alignment: .top) {
+                // 拖拽放置目标: 顶部 2px accent 插入线
+                if isDropTarget {
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(HVMTheme.color.accent)
+                        .frame(height: 2)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -129,6 +138,13 @@ private struct SidebarRow: View {
                   label: vm.displayName,
                   action: .button { store.selectedID = vm.id })
         .contextMenu { contextMenu }
+        // 拖拽重排: 拖本行 → 放到另一行上 = 移到那行之前. 顺序持久化 (UserDefaults).
+        .draggable(vm.id.uuidString)
+        .dropDestination(for: String.self) { ids, _ in
+            guard let s = ids.first, let srcId = UUID(uuidString: s) else { return false }
+            store.moveVM(srcId, before: vm.id)
+            return true
+        } isTargeted: { isDropTarget = $0 }
     }
 
     @ViewBuilder

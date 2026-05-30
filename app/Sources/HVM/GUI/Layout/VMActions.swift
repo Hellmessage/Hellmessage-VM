@@ -8,6 +8,7 @@
 
 import SwiftUI
 import HVMControl
+import HVMBundle
 
 @MainActor
 enum VMActions {
@@ -54,6 +55,61 @@ enum VMActions {
             )
             if case .submitted(let values) = r, let pw = values.first, !pw.isEmpty {
                 await store.unlock(vm, password: pw)
+            }
+        }
+    }
+
+    // MARK: - 磁盘 (V4)
+
+    /// 添加数据盘: 弹大小输入 → store.addDisk
+    static func addDisk(_ vm: VMSummary, store: NewGUIStore, dialog: HVMUI.DialogPresenter) {
+        Task { @MainActor in
+            let r = await dialog.input(
+                title: "添加数据盘",
+                fields: [HVMUI.InputField(label: "大小 (GiB)", placeholder: "10", initialText: "10")],
+                validate: { v in (Int(v[0]) ?? 0) >= 1 ? .valid : .invalid("至少 1 GiB") },
+                confirmLabel: "添加",
+                probeID: "detail.disk.add.dlg"
+            )
+            if case .submitted(let vals) = r, let gib = UInt64(vals[0]) {
+                store.addDisk(vm, sizeGiB: gib)
+            }
+        }
+    }
+
+    /// 扩容磁盘 (只增): 弹新大小 (> 当前) → store.resizeDisk
+    static func resizeDisk(_ vm: VMSummary, disk: DiskSpec,
+                           store: NewGUIStore, dialog: HVMUI.DialogPresenter) {
+        let cur = disk.sizeGiB
+        Task { @MainActor in
+            let r = await dialog.input(
+                title: "扩容磁盘",
+                fields: [HVMUI.InputField(label: "新大小 (GiB)", initialText: "\(cur)")],
+                validate: { v in
+                    (UInt64(v[0]) ?? 0) > cur ? .valid : .invalid("需大于当前 \(cur) GiB (只能扩容)")
+                },
+                confirmLabel: "扩容",
+                probeID: "detail.disk.resize.dlg"
+            )
+            if case .submitted(let vals) = r, let gib = UInt64(vals[0]) {
+                store.resizeDisk(vm, diskPath: disk.path, toGiB: gib)
+            }
+        }
+    }
+
+    /// 删除数据盘: destructive confirm → store.deleteDisk
+    static func confirmDeleteDisk(_ vm: VMSummary, disk: DiskSpec,
+                                  store: NewGUIStore, dialog: HVMUI.DialogPresenter) {
+        Task { @MainActor in
+            let r = await dialog.confirm(
+                title: "删除数据盘?",
+                message: "数据盘 \(disk.path) 及其全部数据将被永久删除, 不可恢复.",
+                confirmLabel: "删除",
+                destructive: true,
+                probeID: "detail.disk.delete.dlg"
+            )
+            if case .confirmed = r {
+                store.deleteDisk(vm, diskPath: disk.path)
             }
         }
     }

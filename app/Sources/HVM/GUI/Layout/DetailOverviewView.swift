@@ -8,6 +8,7 @@
 
 import SwiftUI
 import HVMControl
+import HVMBundle
 
 struct DetailOverviewView: View {
     @Environment(NewGUIStore.self) private var store
@@ -55,6 +56,7 @@ struct DetailOverviewView: View {
                     if isDirty(vm) {
                         saveFooter(vm)
                     }
+                    diskSection(vm)
                 }
             }
             .padding(HVMTheme.space.xl)
@@ -64,6 +66,58 @@ struct DetailOverviewView: View {
         .onChange(of: store.selectedID) { _, _ in syncDraftIfNeeded() }
         .onChange(of: store.selected?.config?.cpuCount) { _, _ in syncDraftIfNeeded() }
         .onAppear { syncDraftIfNeeded() }
+    }
+
+    // MARK: - 磁盘 (V4)
+
+    @ViewBuilder
+    private func diskSection(_ vm: VMSummary) -> some View {
+        if let cfg = vm.config {
+            let editable = vm.runState == .stopped
+            HVMUI.Section("磁盘", description: editable ? nil : "停止 VM 后可改") {
+                VStack(alignment: .leading, spacing: HVMTheme.space.sm) {
+                    ForEach(cfg.disks, id: \.path) { disk in
+                        diskRow(disk: disk, editable: editable)
+                    }
+                    HVMUI.Button("添加数据盘…", variant: .secondary, icon: "plus",
+                                 disabled: !editable, probeID: "detail.disk.add") {
+                        if let cur = store.selected {
+                            VMActions.addDisk(cur, store: store, dialog: dialog)
+                        }
+                    }
+                    .padding(.top, HVMTheme.space.xs)
+                }
+            }
+        }
+    }
+
+    private func diskRow(disk: DiskSpec, editable: Bool) -> some View {
+        HStack(spacing: HVMTheme.space.md) {
+            HVMUI.Icon(disk.role == .main ? "internaldrive" : "externaldrive",
+                       size: .sm, color: .secondary)
+            Text(disk.role == .main ? "主盘" : "数据盘")
+                .font(HVMTheme.font.base)
+                .foregroundStyle(HVMTheme.color.textPrimary)
+                .frame(width: 56, alignment: .leading)
+            Text("\(disk.sizeGiB) GiB · \(disk.format.rawValue)")
+                .font(HVMTheme.font.sm)
+                .foregroundStyle(HVMTheme.color.textSecondary)
+            Spacer()
+            HVMUI.Button("扩容…", variant: .ghost, size: .sm, disabled: !editable,
+                         probeID: "detail.disk.resize-\(disk.path)") {
+                if let cur = store.selected {
+                    VMActions.resizeDisk(cur, disk: disk, store: store, dialog: dialog)
+                }
+            }
+            if disk.role == .data {
+                HVMUI.Button("删除", variant: .ghost, size: .sm, disabled: !editable,
+                             probeID: "detail.disk.delete-\(disk.path)") {
+                    if let cur = store.selected {
+                        VMActions.confirmDeleteDisk(cur, disk: disk, store: store, dialog: dialog)
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - 资源编辑 (V3)
