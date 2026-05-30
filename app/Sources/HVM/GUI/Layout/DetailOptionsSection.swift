@@ -6,7 +6,6 @@
 //     当前新 GUI 无 framebuffer view, 仅落 config (requireStopped=false).
 // 两项都走 saveConfig 自动分流明文/加密.
 
-#if NEW_GUI
 
 import SwiftUI
 import HVMControl
@@ -63,4 +62,3 @@ struct DetailOptionsSection: View {
     }
 }
 
-#endif

@@ -15,8 +15,6 @@
 // 防漂移护栏 (PR-L1): scripts/check-gui-tokens.sh 扫整个 GUI/ 拦
 // Color(red: / Color(hex: / Font.system(size: / padding(数字) 硬编码.
 
-#if NEW_GUI
 
 enum HVMTheme {}
 
-#endif

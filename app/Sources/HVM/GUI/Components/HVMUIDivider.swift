@@ -12,7 +12,6 @@
 //   - 水平时 frame(maxWidth: .infinity, height: 1)
 //   - 垂直时 frame(width: 1, height 跟随 parent HStack 高度)
 
-#if NEW_GUI
 
 import SwiftUI
 
@@ -65,4 +64,3 @@ struct Divider: View {
 
 }  // extension HVMUI 结束
 
-#endif

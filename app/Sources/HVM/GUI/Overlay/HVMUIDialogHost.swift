@@ -49,7 +49,6 @@
 // - D6 HVMUI.WizardDialog
 // - Select popover 迁移到 OverlayContainer (清掉 zIndex 反向 hack)
 
-#if NEW_GUI
 
 import SwiftUI
 
@@ -221,4 +220,3 @@ extension View {
     }
 }
 
-#endif

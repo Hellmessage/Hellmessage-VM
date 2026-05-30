@@ -5,7 +5,6 @@
 // 仅当 VM 有 vmnet 模式 NIC (shared/host/bridged) 时显示 — daemon 是系统级全局组件.
 // 安装/重启/卸载走 osascript admin (Touch ID/密码); 重启+卸载是破坏性, 二次确认 (CLAUDE.md 约束).
 
-#if NEW_GUI
 
 import SwiftUI
 import HVMBundle
@@ -128,4 +127,3 @@ struct DetailVmnetDaemonView: View {
     }
 }
 
-#endif

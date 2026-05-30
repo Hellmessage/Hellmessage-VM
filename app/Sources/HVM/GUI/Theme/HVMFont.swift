@@ -4,7 +4,6 @@
 // 节奏: 11 / 12 / 13 / 14 / 18 / 24, 不留中间值 (16 / 20 等).
 // mono 仅用于"代码值" (UUID / MAC / 路径 / shell 命令展示 / build 号).
 
-#if NEW_GUI
 
 import SwiftUI
 
@@ -22,4 +21,3 @@ extension HVMTheme {
     }
 }
 
-#endif

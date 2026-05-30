@@ -2,7 +2,16 @@
 
 **所有回答必须使用中文**
 
-本项目走 Apple Virtualization.framework 路线。
+本项目走 **QEMU 后端单一路线** (`qemu-system-aarch64` + HVF 加速 + HDP IOSurface 显示)。
+VZ (Apple Virtualization.framework) 后端 + macOS guest 已于 2026-05-30 整条移除 (entitlement 未批 +
+QEMU 已满足 Linux/Windows/加密; 详见 `docs/v4/QEMU_ONLY_PIVOT.md`)。下文若仍有 VZ / macOS guest /
+双后端 残留措辞, 一律以"仅 QEMU 单后端、guest 仅 Linux+Windows"为准。
+
+**老 GUI (`app/Sources/HVM/UI/**`) 已随上述转向退役删除**, 唯一 GUI 是新 GUI (`app/Sources/HVM/GUI/**`,
+`GUI=new` 恒开)。下文凡引用 `UI/**` 路径 / 老组件 (`HVMFormSelect` / `HVMTextField` / `HVMModal` /
+`ConfirmDialog` / `ErrorDialog` / `PrimaryButtonStyle` 等) 或 `AppModel` 的约束 (尤其「UI 控件使用约束」
+「GUI 约束」「HDP-GUI」老条款), 一律以新 GUI 的 `HVMUI.*` 组件 + `NewGUIStore` + 「新 GUI ...」小节为准;
+老条款仅作历史参考, 不再适用。CLAUDE.md 全量逐行清理是后续 (docs/v4/QEMU_ONLY_PIVOT.md P1b-6 收尾)。
 
 ## 文档约束
 
@@ -69,9 +78,9 @@
 
 ## 签名与 Entitlement 约束
 
-- 必须的 entitlement: `com.apple.security.virtualization`(Apple Developer 账号自带, 不用申请)
+- 必须的 entitlement: `com.apple.security.hypervisor`(HVF 加速必需; QEMU 二进制走 `app/Resources/QEMU.entitlements`, 见「QEMU 后端约束」签名闭环)。VZ 的 `com.apple.security.virtualization` / 桥接网络 `com.apple.vm.networking` 已随 VZ 移除不再需要 (entitlement 申请未批正是剥 VZ 主因之一)
 - 签名方式: 自动 `codesign --sign "Apple Development"` ad-hoc 签名, 不公证不分发
-- 桥接网络 (`com.apple.vm.networking`) 已向 Apple 提交申请, 审批中。批准前**只实现 NAT 网络**, 审批后再加 `.bridged` case
+- 桥接网络走 `socket_vmnet` 系统级 launchd daemon (brew 安装 + osascript admin 提权), 不依赖任何 VZ networking entitlement, 见「socket_vmnet 网络约束」
 - 签名相关代码或日志**不得输出任何 team ID / 证书 SHA / 私钥路径**
 
 ## GUI 约束
@@ -94,10 +103,9 @@
   - 仅 QEMU 后端 + VM running 时按钮可用, 其它态 disabled + 灰文案
   - dialog 三态: form / running (closeAction = nil 不可关) / done; 取消语义 v1 不支持中断 chunk 循环
   - IPC 走 `Task.detached` 跑 `SocketClient.request` (长事务 600s 不能阻 main)
-  - VZ 后端走 `VZSharedDirectory` + virtiofs 的方案推后单独提案
 - **Cmd+V 文件粘贴** (设计稿 `docs/v3/HOST_FILE_PASTE.md`, 跟 FileTransferDialog 走不同通路):
   - 用户在 Finder Cmd+C 文件 → 切到 VM framebuffer view 按 Cmd+V → 自动走 SPICE vdagent VD_AGENT_FILE_XFER_* 流到 guest, 落 **guest `~/Downloads`** (不是当前焦点目录, 那个能力推 v2 自家 guest agent)
-  - **仅 QEMU 后端 + Linux/Windows guest** (vdagent 通路). VZ 后端 / macOS guest 不接 (vdagent 不存在)
+  - **QEMU 后端 + Linux/Windows guest** (vdagent 通路, 唯一后端)
   - **拦截条件**: `FramebufferHostView.keyDown` + `macStyleShortcuts=true` + Cmd 单按 (排除 Cmd+Opt / Cmd+Shift / Cmd+Ctrl) + NSPasteboard 有 file URLs. 三条全过才吃掉这次 Cmd+V; 任一不过走老的文本粘贴路径
   - **vdagent 单 socket 多协议复用** — `PasteboardBridge` (文本) / `FilePasteBridge` (文件) / `SpiceWebdavServer` (共享目录) 共享同一 `QemuHostState.shared.vdagent` 实例, 不同 callback slot 不抢; 启动顺序 vdagent connect → PasteboardBridge install (按 config) → FilePasteBridge **lazy install** (第一次 `clipboard.paste-files` 请求到达时)
   - **边界**: 文件夹 skip + 通知 "暂不支持"; 单文件 > 4 GiB skip + 引导走共享目录; 多文件串行不并发 (vdagent socket 单 client + SPICE chunks 不可 interleave); v1 不支持中途取消
@@ -107,12 +115,11 @@
   - **host → guest 文件传输统一走 vdagent file_xfer (后续方向)** — 当前 `FileTransferDialog` 还走 QGA (1-10 MB/s), 后续应迁到 vdagent (~50 MB/s) 统一通路. 暂保留两条通路, v1.1 决策合并
   - **测试**: `hvm-dbg paste-files <vm> --file ...` 模拟整条通路, 不依赖 framebuffer view 的 NSPasteboard 拦截 (server 端走相同 `clipboard.paste-files` IPC, 但绕过 Cmd+V 触发)
 - **键盘捕获 / 释放快捷键** (UTM 风格, 设计稿 `docs/v3/INPUT_CAPTURE.md`):
-  - **统一 `Cmd+Opt`** 切换捕获 (VZ + QEMU 两后端一致). 老的 `Cmd+Ctrl` 因跟 macOS 系统快捷键 (Mission Control / 截图 / 第三方 app) 严重冲突已废弃, **禁止**再用
+  - **统一 `Cmd+Opt`** 切换捕获. 老的 `Cmd+Ctrl` 因跟 macOS 系统快捷键 (Mission Control / 截图 / 第三方 app) 严重冲突已废弃, **禁止**再用
   - **QEMU 后端 captured 模式**: `CGSSetGlobalHotKeyOperatingMode(.disable)` (Skylight 私有 API, `HVMDisplayQemu/CGSPrivate.swift`) 禁用 macOS 全局热键, cmd+tab / cmd+space 也送 guest. 右上角 `⌘⌥ 退出捕获` overlay 显式提示
   - **退出 captured 闭环**: `viewWillMove(toWindow:nil)` / `resignFirstResponder` / `inputCaptureEnabled=false` 必须查 `if isCaptured { releaseCapture() }`, 否则系统热键留在 disable 状态用户无法 cmd+tab 切别 app — **体验灾难**
   - **修饰键状态镜像** (修 "shift/cmd 一直按着" 老 bug): `FramebufferHostView` 维护 `lastModifiers` + `pressedModifierQcodes` + `pressedNormalKeyQcodes` 三件套; `flagsChanged` 用 set diff 双向发, `becomeFirstResponder` sync 当前实时 modifier, `resignFirstResponder` / `viewWillMove(toWindow:nil)` / 进出 captured 时 `releaseAllPressedKeys()` 一并清光. **禁止**只清 normal key 不清 modifier
   - **左右修饰键独立映射**: NSEvent.ModifierFlags raw bit (`leftShift = 0x2`, `rightShift = 0x4` 等) → qcode `shift` / `shift_r` 等. 合成事件兜底走左侧
-  - **VZ 后端**只统一释放快捷键 (Cmd+Opt), **不**加 captured 双态 (VZ framework 已经 `capturesSystemKeys = true` 把 cmd+tab 转 guest), **不**做 modifier 镜像 (VZ 自己管)
 
 ## UI 控件使用约束 **必须遵守**
 
@@ -194,26 +201,25 @@
 - **store 显式传入 dialog (非 @Environment)**: `.hvmDialogHost()` 在 `.environment(store)` 外层, dialog overlay 拿不到 store 环境 → `present { handle in NewGUIEncryptionDialog(..., store: store) }` 显式传; @Observable 仍按 body 内访问 `store.encProgress` 建立 observation
 - probeID 命名: `detail.encryption.{encrypt,rekey,decrypt}` / `dialog.{encrypt,decrypt,rekey}.{close,cancel,confirm,done}` / `dialog.{encrypt,decrypt,rekey}.field.{password,confirm,old,new}`
 
-## VZ 能力边界约束 **必须遵守**
+## 能力边界约束 **必须遵守**
 
-以下能力 **VZ 不支持**, 即使用户要求也不得尝试实现, 直接提示用户能力边界:
+以下能力 **不支持**, 即使用户要求也不得尝试实现, 直接提示用户能力边界:
 
-- **x86_64 / riscv64 guest** — VZ 只支持原生 arm64, 无 TCG 翻译
-- **VZ 后端不支持 Windows guest** — VZ 无 TPM, Win11 无法装; Win10 ARM 已无 ISO 来源。**Windows arm64 由 QEMU 后端承载**, 详见 `docs/QEMU_INTEGRATION.md`
-- **host USB 设备直通** — VZ API 不支持 `usb-host` 类语义, 只支持虚拟 USB mass storage。若用户要求插 U 盘直通, 明确告知做不到, 建议 `dd` 成 image 再 `VZUSBMassStorageDevice` 挂载
+- **x86_64 / riscv64 guest** — 仅 `qemu-system-aarch64` (Apple Silicon host + AArch64 guest), 不打包其他架构 target, 不做 TCG 翻译
+- **macOS guest** — QEMU 无 Apple Silicon macOS 虚拟化授权路径; macOS guest 已随 VZ 移除, 不支持
+- **host USB 设备直通** — 一期不接 `usb-host`; 若用户要求插 U 盘直通, 建议 `dd` 成 image 再挂虚拟 USB mass storage
 - **多 VM 共享同一 bundle** — 一个 `.hvmz` 同时只能被一个进程打开, 用 fcntl flock 互斥
-- **热插拔 CPU/内存** — VZ 不支持运行时改 CPU/mem 数量, 必须停机重配
+- **热插拔 CPU/内存** — 运行时不改 CPU/mem 数量, 必须停机重配
 
 ## 支持的 Guest OS 约束
 
-- **macOS** — Apple Silicon only, 通过 IPSW + `VZMacOSInstaller` 装机, **仅 VZ 后端**
-- **Linux** — arm64 ISO 启动安装, 装完切 `bootFromDiskOnly` 直走硬盘; **默认 VZ 后端**, 可选 QEMU 后端 (双后端)
-- **Windows** — arm64 only, **仅 QEMU 后端** (VZ 不支持), 配置 `engine=qemu` 强制
-- **其他** — 不支持, 配置不允许保存其他 `GuestOSType`
+- **Linux** — arm64 ISO 启动安装, 装完切 `bootFromDiskOnly` 直走硬盘; QEMU 后端
+- **Windows** — arm64 only, QEMU 后端, 配置 `engine=qemu` (唯一后端)
+- **macOS / 其他** — 不支持; macOS guest 已随 VZ 移除 (QEMU 跑不了 Apple Silicon macOS)
 
 ## QEMU 后端约束 **必须遵守**
 
-QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场景, 详见 `docs/QEMU_INTEGRATION.md`。
+QEMU 是唯一后端, 承载 Linux arm64 + Windows arm64, 详见 `docs/QEMU_INTEGRATION.md`。
 
 - **架构限定**: 仅 `qemu-system-aarch64`(Apple Silicon 宿主机 + AArch64 guest), 不打包 x86_64 / riscv 等其他 `qemu-system-*` 目标
 - **版本锁定**: 包内 QEMU 与 `scripts/qemu-build.sh` 中的 `QEMU_TAG` (当前 `v10.2.0`), EDK2 与 `scripts/edk2-build.sh` 中的 `EDK2_TAG` (当前 `edk2-stable202408`) 严格绑定; 升级任一组件必须同步改 tag + 重跑 build + 重 commit. **EDK2 用 stable202408 不是 202508**: 上游 202508 改了 `OvmfPkg/Library/PlatformBootManagerLibLight` 行为 (无 NV BootOrder 时落 EFI Shell, 不再自动 boot first device), 切到 202508 必须额外 patch 改用 PlatformBootManagerLib full 才能装机.
@@ -238,7 +244,7 @@ QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场�
 - **签名闭环**: `Resources/QEMU/bin/*` 与 `Resources/QEMU/lib/*.dylib` 必须逐文件 codesign; QEMU 二进制使用单独的 `app/Resources/QEMU.entitlements` (含 `com.apple.security.hypervisor`, HVF 必需), **不**与 HVM 主进程共用 entitlement; 整包再 `codesign --deep` 包裹
 - **GPL 合规**: QEMU 上游 commit SHA + tag + license 全文写入 `Resources/QEMU/MANIFEST.json` 与 `Resources/QEMU/LICENSE`; HVM 自身仓库 GitHub 公开即满足"对应版本源码可获取"要求
 - **进程模型**: HVM 主进程通过 `Process` 启动包内 `qemu-system-aarch64`, **不**链接 `libqemu`; QMP 控制 socket 仅监听 unix domain socket (`run/<vm-id>.qmp`), **严禁 TCP 监听**
-- **Bundle 互斥**: QEMU 后端 VM 与 VZ 后端 VM 同样遵守"单 `.hvmz` 单进程"原则, 复用现有 fcntl flock
+- **Bundle 互斥**: VM 遵守"单 `.hvmz` 单进程"原则, 复用现有 fcntl flock
 - **首版优先级**: Linux arm64 跑通通路后再做 Windows arm64; Linux QEMU 通路是 Windows 集成的前置验证
 - **socket_vmnet 网络约束** (hell-vm 同款 osascript admin Touch ID 方案, 详见 `docs/NETWORK.md`):
   - macOS `vmnet` 必须 root, 用 `socket_vmnet` 系统级 launchd daemon 把权限闭环
@@ -253,7 +259,7 @@ QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场�
   - **reconnect-ms=2000 必须保留** (QEMU 7.2+ 选项, 我们 10.2.0 自带): daemon `--restart` / bootout-bootstrap 重起时 socket 短暂断开, QEMU 每 2s 自动重连. 实测 28/30 ping 透传, daemon 重起 12s 期间 0 丢包 — 让 [重启 daemon] 按钮对已连 VM 几乎透明. 去掉这个选项 = 任何 daemon flip 都让 running VM 永久掉网, 用户必须手动停 + 启 VM
   - **bridged 接口名只允许 `[a-zA-Z0-9]+`** (防 shell 注入, install-vmnet-daemons.sh 内部做白名单校验)
   - **共存检测**: 跟 hell-vm 同款**不**做共存检测 — 用户若已装 lima/colima 的 socket_vmnet daemon, install-vmnet-daemons.sh 会 unlink 别家 socket 重建. 用户需先卸别家
-  - VZ 后端 `vmnetBridged` 走 Apple `VZBridgedNetworkDeviceAttachment` (依赖 `com.apple.vm.networking` entitlement, 申请中); `vmnetShared / vmnetHost` 在 VZ 上退化到 NAT
+  - (VZ 后端的 `VZBridgedNetworkDeviceAttachment` / `com.apple.vm.networking` 路径已随 VZ 移除; 所有 vmnet 模式统一走 QEMU `-netdev stream` 接 socket_vmnet daemon)
   - 卸载所有 HVM 装的 daemon: `sudo scripts/install-vmnet-daemons.sh --uninstall` (或 GUI 网络面板 "卸载全部" 按钮)
   - **daemon 在 ≠ bridge 在** (重要陷阱, 2026-05-23 实测撞过): vmnet.framework 内核侧 bridge attach 可能进入"半死"状态 — daemon 进程在跑, socket 文件在, launchctl 视图正常, QEMU 能连上 socket, 但帧根本不打到物理 iface (tcpdump 0 帧 from guest MAC). 多次 bootout/bootstrap 残留是已知触发. **idempotent install 跳过修不了**这条 (它的幂等检查正好绕开破坏性重启). **唯一可靠的修复**: bootout + bootstrap 强制重起 daemon (会断已连 VM 的网络, 不可避免). 入口:
     - GUI: 状态栏 vmnet popup / VM 设置网络面板的 **[重启 daemon]** 按钮 (走 osascript admin)
@@ -285,7 +291,7 @@ QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场�
 详见 [docs/v1/SHARING.md](docs/v1/SHARING.md) + 设计稿 [docs/v3/SHARED_FOLDER.md](docs/v3/SHARED_FOLDER.md).
 
 - **协议固定**: SPICE WebDAV over virtio-serial `org.spice-space.webdav.0` mux 协议. **不**新走 9p / virtiofs / SMB / 其他通路 (一致性 + 共用 UTM Guest Tools 链路)
-- **后端限定**: 仅 QEMU 后端 + Linux / Windows guest. VZ 后端 / macOS guest 启动期 warn + 忽略 sharedFolders (推后 VZ_SHARED_DIRECTORY.md 单独提案)
+- **后端限定**: QEMU 后端 + Linux / Windows guest (唯一后端)
 - **WebDAV server 在 Swift 主进程内自实现**, **不**链 libspice-server / libphodav, **不**给 QEMU 加 `--enable-spice`. 跟 vdagent / qga 同款 single-client 模式 (HVM 主进程作 client 连 QEMU chardev server=on socket); QEMU 不打 spice patch
 - **socket 路径**: `HVMPaths.webdavSocketPath(for: vmId)` = `~/Library/Application Support/HVM/run/<uuid>.webdav.sock`. 禁止业务侧自己拼路径
 - **路径安全 (硬约束)**: `WebDavHandler.toHostURL` / `composeDest` 必须 (a) 拒 `..` / `.` / 空段; (b) `resolvingSymlinksInPath` 后比 `standardizedFileURL.path` 仍在 root 子树. 改这两函数必加 fuzz 测试覆盖 escape 场景
@@ -306,7 +312,7 @@ QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场�
 - 想测 host → guest 文件粘贴 (Cmd+V 通路) 走 `hvm-dbg paste-files <vm> --file ...`(走 SPICE vdagent file_xfer, 落 guest `~/Downloads`; 模拟 GUI Cmd+V 但绕过 NSPasteboard 拦截; 设计稿 `docs/v3/HOST_FILE_PASTE.md`)
 - 需要长期 host ↔ guest 共享 host 目录走"共享目录" (SPICE WebDAV; `hvm-cli shared-folder add` / GUI 详情页 Sharing 区; 详见 `docs/v1/SHARING.md`)
 - 调试 WebDAV 协议层走 `hvm-dbg webdav-test` (44 case 离线单测) + `hvm-dbg webdav-serve --listen` (起 server 监听本地 socket 给 curl / Python client 测)
-- `hvm-dbg` 扩展原则: 零新协议实现, 只复用已暴露的公开 VZ API 封装
+- `hvm-dbg` 扩展原则: 零新协议实现, 只复用已暴露的公开 QEMU/QMP/HDP API 封装
 - 遇到能力缺失**立即扩展 `hvm-dbg`**, 不要退回用 osascript
 
 ### HVM GUI 自动化测试 (HDP-GUI 协议, PR-G 落地后强制)
@@ -341,7 +347,7 @@ QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场�
 
 - **虚拟机自己的 .log (guest 内部产生的)** → 留在 `<bundle>.hvmz/logs/`
   - `console-<date>.log` — guest serial 输出 (内核启动 / systemd / dmesg)
-  - 由 `ConsoleBridge` (VZ) / `QemuConsoleBridge` (QEMU) 写,**这是唯一允许写 bundle/logs/ 的来源**
+  - 由 `QemuConsoleBridge` 写,**这是唯一允许写 bundle/logs/ 的来源**
 
 - **dev 期 / debug 期的所有 .log 同样适用上述规则**: 临时 / 排查 / 试验性日志一律走全局 `HVMPaths.logsDir`,严禁散落到 `/tmp` / 仓库根 / 终端 redirect 到任意路径。Tests 临时文件除外 (落 `NSTemporaryDirectory()` 即可)。
 
@@ -356,22 +362,18 @@ QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场�
 
 ## 磁盘与存储约束
 
-- 磁盘格式按 **engine 分流**, 持久化到 `DiskSpec.format` 字段 (config.yaml):
-  - **VZ 后端**: `raw sparse file` (`.img`) — VZDiskImageStorageDeviceAttachment 只接受 raw, 强约束
-  - **QEMU 后端**: `qcow2` (`.qcow2`) — qemu-img create / resize
-- 创建时主盘文件名 (BundleLayout.mainDiskFileName(for:)):
-  - VZ:   `<bundle>/disks/os.img`,    DiskSpec.format = .raw
-  - QEMU: `<bundle>/disks/os.qcow2`,  DiskSpec.format = .qcow2
-- 创建时数据盘 (BundleLayout.dataDiskFileName(uuid8:engine:)): 同上规则, format 跟随 engine
+- 磁盘格式: **QEMU `qcow2`** (`.qcow2`) — qemu-img create / resize。持久化到 `DiskSpec.format` 字段 (config.yaml)。VZ 的 raw sparse `.img` 路径已随 VZ 移除 (导入 raw 镜像仍按 DiskSpec.format=raw 直挂 QEMU)
+- 创建时主盘文件名 (BundleLayout.mainDiskFileName): `<bundle>/disks/os.qcow2`, DiskSpec.format = .qcow2
+- 创建时数据盘 (BundleLayout.dataDiskFileName): `<bundle>/disks/data-<uuid8>.qcow2`, format = .qcow2
 - 运行时**严格走 config.yaml 的 DiskSpec**:
   - 路径走 `DiskSpec.path` (运行时 helper: `VMConfig.mainDiskURL(in:)`), **禁止**用任何 BundleLayout 常量推断主盘路径
   - 格式走 `DiskSpec.format`, **禁止**靠文件扩展名推断
 - DiskFactory.create / grow 入口要求显式传 `format: DiskFormat` 参数:
-  - .raw → ftruncate
   - .qcow2 → 调 qemu-img (要求传 `qemuImg: URL` 参数, 走 `QemuPaths.qemuImgBinary()`)
-- 老 QEMU VM 已是 raw `.img` (用户从老版本带过来的) 仍可继续运行: DiskSpec.format 字段缺失时按 path 扩展名兜底推断, 不强制迁移
+  - .raw → ftruncate (仅给导入的 raw 镜像; 新建 VM 一律 qcow2)
+- 老 raw `.img` VM (用户从老版本带过来) 仍可继续运行: DiskSpec.format 缺失时按 path 扩展名兜底推断, 不强制迁移
 - ISO 路径**不复制进 bundle**, 只存绝对路径
-- 磁盘扩容: VZ raw 走 ftruncate, QEMU qcow2 走 qemu-img resize, guest 内仍需 `resize2fs` / 分区工具
+- 磁盘扩容: qcow2 走 qemu-img resize (raw 走 ftruncate), guest 内仍需 `resize2fs` / 分区工具
 
 ## 克隆约束 **必须遵守**
 
@@ -381,13 +383,12 @@ QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场�
 - **必须同 APFS 卷**: clonefile(2) 跨卷 `EXDEV`. 提前 `stat.st_dev` 探测, 跨卷抛 `.storage(.crossVolumeNotAllowed)`. 复制到外接 NVMe 等场景需用户手动 `cp -R` 或先在同卷克隆再移动
 - **目标不能预存在**: 抛 `.bundle(.alreadyExists)`. GUI 自动追加 ` 副本 N` 后缀; CLI 用户自己改名
 - **失败一律清目标**: 任意一步抛错 → `removeItem(targetBundle)`. CloneManager **绝不留 partial bundle**
-- **重生字段** (撞车风险, 必须重生): `config.id` (UUID) / `config.displayName` / `config.createdAt` / `auxiliary/machine-identifier` (macOS guest, `VZMacMachineIdentifier()`) / `disks/data-<uuid8>.*` 文件名 + `DiskSpec.path` 同步 / `networks[].macAddress` (默认; `--keep-mac` 可保留)
-- **保留字段** (重生必坏): `auxiliary/hardware-model` (与 IPSW 装机绑定, 重生 = macOS guest 拒启) / `auxiliary/aux-storage` (装机后 NVRAM-equivalent) / `nvram/efi-vars.fd` (EFI BootOrder; 重置 = guest 进 EFI Shell) / `tpm/*` (Win11 swtpm; 重置 = BitLocker 永久失效)
-- **不带文件**: `.lock` (目标首次启动自然创建) / `logs/console-*.log` / `.unattend-stage` + `unattend.iso` (Win 装机产物按需重生) / **`snapshots/` (永不带, 加密 / 明文 / VZ / QEMU 一律. 没有 `--include-snapshots` 选项, D15 用户决策 2026-05-04)**
-- **不做的**: linked clone (VZ raw 不支持 backing) / cross-engine 克隆 / cross-host 克隆 / 在线克隆 / schema 升级 / 删源
-- **macOS guest 双开警告**: 同一 hardware-model + 重生 machine-identifier 理论可同时跑两台, 但 Apple 服务行为未充分验证 (docs/v3/CLONE.md C2 待真机). 用户需理解 iCloud / 序列号风险
+- **重生字段** (撞车风险, 必须重生): `config.id` (UUID) / `config.displayName` / `config.createdAt` / `disks/data-<uuid8>.*` 文件名 + `DiskSpec.path` 同步 / `networks[].macAddress` (默认; `--keep-mac` 可保留)
+- **保留字段** (重生必坏): `nvram/efi-vars.fd` (EFI BootOrder; 重置 = guest 进 EFI Shell) / `tpm/*` (Win11 swtpm; 重置 = BitLocker 永久失效). (VZ 的 `auxiliary/machine-identifier` / `hardware-model` / `aux-storage` 随 macOS guest 移除, 不再适用)
+- **不带文件**: `.lock` (目标首次启动自然创建) / `logs/console-*.log` / `.unattend-stage` + `unattend.iso` (Win 装机产物按需重生) / **`snapshots/` (永不带. 没有 `--include-snapshots` 选项, D15 用户决策 2026-05-04)**
+- **不做的**: linked clone (qcow2 backing 暂不做) / cross-host 克隆 / 在线克隆 / schema 升级 / 删源
 - **Windows guest 克隆**: tpm 状态保留 → 装机后激活通常仍生效, 但部分场景需重新激活. GUI 弹窗 done 态显式提示
-- **加密 VM 克隆 (D9 = 等价复制 + 同密码)**: CLI 路径已支持 (`hvm-cli clone <enc-vm>` 走 prompt 密码 + APFS clonefile 字节级 COW + 用源 sub.config 重新加密 config.yaml.enc). **新 VM 跟源同密码** — 想换密码用户自跑 `hvm-cli rekey`. master KEK / sub keys 全程不变 → LUKS keyslot 同步可解 / swtpm tpm/permall 同步可开. routing JSON 仅改 vmId + displayName, salt/iter 保留. **GUI 暂不接** (PR-11 GUI 加密范围). VZ-sparsebundle 加密 clone 推后 (跟 VZ 加密接入一致). 设计稿 `docs/v3/CLONE_SNAPSHOT_ENCRYPTED.md`
+- **加密 VM 克隆 (D9 = 等价复制 + 同密码)**: CLI 路径已支持 (`hvm-cli clone <enc-vm>` 走 prompt 密码 + APFS clonefile 字节级 COW + 用源 sub.config 重新加密 config.yaml.enc). **新 VM 跟源同密码** — 想换密码用户自跑 `hvm-cli rekey`. master KEK / sub keys 全程不变 → LUKS keyslot 同步可解 / swtpm tpm/permall 同步可开. routing JSON 仅改 vmId + displayName, salt/iter 保留. **GUI 暂不接** (PR-11 GUI 加密范围). 设计稿 `docs/v3/CLONE_SNAPSHOT_ENCRYPTED.md`
 
 ## VM 配置 (config.yaml) 约束 **必须遵守**
 

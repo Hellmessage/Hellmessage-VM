@@ -1,6 +1,5 @@
 // LayoutBadges.swift — sidebar + detail 共用的 VM 状态/OS 徽标映射. M4/M5.
 
-#if NEW_GUI
 
 import SwiftUI
 import HVMControl
@@ -42,4 +41,3 @@ extension RunState {
     }
 }
 
-#endif

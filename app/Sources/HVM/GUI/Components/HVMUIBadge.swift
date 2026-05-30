@@ -21,7 +21,6 @@
 // 视觉: bg = variant 色 12% alpha (subtle, 不抢眼) + text = variant 色 full,
 // 圆角 sm. 跟 Linear / Vercel 等 SaaS 风一致.
 
-#if NEW_GUI
 
 import SwiftUI
 
@@ -125,4 +124,3 @@ struct Badge: View {
 
 }  // extension HVMUI 结束
 
-#endif

@@ -4,7 +4,6 @@
 // NEW_GUI_VM_DETAIL.md 子稿. 运行中不嵌真画面 (标占位, framebuffer 子稿补).
 // 加密 VM 解锁前 config=nil, overview 兜底只显基础信息.
 
-#if NEW_GUI
 
 import SwiftUI
 import HVMControl
@@ -354,4 +353,3 @@ struct DetailOverviewView: View {
     }
 }
 
-#endif

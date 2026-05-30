@@ -20,7 +20,6 @@
 // 跟 SwiftUI 系统 .help() modifier 区别: .help() 是 NSTooltip 风, 风格固定;
 // HVMUI.Tooltip 完全自家绘, 风格跟其他 HVMUI 组件一致.
 
-#if NEW_GUI
 
 import SwiftUI
 
@@ -167,4 +166,3 @@ extension View {
     }
 }
 
-#endif

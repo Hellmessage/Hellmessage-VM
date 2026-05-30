@@ -4,7 +4,6 @@
 // 不用 NavigationSplitView 免系统 vibrancy). 持 NewGUIStore 经 .environment 下传;
 // .onAppear 启 1Hz 轮询. store.lastError 经 .onChange 冒泡成 dialog.alert (M6).
 
-#if NEW_GUI
 
 import SwiftUI
 import HVMControl
@@ -88,4 +87,3 @@ struct MainLayoutView: View {
     }
 }
 
-#endif

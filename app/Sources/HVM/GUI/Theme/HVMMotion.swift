@@ -4,7 +4,6 @@
 // 时长档位 fast (120ms hover/press) / base (200ms 字段 focus / Dialog 进出) /
 // slow (320ms 切页 / Wizard 步骤). spring 仅按钮 press 反馈.
 
-#if NEW_GUI
 
 import SwiftUI
 
@@ -24,4 +23,3 @@ extension HVMTheme {
     }
 }
 
-#endif

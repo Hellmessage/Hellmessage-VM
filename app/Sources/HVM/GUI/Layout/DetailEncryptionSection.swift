@@ -8,7 +8,6 @@
 // 解密/改密 不要求先解锁 (dialog 自收密码). 入口仅 stopped 可点. 动作读 store.selected
 // 防 stale probe 闭包 (同 VM_DETAIL 约束). 事务走 NewGUIEncryptionDialog 三态 dialog.
 
-#if NEW_GUI
 
 import SwiftUI
 import HVMControl
@@ -111,4 +110,3 @@ struct DetailEncryptionSection: View {
     }
 }
 
-#endif

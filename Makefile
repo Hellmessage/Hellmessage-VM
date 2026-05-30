@@ -18,9 +18,9 @@ endif
 endif
 
 # GUI: 老 GUI (app/Sources/HVM/UI/**) 已随 QEMU-only 转向退役删除
-# (docs/v4/QEMU_ONLY_PIVOT.md). 唯一 GUI 走 app/Sources/HVM/GUI/** (NewGUIAppLauncher),
-# 恒透传 -Xswiftc -DNEW_GUI 让 GUI/** 下 #if NEW_GUI 代码参与编译. GUI=old 选项已废弃.
-SWIFT_DEFINES := -Xswiftc -DNEW_GUI
+# (docs/v4/QEMU_ONLY_PIVOT.md). 唯一 GUI 走 app/Sources/HVM/GUI/** (NewGUIAppLauncher).
+# 老的 `#if NEW_GUI` 条件编译 guards 已全部去除 (GUI/** 无条件编译), 不再需要 -DNEW_GUI.
+SWIFT_DEFINES :=
 # QEMU 后端产物 (由 scripts/qemu-build.sh 生成, 仓库 ignore, 详见 docs/QEMU_INTEGRATION.md)
 # stage 即裁剪 + 签名 + LICENSE/MANIFEST 后的最终成品, bundle.sh 直接拷进 .app
 # 不再有 third_party/qemu/ 中间 vendor 层
@@ -66,8 +66,7 @@ help:
 	@echo "  make build-all  — make edk2 + make qemu + make build (发布完整流程)"
 
 # 1. SwiftPM 编译全部 executable
-# $(SWIFT_DEFINES) 为空 (GUI=old) 时 swift build 拿到空字符串, 等价不传; GUI=new 时
-# 透传 `-Xswiftc -DNEW_GUI` 让 main.swift 走新 GUI 分支
+# $(SWIFT_DEFINES) 现为空 (GUI guards 已去, 不再需要条件编译 flag); 保留变量占位以防未来需要
 compile:
 	swift build --package-path $(PKG_DIR) -c $(CONFIGURATION) $(SWIFT_DEFINES) --product HVM
 	swift build --package-path $(PKG_DIR) -c $(CONFIGURATION) $(SWIFT_DEFINES) --product hvm-cli

@@ -36,7 +36,6 @@
 //   - setter 接 label 字符串, 内部 first(where: $0.label == X) 选中
 //   - hvm-dbg gui type --identifier X --text "VZ (推荐)" 选 VZ 选项
 
-#if NEW_GUI
 
 import SwiftUI
 import AppKit
@@ -537,4 +536,3 @@ private struct ProbeSelectModifier<Value: Hashable>: ViewModifier {
     }
 }
 
-#endif

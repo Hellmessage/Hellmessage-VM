@@ -3,7 +3,6 @@
 // 行: 运行态圆点 + displayName + guestOS badge + 加密锁图标; 选中行 bgHover + 左侧
 // accent 竖条. 点击选中, 右键 context menu (启停/删除). probeID `vmlist.row.item-<id>`.
 
-#if NEW_GUI
 
 import SwiftUI
 import HVMControl
@@ -173,4 +172,3 @@ private struct SidebarRow: View {
     private func select() { store.selectedID = vm.id }
 }
 
-#endif

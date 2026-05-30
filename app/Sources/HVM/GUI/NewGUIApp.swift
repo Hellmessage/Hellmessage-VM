@@ -7,7 +7,6 @@
 // 给设计稿 docs/v3/NEW_GUI.md PR-T1 + T2 验收用. 后续 PR-C* 落基础组件时,
 // 这里逐步替换为业务页 (sidebar + detail) 骨架, 演示页留 Components Showcase 子稿.
 
-#if NEW_GUI
 
 import AppKit
 import SwiftUI
@@ -1235,4 +1234,3 @@ private struct MotionDemoTile: View {
     }
 }
 
-#endif

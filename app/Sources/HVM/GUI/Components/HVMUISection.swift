@@ -32,7 +32,6 @@
 // 模块化 (R7): 一文件 = 一组件, footer 用 trailing closure label 让 API 自然.
 // 没 footer 时用 EmptyView, Swift 类型推断处理.
 
-#if NEW_GUI
 
 import SwiftUI
 
@@ -227,4 +226,3 @@ struct Section<Content: View, Footer: View>: View {
 
 }  // extension HVMUI 结束
 
-#endif

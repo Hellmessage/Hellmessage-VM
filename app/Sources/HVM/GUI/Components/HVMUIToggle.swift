@@ -26,7 +26,6 @@
 // probe: probeID 非 nil 时挂 .hvmProbe(action: .toggle(getter, setter)).
 // hvm-dbg gui click --identifier X 走 setter 取反; gui read 取 getter.
 
-#if NEW_GUI
 
 import SwiftUI
 import HVMGuiProbe
@@ -219,4 +218,3 @@ private struct ProbeToggleModifier: ViewModifier {
     }
 }
 
-#endif

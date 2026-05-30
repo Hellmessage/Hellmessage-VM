@@ -4,7 +4,6 @@
 // 点击行展开编辑表单 (模式/设备型号/MAC/桥接接口). 标题右侧 [添加网卡].
 // 编辑 networks draft (绑定自 DetailOverviewView), 统一 saveFooter 保存.
 
-#if NEW_GUI
 
 import SwiftUI
 import HVMBundle
@@ -210,4 +209,3 @@ struct DetailNetworkSection: View {
     }
 }
 
-#endif

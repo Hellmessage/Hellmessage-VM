@@ -3,7 +3,6 @@
 // 业务侧禁止 .border(width: 1, ...) 硬数字, 一律走 HVMTheme.border.<name>
 // + HVMTheme.color.borderDefault / borderFocus / borderError.
 
-#if NEW_GUI
 
 import CoreGraphics
 
@@ -14,4 +13,3 @@ extension HVMTheme {
     }
 }
 
-#endif

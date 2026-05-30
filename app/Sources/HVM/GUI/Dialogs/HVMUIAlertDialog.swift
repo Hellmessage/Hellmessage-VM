@@ -46,7 +46,6 @@
 //     <probeID>.close   — X 关闭按钮
 //   - 业务侧不需要自己传子按钮 probeID
 
-#if NEW_GUI
 
 import SwiftUI
 
@@ -211,4 +210,3 @@ extension HVMUI.DialogPresenter {
     }
 }
 
-#endif

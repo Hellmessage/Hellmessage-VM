@@ -45,7 +45,6 @@
 //   <probeID>.cancel  — 副按钮
 //   <probeID>.close   — X 关闭
 
-#if NEW_GUI
 
 import SwiftUI
 
@@ -202,4 +201,3 @@ extension HVMUI.DialogPresenter {
     }
 }
 
-#endif

@@ -11,7 +11,6 @@
 //     (切 hvm-gpu-ramfb-pci 走 viogpudo)
 // 仅 stopped 可改 (boot/ISO 是启动期拍板, 运行中改无意义).
 
-#if NEW_GUI
 
 import SwiftUI
 import AppKit
@@ -188,4 +187,3 @@ struct DetailBootSection: View {
     }
 }
 
-#endif

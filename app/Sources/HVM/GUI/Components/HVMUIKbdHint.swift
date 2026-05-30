@@ -14,7 +14,6 @@
 //   .sm — 高 16, font monoSm (12), padding xs (4) (toolbar 内联)
 //   .md — 高 20, font mono  (13), padding sm (8)  (default, dialog button 旁)
 
-#if NEW_GUI
 
 import SwiftUI
 
@@ -101,4 +100,3 @@ struct KbdHint: View {
 
 }  // extension HVMUI 结束
 
-#endif

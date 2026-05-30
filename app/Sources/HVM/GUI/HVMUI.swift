@@ -17,8 +17,6 @@
 // 各组件按维度独立文件 (HVMUIButton.swift / HVMUITextField.swift / 等), 通过
 // extension HVMUI 加 nested struct, 实现"一组件一文件"模块化.
 
-#if NEW_GUI
 
 enum HVMUI {}
 
-#endif

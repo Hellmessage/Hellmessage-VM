@@ -12,7 +12,6 @@
 // (明文) 直到再次点击. probe 仍按 SecureField 通路, getter/setter 透当前 binding
 // (不论明文还是密文 SwiftUI 内部都是 String).
 
-#if NEW_GUI
 
 import SwiftUI
 import HVMGuiProbe
@@ -172,4 +171,3 @@ private struct ProbeSecureFieldModifier: ViewModifier {
     }
 }
 
-#endif

@@ -54,7 +54,6 @@
 //   <probeID>.close     — 右上 X
 //   <probeID>.step.<i>  — 步骤指示器第 i 个 chip (只在已完成步骤可点)
 
-#if NEW_GUI
 
 import SwiftUI
 
@@ -320,4 +319,3 @@ extension HVMUI.DialogPresenter {
     }
 }
 
-#endif

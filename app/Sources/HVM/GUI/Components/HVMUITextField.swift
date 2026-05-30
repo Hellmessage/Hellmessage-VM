@@ -29,7 +29,6 @@
 // probe: probeID 非 nil 时挂 .hvmProbe(action: .textField(getter, setter)),
 // hvm-dbg gui type --identifier X --text Y 走 setter 改 binding.
 
-#if NEW_GUI
 
 import SwiftUI
 import HVMGuiProbe
@@ -266,4 +265,3 @@ private struct ProbeTextFieldModifier: ViewModifier {
     }
 }
 
-#endif

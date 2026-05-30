@@ -36,7 +36,6 @@
 // probe: probeID 非 nil + 非 disabled + 非 loading 时挂 .button(action).
 // hvm-dbg gui click --identifier X 走 action.
 
-#if NEW_GUI
 
 import SwiftUI
 import HVMGuiProbe
@@ -304,4 +303,3 @@ private struct HVMButtonPressStyle: ButtonStyle {
     }
 }
 
-#endif

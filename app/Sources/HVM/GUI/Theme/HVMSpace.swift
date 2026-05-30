@@ -2,7 +2,6 @@
 //
 // 业务侧禁止 .padding(8) 硬数字, 一律走 HVMTheme.space.<name>.
 
-#if NEW_GUI
 
 import CoreGraphics
 
@@ -18,4 +17,3 @@ extension HVMTheme {
     }
 }
 
-#endif

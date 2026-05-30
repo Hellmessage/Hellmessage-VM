@@ -8,7 +8,6 @@
 // 嵌进 HVMTheme namespace, 避免跟老 GUI 顶层 `public enum HVMColor`
 // (UI/Style/Theme.swift) 撞名.
 
-#if NEW_GUI
 
 import SwiftUI
 
@@ -70,4 +69,3 @@ extension Color {
     }
 }
 
-#endif

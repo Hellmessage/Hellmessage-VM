@@ -21,7 +21,6 @@
 // SF Symbol 默认 weight = .medium (Linear / Vercel 同款 stroke icon 风),
 // 不用 .regular (太细) 也不用 .bold (太粗).
 
-#if NEW_GUI
 
 import SwiftUI
 
@@ -87,4 +86,3 @@ struct Icon: View {
 
 }  // extension HVMUI 结束
 
-#endif

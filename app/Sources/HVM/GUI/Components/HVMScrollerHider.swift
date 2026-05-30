@@ -12,7 +12,6 @@
 //
 // 纯 UI 工具 (AppKit), 不引业务. 用法: ScrollView { content.hvmHideScroller() }
 
-#if NEW_GUI
 
 import SwiftUI
 import AppKit
@@ -87,4 +86,3 @@ private struct ScrollerHider: NSViewRepresentable {
     }
 }
 
-#endif

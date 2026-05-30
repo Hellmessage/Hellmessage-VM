@@ -5,7 +5,6 @@
 // 停机 (chardev 不支持热挂, CLAUDE.md 约束) → 仅 stopped 可增删/改 readOnly.
 // 增删走 store.saveConfig (自动分流明文/加密 + requireStopped=true 拒 running).
 
-#if NEW_GUI
 
 import SwiftUI
 import AppKit
@@ -177,4 +176,3 @@ struct DetailSharingSection: View {
     }
 }
 
-#endif

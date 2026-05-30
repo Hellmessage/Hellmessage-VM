@@ -8,7 +8,6 @@
 // 字段变时重绘. 1Hz refresh 内 `if fresh != vms` 守卫 (VMSummary Equatable), 列表无
 // 变化不赋值, 保 P0-2 帧率.
 
-#if NEW_GUI
 
 import Foundation
 import Observation
@@ -420,4 +419,3 @@ public final class NewGUIStore {
     }
 }
 
-#endif

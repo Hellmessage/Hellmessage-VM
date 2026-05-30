@@ -10,7 +10,6 @@
 //
 // 入口: DetailEncryptionSection 通过 dialog.present { handle in NewGUIEncryptionDialog(...) }.
 
-#if NEW_GUI
 
 import SwiftUI
 import HVMControl
@@ -302,4 +301,3 @@ struct NewGUIEncryptionDialog: View {
     }
 }
 
-#endif

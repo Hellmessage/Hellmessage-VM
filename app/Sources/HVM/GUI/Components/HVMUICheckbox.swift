@@ -24,7 +24,6 @@
 //
 // 键盘 + a11y: 同 HVMUI.Toggle, 通过 SwiftUI.Button wrap.
 
-#if NEW_GUI
 
 import SwiftUI
 import HVMGuiProbe
@@ -202,4 +201,3 @@ private struct ProbeCheckboxModifier: ViewModifier {
     }
 }
 
-#endif
