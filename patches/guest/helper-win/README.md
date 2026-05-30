@@ -8,7 +8,7 @@ HVM 给 Windows guest 的 user-session helper service.
 helper 把 guest 端文件路径写进 Windows clipboard, 用户在 guest 任意 app Ctrl+V
 触发原生 paste (Explorer 拷贝文件 / Telegram 上传图片 / Word 嵌入...).
 
-设计稿: [`docs/v3/HOST_FILE_CLIPBOARD.md`](../docs/v3/HOST_FILE_CLIPBOARD.md)
+设计稿: [`docs/v3/HOST_FILE_CLIPBOARD.md`](../../../docs/v3/HOST_FILE_CLIPBOARD.md)
 
 ---
 
@@ -45,7 +45,7 @@ which aarch64-w64-mingw32-clang
 ### 编译
 
 ```bash
-cd guest-helper
+cd patches/guest/helper-win
 cargo build --target aarch64-pc-windows-gnullvm --release
 # 产物: target/aarch64-pc-windows-gnullvm/release/hvm-guest-helper.exe (~500 KB)
 ```
@@ -60,8 +60,8 @@ cargo check --target aarch64-pc-windows-gnullvm
 
 ## 在 HVM 仓库里的位置
 
-- 源码: `guest-helper/`
-- 产物 (commit 进仓库, 给没装 llvm-mingw 的用户直接用): `guest-helper/dist/aarch64/hvm-guest-helper.exe`
+- 源码: `patches/guest/helper-win/`
+- 产物 (commit 进仓库, 给没装 llvm-mingw 的用户直接用): `patches/guest/helper-win/dist/aarch64/hvm-guest-helper.exe`
 - HVM `make install` 自动把 dist EXE 拷贝进 `HVM.app/Contents/Resources/GuestHelper/`
 - 首次启动 Windows guest 时 HVM 通过 QGA 把 EXE 推到 guest + 注册自启 (详见设计稿 §4.5)
 

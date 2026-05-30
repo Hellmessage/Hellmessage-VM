@@ -97,8 +97,8 @@ fi
 #      Win guest 跑没 helper 也只是文件剪贴板不可用, 其他功能不受影响).
 #      libunwind.dll: helper EXE 用 llvm-mingw 链 LLVM 异常 unwinder, 默认动态依赖 libunwind.dll;
 #      不带这个 DLL Windows 启 helper 直接静默死掉 (api-ms-win-* DLL 加载失败前 ldr 就 abort).
-GH_SRC_EXE="$ROOT/guest-helper/dist/aarch64/hvm-guest-helper.exe"
-GH_SRC_DLL="$ROOT/guest-helper/dist/aarch64/libunwind.dll"
+GH_SRC_EXE="$ROOT/patches/guest/helper-win/dist/aarch64/hvm-guest-helper.exe"
+GH_SRC_DLL="$ROOT/patches/guest/helper-win/dist/aarch64/libunwind.dll"
 if [ -f "$GH_SRC_EXE" ]; then
     mkdir -p "$RESOURCES/GuestHelper"
     cp "$GH_SRC_EXE" "$RESOURCES/GuestHelper/hvm-guest-helper.exe"
