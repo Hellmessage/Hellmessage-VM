@@ -36,7 +36,7 @@ HVM_CLI_BIN     := $(SWIFT_BUILD_DIR)/hvm-cli
 HVM_DBG_BIN     := $(SWIFT_BUILD_DIR)/hvm-dbg
 BUNDLE_STAMP    := $(BUILD_DIR)/.bundle-stamp
 
-.PHONY: all build bundle compile dev verify clean help icon register-types qemu qemu-clean edk2 edk2-clean build-all xed install uninstall run-app open dev-open
+.PHONY: all build bundle compile dev verify clean help icon register-types qemu qemu-clean edk2 edk2-clean build-all xed xcode-gen open-xcode install uninstall run-app open dev-open
 
 # 默认: release 模式 + 完整 .app 签名
 all: build
@@ -50,6 +50,8 @@ help:
 	@echo "  make verify     — smoke test, 验证 .app 可启动"
 	@echo "  make icon       — 从 app/Resources/AppIcon-src.png 生成 AppIcon.icns"
 	@echo "  make xed        — Xcode 打开 SwiftPM 包 (开发期辅助, 非权威构建路径)"
+	@echo "  make xcode-gen  — 生成 app/HVM.xcodeproj (XcodeGen; team ID 走 makefile.local APPLE_DEV_TEAM; DerivedData → app/.build/xcode)"
+	@echo "  make open-xcode — 生成并用 Xcode 打开工程"
 	@echo "  make install    — 把 build/HVM.app 安装到 /Applications/ (覆盖旧版)"
 	@echo "  make uninstall  — 从 /Applications/ 卸载 HVM.app"
 	@echo "  make run-app    — build + 重启 build/HVM.app GUI 主进程 (release; 不动 host 子进程; 不写 /Applications/)"
@@ -151,6 +153,30 @@ build-all:
 # Xcode 打开 SwiftPM 包 (开发期编辑/补全用, 产物无 entitlement 不签名; 真实运行仍走 make build)
 xed:
 	xed $(PKG_DIR)/Package.swift
+
+# 生成 Xcode 工程 app/HVM.xcodeproj (XcodeGen, 开发期辅助; 非权威构建, 仍走 make build).
+# team ID 从 makefile.local 的 APPLE_DEV_TEAM 注入 DEVELOPMENT_TEAM; 不硬编码进提交文件.
+xcode-gen:
+	@command -v xcodegen >/dev/null 2>&1 || { echo "✗ 需要 xcodegen (brew install xcodegen)"; exit 1; }
+	@if [ -z "$(strip $(APPLE_DEV_TEAM))" ]; then \
+		echo "✗ 未设置 APPLE_DEV_TEAM. 请在 makefile.local (git-ignore) 写入:"; \
+		echo "      APPLE_DEV_TEAM := <你的 Apple 开发者 Team ID>"; \
+		exit 1; \
+	fi
+	@cd $(PKG_DIR) && DEVELOPMENT_TEAM="$(APPLE_DEV_TEAM)" xcodegen generate
+	@# GUI 的 DerivedData 重定向到 app/.build/xcode — 写 per-user IDEWorkspaceUserSettings.
+	@# (仅 Xcode.app GUI 读; xcodebuild 不读此设置, 只认 -derivedDataPath)
+	@USERD="$(PKG_DIR)/HVM.xcodeproj/project.xcworkspace/xcuserdata/$$(id -un).xcuserdatad"; \
+		mkdir -p "$$USERD"; \
+		sed 's|__DERIVED_DATA_ABS__|$(abspath $(PKG_DIR))/.build/xcode|' \
+			$(PKG_DIR)/xcode-support/WorkspaceSettings.xcsettings > "$$USERD/WorkspaceSettings.xcsettings"
+	@echo "✔ 已生成 $(PKG_DIR)/HVM.xcodeproj (DEVELOPMENT_TEAM 已注入)"
+	@echo "  GUI DerivedData → $(PKG_DIR)/.build/xcode (Xcode.app 生效; 首次请确认)"
+	@echo "  打开: make open-xcode"
+
+# 生成 (确保 team / DerivedData 注入) 并用 Xcode 打开工程.
+open-xcode: xcode-gen
+	open $(PKG_DIR)/HVM.xcodeproj
 
 # 安装到 /Applications/ (覆盖旧版). admin 用户对 /Applications 有写权限, 不需 sudo;
 # /Applications/HVM.app 若存在则先删 (.app 是 directory, 不能直接 cp 覆盖).

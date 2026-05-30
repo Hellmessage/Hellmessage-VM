@@ -1,0 +1,6 @@
+// 显式 modulemap — 等价于 SwiftPM 对单 header C target 的自动合成行为,
+// 同时供 Xcode 工程 (make xcode-gen) 的 MODULEMAP_FILE 引用。两边一致。
+module HVMScmRecv {
+    header "HVMScmRecv.h"
+    export *
+}
