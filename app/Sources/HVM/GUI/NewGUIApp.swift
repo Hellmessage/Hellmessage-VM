@@ -53,6 +53,10 @@ final class NewGUIAppDelegate: NSObject, NSApplicationDelegate {
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
+        // 窗口出现时 AppKit 默认把首个文本框 (详情页 CPU 输入框) 设为 firstResponder
+        // 并选中内容 — 不想要这个自动聚焦. async 到下一 runloop (SwiftUI 初始布局后) 清掉.
+        DispatchQueue.main.async { [weak win] in win?.makeFirstResponder(nil) }
+
         // HDP-GUI probe server (HVM_GUI_PROBE=1 时 unix socket 接 hvm-dbg gui).
         // 老 GUI 在 HVMAppDelegate 启的; 新 GUI 也得启, 不然 hvm-dbg gui ping 连不上.
         // PR-C1 起新 GUI 接入自动化测试通路.
