@@ -39,6 +39,7 @@
 #if NEW_GUI
 
 import SwiftUI
+import AppKit
 import HVMGuiProbe
 
 extension HVMUI {
@@ -147,6 +148,16 @@ struct Select<Value: Hashable>: View {
     @State private var instanceID = UUID()
     /// 全局协调器 ref (singleton, MainActor isolated).
     private let coordinator = SelectCoordinator.shared
+
+    /// 触发器底边在窗口内的 Y (.global 坐标, 自测; 纯 UI/AppKit, 不依赖业务注入).
+    /// 用来按"触发器下方可用空间"动态限下拉高度, 防超出窗口被裁 (向下展开 + 内滚).
+    @State private var triggerMaxYGlobal: CGFloat = 0
+    private var dropdownMaxHeight: CGFloat {
+        let winH = NSApp.keyWindow?.contentView?.bounds.height ?? 0
+        guard winH > 0, triggerMaxYGlobal > 0 else { return 280 }
+        let below = winH - triggerMaxYGlobal - HVMTheme.space.lg   // 触发器下方到窗口底的余量
+        return max(120, min(280, below))                            // 至少 120 (太矮没意义), 至多 280
+    }
 
     private var currentOption: SelectOption<Value>? {
         guard let selection else { return nil }
@@ -264,6 +275,14 @@ struct Select<Value: Hashable>: View {
         // 父 view frame 计算, popover 完全脱离 layout flow 浮在 trigger 下方,
         // 不会顶下面 fieldRow / sectionCard / VStack sibling. 配合外层 zIndex
         // 反向让 popover 视觉压在所有下方控件之上.
+        // 测触发器底边在窗口的 Y, 给 dropdownMaxHeight 算可用空间. onChange 不在 layout 期改 state.
+        .background(
+            GeometryReader { g in
+                Color.clear.onChange(of: g.frame(in: .global).maxY, initial: true) { _, ny in
+                    triggerMaxYGlobal = ny
+                }
+            }
+        )
         .overlay(alignment: .topLeading) {
             if isOpen {
                 PopoverContent(
@@ -274,7 +293,8 @@ struct Select<Value: Hashable>: View {
                     highlightedIndex: $highlightedIndex,
                     currentValue: selection,
                     onSelect: selectOption,
-                    onClose: { isOpen = false }
+                    onClose: { isOpen = false },
+                    maxHeight: dropdownMaxHeight
                 )
                 // popover 宽度 = trigger 宽度: .frame(maxWidth: .infinity) +
                 // fixedSize(horizontal: false) 让 horizontal 受 .overlay 容器
@@ -320,6 +340,8 @@ private struct PopoverContent<Value: Hashable>: View {
     let currentValue: Value?
     let onSelect: (HVMUI.SelectOption<Value>) -> Void
     let onClose: () -> Void
+    /// 下拉列表最大高 — 外层按"触发器下方可用空间"动态算, 防超出窗口被裁 (向下展开 + 内滚)
+    var maxHeight: CGFloat = 280
 
     @FocusState private var searchFocused: Bool
 
@@ -350,8 +372,10 @@ private struct PopoverContent<Value: Hashable>: View {
                         }
                     }
                     .padding(.vertical, HVMTheme.space.xs)
+                    .hvmHideScroller()   // 下拉内部滚动条也隐藏 (保留滚动)
                 }
-                .frame(maxHeight: 280)
+                .frame(maxHeight: maxHeight)
+                .scrollIndicators(.hidden)
             }
         }
         .background(HVMTheme.color.bgOverlay)

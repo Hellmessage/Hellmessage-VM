@@ -27,7 +27,9 @@ struct NewGUISidebarView: View {
                         }
                         .padding(.vertical, HVMTheme.space.sm)
                         .padding(.horizontal, HVMTheme.space.sm)
+                        .hvmHideScroller()
                     }
+                    .scrollIndicators(.hidden)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -156,7 +158,7 @@ private struct SidebarRow: View {
             Button("强制停止") { store.kill(vm) }
         }
         Divider()
-        Button("删除…", role: .destructive) {
+        Button("删除", role: .destructive) {
             VMActions.confirmDelete(vm, store: store, dialog: dialog)
         }
         .disabled(vm.runState == .running)

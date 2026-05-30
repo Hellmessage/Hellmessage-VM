@@ -59,6 +59,22 @@ enum VMActions {
         }
     }
 
+    /// 强制停止 (拔电源, 可能丢数据) — 破坏性, 二次确认
+    static func confirmKill(_ vm: VMSummary, store: NewGUIStore, dialog: HVMUI.DialogPresenter) {
+        Task { @MainActor in
+            let r = await dialog.confirm(
+                title: "强制停止?",
+                message: "强制停止相当于拔电源, 可能导致 guest 数据损坏. 确定继续?",
+                confirmLabel: "强制停止",
+                destructive: true,
+                probeID: "detail.confirm.kill-\(vm.id.uuidString)"
+            )
+            if case .confirmed = r {
+                if let cur = store.selected { store.kill(cur) }
+            }
+        }
+    }
+
     // MARK: - 磁盘 (V4)
 
     /// 添加数据盘: 弹大小输入 → store.addDisk

@@ -49,6 +49,8 @@ struct Section<Content: View, Footer: View>: View {
     private let variant: Variant
     private let content: Content
     private let footer: Footer
+    /// 标题行右侧 accessory (例 "添加数据盘" 亮色按钮). 类型擦除避免泛型爆炸 (低频).
+    private let headerTrailing: AnyView?
 
     // 无 footer 便利 init
     init(_ title: String? = nil,
@@ -60,6 +62,21 @@ struct Section<Content: View, Footer: View>: View {
         self.variant = variant
         self.content = content()
         self.footer = EmptyView()
+        self.headerTrailing = nil
+    }
+
+    // 带 headerTrailing init (标题右侧放按钮等)
+    init<HT: View>(_ title: String? = nil,
+                   description: String? = nil,
+                   variant: Variant = .default,
+                   @ViewBuilder headerTrailing: () -> HT,
+                   @ViewBuilder content: () -> Content) where Footer == EmptyView {
+        self.title = title
+        self.description = description
+        self.variant = variant
+        self.content = content()
+        self.footer = EmptyView()
+        self.headerTrailing = AnyView(headerTrailing())
     }
 
     // 带 footer init
@@ -73,11 +90,12 @@ struct Section<Content: View, Footer: View>: View {
         self.variant = variant
         self.content = content()
         self.footer = footer()
+        self.headerTrailing = nil
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: HVMTheme.space.md) {
-            if title != nil || description != nil {
+            if title != nil || description != nil || headerTrailing != nil {
                 headerBlock
             }
 
@@ -96,16 +114,22 @@ struct Section<Content: View, Footer: View>: View {
 
     @ViewBuilder
     private var headerBlock: some View {
-        VStack(alignment: .leading, spacing: HVMTheme.space.xs) {
-            if let title {
-                Text(title)
-                    .font(HVMTheme.font.lg)
-                    .foregroundStyle(HVMTheme.color.textPrimary)
+        HStack(alignment: .center, spacing: HVMTheme.space.md) {
+            VStack(alignment: .leading, spacing: HVMTheme.space.xs) {
+                if let title {
+                    Text(title)
+                        .font(HVMTheme.font.lg)
+                        .foregroundStyle(HVMTheme.color.textPrimary)
+                }
+                if let description {
+                    Text(description)
+                        .font(HVMTheme.font.sm)
+                        .foregroundStyle(HVMTheme.color.textSecondary)
+                }
             }
-            if let description {
-                Text(description)
-                    .font(HVMTheme.font.sm)
-                    .foregroundStyle(HVMTheme.color.textSecondary)
+            if let headerTrailing {
+                Spacer(minLength: HVMTheme.space.sm)
+                headerTrailing
             }
         }
     }
