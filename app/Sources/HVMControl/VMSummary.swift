@@ -38,6 +38,24 @@ public struct VMSummary: Identifiable, Sendable, Equatable {
 
     public var isEncrypted: Bool { encryptionScheme != nil }
 
+    /// 加密 VM 解锁后: 用解密出的明文 config 覆盖 (config/cpu/mem/disk 填上), 但保留
+    /// encryptionScheme (仍是加密 VM, 锁图标/badge 不变). 给 NewGUIStore overlay 用.
+    public func withUnlockedConfig(_ cfg: VMConfig) -> VMSummary {
+        VMSummary(
+            id: id,
+            bundleURL: bundleURL,
+            displayName: displayName,
+            guestOS: cfg.guestOS,
+            engine: cfg.engine,
+            runState: runState,
+            encryptionScheme: encryptionScheme,
+            config: cfg,
+            cpuCount: cfg.cpuCount,
+            memoryMiB: cfg.memoryMiB,
+            mainDiskLogicalGiB: cfg.disks.first?.sizeGiB
+        )
+    }
+
     public init(
         id: UUID,
         bundleURL: URL,

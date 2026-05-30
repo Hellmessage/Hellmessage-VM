@@ -11,12 +11,17 @@ import HVMControl
 
 @MainActor
 enum VMActions {
-    /// 启动. 加密 VM 先弹密码 InputDialog 再 store.start; 明文直启.
+    /// 启动. 明文直启; 加密 VM 已解锁则复用缓存密码, 否则弹密码 InputDialog.
     static func start(_ vm: VMSummary,
                       store: NewGUIStore,
                       dialog: HVMUI.DialogPresenter) {
         guard vm.isEncrypted else {
             store.start(vm, password: nil)
+            return
+        }
+        // 已解锁: 复用缓存密码, 不再弹
+        if let pw = store.unlockedPassword(vm.id) {
+            store.start(vm, password: pw)
             return
         }
         Task { @MainActor in
@@ -30,6 +35,25 @@ enum VMActions {
             )
             if case .submitted(let values) = r, let pw = values.first, !pw.isEmpty {
                 store.start(vm, password: pw)
+            }
+        }
+    }
+
+    /// 解锁加密 VM (查看/编辑配置用): 弹密码 → store.unlock.
+    static func unlock(_ vm: VMSummary,
+                       store: NewGUIStore,
+                       dialog: HVMUI.DialogPresenter) {
+        Task { @MainActor in
+            let r = await dialog.input(
+                title: "解锁加密 VM",
+                fields: [HVMUI.InputField(label: "密码",
+                                          placeholder: "请输入密码",
+                                          secure: true)],
+                confirmLabel: "解锁",
+                probeID: "detail.unlock.password-\(vm.id.uuidString)"
+            )
+            if case .submitted(let values) = r, let pw = values.first, !pw.isEmpty {
+                await store.unlock(vm, password: pw)
             }
         }
     }

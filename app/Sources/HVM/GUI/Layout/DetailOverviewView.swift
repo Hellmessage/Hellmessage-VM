@@ -16,9 +16,10 @@ struct DetailOverviewView: View {
     // 资源 section 编辑 draft (字符串, 校验时转 Int). 切换 VM 时 reset.
     @State private var draftCPU = ""
     @State private var draftMemGiB = ""
-    // 已加载 draft 的 VM id — 防 1Hz 刷新触发 detail 重新 onAppear 时误清用户未保存编辑.
-    // 只在选中 VM 真变化时 reset, 而非每次 appear/render.
+    // 已加载 draft 的 VM id + 当时 config 是否存在 — 防 1Hz 刷新误清未保存编辑;
+    // 但解锁后 config 由 nil → 非 nil 时要重新 sync (id 没变, 靠 hasConfig 触发).
     @State private var draftLoadedID: UUID? = nil
+    @State private var draftLoadedHasConfig = false
 
     var body: some View {
         ZStack {
@@ -59,17 +60,21 @@ struct DetailOverviewView: View {
             .padding(HVMTheme.space.xl)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        // 仅在选中 VM 真变化时同步 draft (丢弃上一个 VM 未保存编辑); 1Hz 刷新不清
+        // 选中 VM 变化 / 解锁后 config 出现时同步 draft; 1Hz 刷新不清 (靠守卫)
         .onChange(of: store.selectedID) { _, _ in syncDraftIfNeeded() }
+        .onChange(of: store.selected?.config?.cpuCount) { _, _ in syncDraftIfNeeded() }
         .onAppear { syncDraftIfNeeded() }
     }
 
     // MARK: - 资源编辑 (V3)
 
-    /// 选中 VM 变化才 reset draft (用 draftLoadedID 守卫, 防刷新误清未保存编辑)
+    /// 选中 VM 真变化 / config 由无到有 (解锁) 才 reset draft; 守卫防 1Hz 刷新误清未保存编辑
     private func syncDraftIfNeeded() {
-        guard draftLoadedID != store.selectedID else { return }
-        draftLoadedID = store.selectedID
+        let curID = store.selectedID
+        let hasConfig = store.selected?.config != nil
+        guard draftLoadedID != curID || draftLoadedHasConfig != hasConfig else { return }
+        draftLoadedID = curID
+        draftLoadedHasConfig = hasConfig
         resetDraft()
     }
 
@@ -200,6 +205,21 @@ struct DetailOverviewView: View {
                              probeID: "detail.button.kill") {
                     if let cur = store.selected { store.kill(cur) }
                 }
+            } else if vm.isEncrypted && !store.isUnlocked(vm.id) {
+                // 加密未解锁: 解锁 (+ 删除不需密钥)
+                HVMUI.Button("解锁", variant: .primary, icon: "lock.open",
+                             isLoading: store.isUnlocking(vm.id),
+                             probeID: "detail.button.unlock") {
+                    if let cur = store.selected {
+                        VMActions.unlock(cur, store: store, dialog: dialog)
+                    }
+                }
+                HVMUI.Button("删除", variant: .destructive, icon: "trash",
+                             probeID: "detail.button.delete") {
+                    if let cur = store.selected {
+                        VMActions.confirmDelete(cur, store: store, dialog: dialog)
+                    }
+                }
             } else {
                 HVMUI.Button("启动", variant: .primary, icon: "play.fill",
                              probeID: "detail.button.start") {
@@ -212,6 +232,13 @@ struct DetailOverviewView: View {
                     if let cur = store.selected {
                         VMActions.confirmDelete(cur, store: store, dialog: dialog)
                     }
+                }
+            }
+            // 已解锁加密 VM: 锁定按钮 (任何 runState)
+            if vm.isEncrypted && store.isUnlocked(vm.id) {
+                HVMUI.Button("锁定", variant: .secondary, icon: "lock",
+                             probeID: "detail.button.lock") {
+                    store.lock(vm.id)
                 }
             }
         }

@@ -193,7 +193,8 @@ struct InputDialog: View {
                 text: binding,
                 placeholder: field.placeholder,
                 icon: field.icon,
-                probeID: "\(probeID).field.\(idx)"
+                probeID: "\(probeID).field.\(idx)",
+                onSubmit: { submitIfValid() }
             )
         } else {
             HVMUI.TextField(
@@ -201,13 +202,20 @@ struct InputDialog: View {
                 text: binding,
                 placeholder: field.placeholder,
                 icon: field.icon,
-                probeID: "\(probeID).field.\(idx)"
+                probeID: "\(probeID).field.\(idx)",
+                onSubmit: { submitIfValid() }
             )
         }
     }
 
     private var canSubmit: Bool {
         validationError == nil
+    }
+
+    /// 回车提交 — 字段内按 Enter 触发, 校验通过才提交 (等同点主按钮)
+    @MainActor
+    private func submitIfValid() {
+        if canSubmit { onResult(.submitted(values)) }
     }
 
     @MainActor
