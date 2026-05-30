@@ -46,6 +46,12 @@
 | [DEBUG_PROBE.md](DEBUG_PROBE.md) | `hvm-dbg` 调试探针全子命令、HDP-GUI 自动化协议（`.hvmProbe` + ProbeRegistry） |
 | [GUI.md](GUI.md) | 新 GUI：HVMUI 组件库、Theme token、强制 probeID、NewGUIStore、两栏主界面 + 详情页 inline 编辑 + dialog 体系 |
 
+### 规划 / 路线图
+
+| 文档 | 内容 |
+|---|---|
+| [HEADLESS.md](HEADLESS.md) | 无头模式现状分析 + 路线图 TODO（P0 `-display none` / P1 解耦 AppKit / P2 console / P3 launchd 自启 / P4 远程显示）|
+
 ## 推荐阅读顺序
 
 1. [ARCHITECTURE.md](ARCHITECTURE.md) — 先建立项目全貌与模块拓扑
