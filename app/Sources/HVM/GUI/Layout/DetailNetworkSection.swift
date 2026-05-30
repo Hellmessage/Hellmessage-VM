@@ -40,6 +40,8 @@ struct DetailNetworkSection: View {
                         nicItem(i)
                     }
                 }
+                // vmnet daemon 入口 (仅有 vmnet NIC 时显示)
+                DetailVmnetDaemonView(networks: networks)
             }
         }
         .onAppear { interfaces = HostNetworkInterfaces.list() }
