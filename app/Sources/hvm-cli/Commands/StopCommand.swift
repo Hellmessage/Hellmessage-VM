@@ -3,9 +3,8 @@
 
 import ArgumentParser
 import Foundation
-import HVMBundle
+import HVMControl
 import HVMCore
-import HVMIPC
 
 struct StopCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -22,18 +21,7 @@ struct StopCommand: AsyncParsableCommand {
     func run() async throws {
         do {
             let bundleURL = try BundleResolve.resolve(vm)
-            guard let holder = BundleLock.inspect(bundleURL: bundleURL),
-                  !holder.socketPath.isEmpty else {
-                throw HVMError.ipc(.socketNotFound(path: "(inspect 失败)"))
-            }
-            let req = IPCRequest(op: IPCOp.stop.rawValue)
-            let resp = try SocketClient.request(socketPath: holder.socketPath, request: req)
-            guard resp.ok else {
-                throw HVMError.ipc(.remoteError(
-                    code: resp.error?.code ?? "ipc.remote_error",
-                    message: resp.error?.message ?? "stop 失败"
-                ))
-            }
+            try VMControl.stop(bundleURL: bundleURL)
             switch format {
             case .human: print("✔ 已发送软关机请求; guest 关机后 VMHost 自动退出")
             case .json:  printJSON(["ok": "true"])

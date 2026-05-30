@@ -6,9 +6,9 @@
 // (TODO #11)
 
 import ArgumentParser
-import AppKit
 import Foundation
 import HVMBundle
+import HVMControl
 import HVMCore
 import HVMEncryption
 
@@ -37,10 +37,6 @@ struct DeleteCommand: AsyncParsableCommand {
         do {
             let bundleURL = try BundleResolve.resolve(vm)
 
-            if BundleLock.isBusy(bundleURL: bundleURL) {
-                throw HVMError.bundle(.busy(pid: 0, holderMode: "runtime"))
-            }
-
             // 加密 VM + --purge: 默认走 secure-erase. 用户显式 --secure-erase 也强制走 (即便明文 VM)
             let isEncrypted = EncryptedBundleIO.detectScheme(at: bundleURL) != nil
             let useSecureErase = purge && (isEncrypted || secureErase)
@@ -55,28 +51,23 @@ struct DeleteCommand: AsyncParsableCommand {
                 }
             }
 
-            if purge {
-                if useSecureErase {
-                    if format == .human { print("正在 secure-erase ...") }
-                    SecureErase.eraseDirectory(at: bundleURL)
-                } else {
-                    try FileManager.default.removeItem(at: bundleURL)
+            // 模式分流走 VMControl.delete (含 running 互斥检查). trash / purge / secureErase
+            let mode: VMControl.DeleteMode = !purge ? .trash : (useSecureErase ? .secureErase : .purge)
+            if useSecureErase, format == .human { print("正在 secure-erase ...") }
+            try VMControl.delete(bundleURL: bundleURL, mode: mode)
+
+            switch format {
+            case .human:
+                switch mode {
+                case .trash:       print("✔ 已移入废纸篓")
+                case .purge:       print("✔ 已永久删除 \(bundleURL.path)")
+                case .secureErase: print("✔ 已永久删除 + secure-erase \(bundleURL.path)")
                 }
-                switch format {
-                case .human:
-                    let label = useSecureErase ? "✔ 已永久删除 + secure-erase" : "✔ 已永久删除"
-                    print("\(label) \(bundleURL.path)")
-                case .json:
-                    printJSON(["ok": "true", "deleted": bundleURL.path,
-                                "secureErase": useSecureErase ? "true" : "false"])
-                }
-            } else {
-                // 移废纸篓
-                var resultURL: NSURL?
-                try FileManager.default.trashItem(at: bundleURL, resultingItemURL: &resultURL)
-                switch format {
-                case .human: print("✔ 已移入废纸篓")
-                case .json:  printJSON(["ok": "true", "trashed": bundleURL.path])
+            case .json:
+                switch mode {
+                case .trash: printJSON(["ok": "true", "trashed": bundleURL.path])
+                default:     printJSON(["ok": "true", "deleted": bundleURL.path,
+                                        "secureErase": useSecureErase ? "true" : "false"])
                 }
             }
         } catch {

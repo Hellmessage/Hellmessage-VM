@@ -6,8 +6,8 @@ import ArgumentParser
 import Dispatch
 import Foundation
 import HVMBundle
+import HVMControl
 import HVMCore
-import HVMEncryption
 import HVMStorage
 
 private func pad(_ s: String, _ w: Int) -> String {
@@ -97,34 +97,32 @@ struct ListCommand: AsyncParsableCommand {
     /// 单次扫 + 渲染. run() 直接调一次, watch 循环每 interval 调一次.
     private func renderOnce() {
         let root = bundleDir.map { URL(fileURLWithPath: $0) } ?? HVMPaths.vmsRoot
-        let bundles = (try? BundleDiscovery.list(in: root)) ?? []
+        // 枚举走 VMCatalog.list (收口, 跟新 GUI store 同一来源). actualBytes 列表展示要算,
+        // VMSummary 不带 (慢), 这里按 summary.config 单独算.
+        let summaries = VMCatalog.list(in: root)
 
         var rows: [Row] = []
-        for b in bundles {
-            let state = BundleLock.isBusy(bundleURL: b) ? "running" : "stopped"
-            // 加密 VM 没有明文 config.yaml, BundleIO.load 会抛 .notFound. 走 routing JSON
-            // 拿基础信息 (displayName / vmId / scheme); cpu/mem/disk 不解密读不到, 用 0 占位.
-            if EncryptedBundleIO.detectScheme(at: b) != nil {
-                let routingURL = RoutingJSON.locationForQemuBundle(b)
-                if let routing = try? RoutingJSON.read(from: routingURL) {
-                    rows.append(Row(
-                        name: b.deletingPathExtension().lastPathComponent,
-                        id: routing.vmId.uuidString,
-                        guestOS: "encrypted",
-                        state: state,
-                        cpuCount: 0,
-                        memoryMiB: 0,
-                        mainDiskActualGiB: 0,
-                        mainDiskLogicalGiB: 0,
-                        bundlePath: b.path
-                    ))
-                }
+        for s in summaries {
+            let state = s.runState.rawValue
+            // 加密 VM: 不解密, cpu/mem/disk 读不到用 0 占位, guestOS 列显 "encrypted"
+            if s.isEncrypted {
+                rows.append(Row(
+                    name: s.bundleURL.deletingPathExtension().lastPathComponent,
+                    id: s.id.uuidString,
+                    guestOS: "encrypted",
+                    state: state,
+                    cpuCount: 0,
+                    memoryMiB: 0,
+                    mainDiskActualGiB: 0,
+                    mainDiskLogicalGiB: 0,
+                    bundlePath: s.bundleURL.path
+                ))
                 continue
             }
-            guard let config = try? BundleIO.load(from: b) else { continue }
+            guard let config = s.config else { continue }
 
             // 主盘路径走 config.disks (engine-aware), 不再用 BundleLayout 常量推断
-            let mainURL = config.mainDiskURL(in: b) ?? b
+            let mainURL = config.mainDiskURL(in: s.bundleURL) ?? s.bundleURL
             let actualBytes = (try? DiskFactory.actualBytes(at: mainURL)) ?? 0
             // qcow2 的 stat.st_size = 文件实际字节 (刚创 ~200KB), 不是 guest 看到的 virtual size,
             // 直接当 logical 用会显示成 0Gi. 用 DiskSpec.sizeGiB (config 里的名义容量) 兜底.
@@ -132,15 +130,15 @@ struct ListCommand: AsyncParsableCommand {
             let logicalGiB = UInt64(config.disks.first?.sizeGiB ?? 0)
 
             rows.append(Row(
-                name: b.deletingPathExtension().lastPathComponent,
-                id: config.id.uuidString,
-                guestOS: config.guestOS.rawValue,
+                name: s.bundleURL.deletingPathExtension().lastPathComponent,
+                id: s.id.uuidString,
+                guestOS: s.guestOS.rawValue,
                 state: state,
                 cpuCount: config.cpuCount,
                 memoryMiB: config.memoryMiB,
                 mainDiskActualGiB: Double(actualBytes) / Double(1 << 30),
                 mainDiskLogicalGiB: logicalGiB,
-                bundlePath: b.path
+                bundlePath: s.bundleURL.path
             ))
         }
 

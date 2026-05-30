@@ -4,8 +4,8 @@
 import ArgumentParser
 import Foundation
 import HVMBundle
+import HVMControl
 import HVMCore
-import HVMIPC
 
 struct KillCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -25,10 +25,12 @@ struct KillCommand: AsyncParsableCommand {
     func run() async throws {
         do {
             let bundleURL = try BundleResolve.resolve(vm)
+            // 早探: 未运行 / socket 缺失先报错, 不进 confirm prompt
             guard let holder = BundleLock.inspect(bundleURL: bundleURL),
                   !holder.socketPath.isEmpty else {
                 throw HVMError.ipc(.socketNotFound(path: "(inspect 失败)"))
             }
+            _ = holder
 
             if !force, format == .human {
                 print("强制关机可能导致 guest 数据损坏. 继续? [y/N] ", terminator: "")
@@ -39,14 +41,7 @@ struct KillCommand: AsyncParsableCommand {
                 }
             }
 
-            let req = IPCRequest(op: IPCOp.kill.rawValue)
-            let resp = try SocketClient.request(socketPath: holder.socketPath, request: req)
-            guard resp.ok else {
-                throw HVMError.ipc(.remoteError(
-                    code: resp.error?.code ?? "ipc.remote_error",
-                    message: resp.error?.message ?? "kill 失败"
-                ))
-            }
+            try VMControl.kill(bundleURL: bundleURL)
             switch format {
             case .human: print("✔ 已强制关机")
             case .json:  printJSON(["ok": "true"])

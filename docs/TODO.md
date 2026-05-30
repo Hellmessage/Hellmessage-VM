@@ -5,7 +5,7 @@
 > 跟 [docs/v1/ROADMAP.md](v1/ROADMAP.md) 不同 — ROADMAP 是历史 v2 残余清单, 已基本归档.
 > 本文件聚焦**当前进行中**的工作 + **新发现的待办**.
 >
-> **最后更新**: 2026-05-29 (Phase D 全合 7/7, D1+D2+D3+D4+D5+D6+D7 已合; 剩 Phase L 防漂移 lint; Esc 关 dialog 后 hover 需 click 激活 known issue 留待 L 阶段后或业务页迁移时深挖)
+> **最后更新**: 2026-05-30 (业务页 #1 主骨架+VM列表 启动: M1 HVMControl 共享控制层已合 + capstone dylib bundling 修复; 剩 M2-M6. Phase D 全合 7/7; 剩 Phase L 防漂移 lint)
 
 ---
 
@@ -38,6 +38,22 @@
 ### Phase L (Lint) — 待
 - [ ] **L1** scripts/check-gui-tokens.sh 防漂移 lint script (扫 GUI/ 内 Color(red:/ Font.system(size:/ padding(数字) 等硬编码)
 - [ ] **L1.5** Makefile 加 `make check-gui` target 接 L1 script
+
+---
+
+## 业务页 #1 — 主骨架 + VM 列表 (docs/v4/NEW_GUI_MAIN_LAYOUT.md)
+
+第一个业务页. 用户 2026-05-30 拍板: store 策略 = 精简新 store (不复用老 AppModel).
+
+- [x] **M1** 抽 HVMControl library (VMSummary + VMCatalog.list + VMControl.{start,stop,kill,status,delete}) + HostLauncher 迁入 + hvm-cli 5 命令改调 + CLI 搜索逻辑改为跟随自身位置 (dev 自动用 build/HVM.app). e2e: list/start/status/stop/kill/delete 全绿
+- [ ] **M2** NewGUIStore (@Observable + 1Hz poll + start/stop/kill/delete 转发 + lastError 冒泡)
+- [ ] **M3** MainLayoutView 两栏骨架 + toolbar + StatusBar 占位, 替换 NewGUIRootView 成默认 (Showcase 退 HVM_GUI_SHOWCASE=1)
+- [ ] **M4** SidebarView VM 列表行 (运行态圆点 + guestOS badge + 加密锁 + 选中高亮 + context menu) + probeID 全覆盖
+- [ ] **M5** DetailOverviewView (overview + 启停 + 加密未解锁兜底) + 启停接 store + 删除/密码 dialog
+- [ ] **M6** toolbar 占位 + lastError alert + e2e 走查 + 回写 v1/CLAUDE.md/README/TODO
+
+### 关联修复 (M1 期发现)
+- [x] **QEMU dylib bundling** — qemu-build.sh 主 qemu 二进制 (qemu-system-aarch64 等) 历史只 bundle 了 swtpm 的 dylib, 主 qemu 一直引 homebrew 绝对路径 (capstone/gnutls/pixman/slirp/zstd...). brew 升级 capstone 重签后库校验崩 signal 6. 修: 加 bundle_qemu_dylibs() 复用 bundle_dylib_deps + `--relocate-dylibs` 一次性模式 (免全量重编) + Makefile BUNDLE_STAMP 加 $(wildcard $(QEMU_BIN)) 依赖. 验: qemu --version OK + 测试 VM boot 到 running. **QEMU 现真正零依赖**
 
 ---
 

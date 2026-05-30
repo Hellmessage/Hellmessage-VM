@@ -5,6 +5,7 @@
 import ArgumentParser
 import Foundation
 import HVMBundle
+import HVMControl
 import HVMCore
 import HVMEncryption
 

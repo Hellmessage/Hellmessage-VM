@@ -1,12 +1,15 @@
 // HostLauncher.swift
-// hvm-cli 拉起 HVM.app 作为 VMHost 子进程 (--host-mode-bundle 分支)
+// HVM.app 作为 VMHost 子进程 (--host-mode-bundle 分支) 的拉起层. CLI + GUI store 共用.
 // docs/ARCHITECTURE.md 设计: HVM executable 自带 host 分派
 //
-// 严格只查 .app 安装位置 (CLAUDE.md 第三方二进制约束):
-//   1. HVM_APP_PATH env (CI / 调试)
-//   2. /Applications/HVM.app
-//   3. ~/Applications/HVM.app
-// 不再 fallback 到 build/HVM.app — dev 期 hvm-cli start 前需先 make install.
+// HVM binary 探测顺序 (locateHVMBinary):
+//   1. HVM_APP_PATH env (CI / 显式覆盖)
+//   2. 跟随调用方自身位置 — "用我同包/同目录的 HVM", 不被 /Applications 旧版污染:
+//      - 装进 .app: 调用方 (hvm-cli / GUI 的 HVM) 在 Contents/MacOS/, 兄弟即 Contents/MacOS/HVM
+//      - dev build:  hvm-cli 在 build/hvm-cli, 兄弟 .app 是 build/HVM.app (无需 make install)
+//   3. /Applications/HVM.app, ~/Applications/HVM.app (兜底)
+// 设计稿 docs/v4/NEW_GUI_MAIN_LAYOUT.md (M1): dev 期 hvm-cli/GUI 自动用 build/HVM.app,
+// 避免误用 /Applications 下的旧版 (两者 QEMU 资源可能不同步).
 
 import Foundation
 import HVMBundle
@@ -18,14 +21,26 @@ public enum HostLauncher {
     public static func locateHVMBinary() -> URL? {
         let fm = FileManager.default
 
-        // 1. 环境变量
+        // 1. 显式 env override
         if let override = ProcessInfo.processInfo.environment["HVM_APP_PATH"] {
             let candidate = URL(fileURLWithPath: override)
                 .appendingPathComponent("Contents/MacOS/HVM")
             if fm.isExecutableFile(atPath: candidate.path) { return candidate }
         }
 
-        // 2. 标准安装路径
+        // 2. 跟随调用方 (hvm-cli / GUI 的 HVM) 自身位置. 优先于 /Applications, 保证
+        //    "我从哪个 build 出来, 就用哪个 build 的 HVM + 包内 QEMU".
+        if let exe = Bundle.main.executableURL?.resolvingSymlinksInPath() {
+            let dir = exe.deletingLastPathComponent()
+            // 装进 .app: 兄弟二进制就是 HVM (Contents/MacOS/HVM); 也覆盖 GUI 自启 host 子进程
+            let siblingBinary = dir.appendingPathComponent("HVM")
+            if fm.isExecutableFile(atPath: siblingBinary.path) { return siblingBinary }
+            // dev build: build/hvm-cli 兄弟 .app 是 build/HVM.app
+            let siblingApp = dir.appendingPathComponent("HVM.app/Contents/MacOS/HVM")
+            if fm.isExecutableFile(atPath: siblingApp.path) { return siblingApp }
+        }
+
+        // 3. 标准安装路径 (兜底)
         for sys in ["/Applications/HVM.app", "\(NSHomeDirectory())/Applications/HVM.app"] {
             let u = URL(fileURLWithPath: sys).appendingPathComponent("Contents/MacOS/HVM")
             if fm.isExecutableFile(atPath: u.path) { return u }

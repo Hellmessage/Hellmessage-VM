@@ -55,6 +55,16 @@ let package = Package(
         .target(name: "HVMInstall", dependencies: ["HVMCore", "HVMBundle", "HVMStorage", "HVMBackend", "HVMUtils"]),
         .target(name: "HVMIPC",     dependencies: ["HVMCore"]),
 
+        // 视图无关的 VM 控制层 — 收口"枚举 / 启停 / 删除"逻辑 (原散落在 hvm-cli
+        // ListCommand / 老 AppModel.refreshList / spawnExternalHost 三处). CLI + 新 GUI
+        // store 共用同一套门面. HostLauncher (fork --host-mode-bundle) 由本 target 提供.
+        // 设计稿 docs/v4/NEW_GUI_MAIN_LAYOUT.md (M1). 不依赖 HVMBackend/Display/Qemu —
+        // 控制层只 fork host 子进程, 不链接后端实现.
+        .target(
+            name: "HVMControl",
+            dependencies: ["HVMCore", "HVMBundle", "HVMEncryption", "HVMIPC"]
+        ),
+
         // 整 VM 加密. 设计稿 docs/v3/ENCRYPTION.md v2.2.
         // SparsebundleTool / MasterKey / PasswordKDF / EncryptionKDF / EncryptedConfigIO 等.
         // 依赖 HVMBundle: EncryptedConfigIO 走 VMConfig + Yams; 不会循环 (HVMBundle 不反过来依).
@@ -96,14 +106,14 @@ let package = Package(
         // 可执行 target
         .executableTarget(
             name: "HVM",
-            dependencies: ["HVMBackend", "HVMInstall", "HVMIPC", "HVMDisplay", "HVMStorage", "HVMQemu", "HVMDisplayQemu", "HVMUtils", "HVMEncryption", "HVMGuiProbe"]
+            dependencies: ["HVMBackend", "HVMInstall", "HVMIPC", "HVMDisplay", "HVMStorage", "HVMQemu", "HVMDisplayQemu", "HVMUtils", "HVMEncryption", "HVMControl", "HVMGuiProbe"]
         ),
         .executableTarget(
             name: "hvm-cli",
             dependencies: [
                 "HVMCore", "HVMBundle", "HVMStorage", "HVMNet",
                 "HVMBackend", "HVMInstall", "HVMIPC", "HVMQemu", "HVMUtils",
-                "HVMEncryption",
+                "HVMEncryption", "HVMControl",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
