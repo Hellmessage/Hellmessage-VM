@@ -87,13 +87,6 @@ public struct RoutingMetadata: Sendable, Equatable, Codable {
 // MARK: - Routing JSON 文件位置 + I/O
 
 public enum RoutingJSON {
-    /// VZ 路径 routing JSON 位置: 与 sparsebundle 同级.
-    /// 例: <parent>/Foo.hvmz.sparsebundle → <parent>/Foo.hvmz.encryption.json
-    public static func locationForSparsebundle(_ sparsebundleURL: URL) -> URL {
-        let stem = sparsebundleURL.deletingPathExtension()  // .hvmz
-        return stem.appendingPathExtension("encryption.json")
-    }
-
     /// QEMU 路径 routing JSON 位置: bundle 内 meta/encryption.json
     public static func locationForQemuBundle(_ bundleURL: URL) -> URL {
         bundleURL.appendingPathComponent("meta", isDirectory: true)

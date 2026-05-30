@@ -2,16 +2,15 @@
 // 加密 VM 路由层 — 把 PR-1~7 全部底层模块缝合成一个干净接口.
 // 整 VM 加密设计 v2.3.
 //
-// 双 scheme:
-//   vz-sparsebundle: 整 bundle 套加密 sparsebundle, attach 后 mountpoint 内是普通 .hvmz
-//   qemu-perfile:    .hvmz 真实路径, 文件 in-place 加密 (config.yaml.enc / qcow2 LUKS / OVMF LUKS / swtpm key)
+// scheme (QEMU-only):
+//   qemu-perfile: .hvmz 真实路径, 文件 in-place 加密 (config.yaml.enc / qcow2 LUKS / OVMF LUKS / swtpm key)
 //
 // API 简化原则:
-//   - create() 只建"加密外壳" (sparsebundle 容器 / .hvmz 骨架 + config.yaml.enc + routing JSON)
+//   - create() 只建"加密外壳" (.hvmz 骨架 + config.yaml.enc + routing JSON)
 //     磁盘 / nvram / tpm 创建由调用方 (CreateVMDialog / VMHost) 用 sub keys 自己做
 //     EncryptedBundleIO 不管 disk 内容
 //   - unlock() 解锁后返回 handle, 调用方读 handle.bundleURL / handle.qemuSubKeys
-//   - close() 必调; VZ detach sparsebundle, QEMU 擦除内存中子 keys
+//   - close() 必调; QEMU 擦除内存中子 keys
 //
 // 跨机器 portable: routing JSON 在加密外, 含 KDF 参数. 目标机读 JSON + 输密码 → 派生
 // 同 master KEK → 解锁. 不依赖 Keychain / iCloud / 任何本机状态.
@@ -33,12 +32,8 @@ public enum EncryptedBundleIO {
         ///   VZ:   <mountpoint>/<displayName>.hvmz (sparsebundle 已 attach)
         ///   QEMU: <parent>/<displayName>.hvmz (真实地址)
         public let bundleURL: URL
-        /// QEMU 路径才有 (调用方注入 qemu-img / swtpm). VZ 路径 nil.
+        /// QEMU 路径才有 (调用方注入 qemu-img / swtpm).
         public let qemuSubKeys: EncryptionKDF.SubKeySet?
-        /// VZ 路径才有 (sparsebundle 实际位置). QEMU nil.
-        public let sparsebundleURL: URL?
-        /// VZ 路径才有 (mountpoint). QEMU nil.
-        public let mountpoint: URL?
         /// routing JSON 落盘位置.
         public let routingJSONURL: URL
 
@@ -48,33 +43,18 @@ public enum EncryptedBundleIO {
         fileprivate init(scheme: EncryptionSpec.EncryptionScheme,
                          bundleURL: URL,
                          qemuSubKeys: EncryptionKDF.SubKeySet?,
-                         sparsebundleURL: URL?,
-                         mountpoint: URL?,
                          routingJSONURL: URL) {
             self.scheme = scheme
             self.bundleURL = bundleURL
             self.qemuSubKeys = qemuSubKeys
-            self.sparsebundleURL = sparsebundleURL
-            self.mountpoint = mountpoint
             self.routingJSONURL = routingJSONURL
         }
 
-        /// 完成创建. VZ detach sparsebundle. QEMU noop (子 keys 由 ARC 释放).
-        /// 多次调用安全 (idempotent).
+        /// 完成创建. QEMU noop (子 keys 由 ARC 释放). 多次调用安全 (idempotent).
         public func close() throws {
             lock.lock(); defer { lock.unlock() }
             guard !closed else { return }
             closed = true
-            if let mp = mountpoint {
-                try SparsebundleTool.detach(mountpoint: mp, force: false)
-            }
-        }
-
-        deinit {
-            // 兜底: 调用方忘 close → force detach
-            if !closed, let mp = mountpoint {
-                try? SparsebundleTool.detach(mountpoint: mp, force: true)
-            }
         }
     }
 
@@ -84,8 +64,6 @@ public enum EncryptedBundleIO {
         public let bundleURL: URL
         public let config: VMConfig
         public let qemuSubKeys: EncryptionKDF.SubKeySet?
-        public let sparsebundleURL: URL?
-        public let mountpoint: URL?
 
         private let lock = NSLock()
         private var closed = false
@@ -93,30 +71,17 @@ public enum EncryptedBundleIO {
         fileprivate init(scheme: EncryptionSpec.EncryptionScheme,
                          bundleURL: URL,
                          config: VMConfig,
-                         qemuSubKeys: EncryptionKDF.SubKeySet?,
-                         sparsebundleURL: URL?,
-                         mountpoint: URL?) {
+                         qemuSubKeys: EncryptionKDF.SubKeySet?) {
             self.scheme = scheme
             self.bundleURL = bundleURL
             self.config = config
             self.qemuSubKeys = qemuSubKeys
-            self.sparsebundleURL = sparsebundleURL
-            self.mountpoint = mountpoint
         }
 
         public func close() throws {
             lock.lock(); defer { lock.unlock() }
             guard !closed else { return }
             closed = true
-            if let mp = mountpoint {
-                try SparsebundleTool.detach(mountpoint: mp, force: false)
-            }
-        }
-
-        deinit {
-            if !closed, let mp = mountpoint {
-                try? SparsebundleTool.detach(mountpoint: mp, force: true)
-            }
         }
     }
 
@@ -146,14 +111,12 @@ public enum EncryptedBundleIO {
     /// - displayName: VM 显示名 + 决定文件名
     /// - password: 用户输入的明文密码 (跨机器 portable 唯一来源)
     /// - baseConfig: 初始 VMConfig (磁盘 / 网络等业务字段; encryption 字段会被覆盖)
-    /// - scheme: vzSparsebundle 或 qemuPerfile
-    /// - sparsebundleSizeBytes: VZ 路径 sparsebundle 容器上限 (sparse, 实际占用按写入增长)
+    /// - scheme: qemuPerfile (唯一)
     public static func create(parentDir: URL,
                               displayName: String,
                               password: String,
                               baseConfig: VMConfig,
-                              scheme: EncryptionSpec.EncryptionScheme,
-                              sparsebundleSizeBytes: UInt64 = 64 * 1024 * 1024 * 1024) throws -> CreateHandle {
+                              scheme: EncryptionSpec.EncryptionScheme) throws -> CreateHandle {
         try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
 
         // 生成 salt + master KEK (跨机器 portable 关键)
@@ -165,7 +128,6 @@ public enum EncryptedBundleIO {
                                             scheme: scheme,
                                             createdAt: Date())
 
-        _ = sparsebundleSizeBytes   // VZ-only 参数, 保留签名兼容
         switch scheme {
         case .qemuPerfile:
             return try createQEMU(parentDir: parentDir,
@@ -178,7 +140,7 @@ public enum EncryptedBundleIO {
     }
 
     /// 用密码解锁加密 VM. 错密码抛 .wrongPassword.
-    /// - bundlePath: 对 VZ 是 .hvmz.sparsebundle 路径; QEMU 是 .hvmz 路径
+    /// - bundlePath: .hvmz 路径
     public static func unlock(bundlePath: URL,
                               password: String) throws -> UnlockedHandle {
         // 1. 读 routing JSON 拿 KDF 参数 (QEMU-only: 加密 VM 恒 qemu-perfile)
@@ -262,8 +224,6 @@ public enum EncryptedBundleIO {
         return CreateHandle(scheme: .qemuPerfile,
                             bundleURL: bundleURL,
                             qemuSubKeys: subKeys,
-                            sparsebundleURL: nil,
-                            mountpoint: nil,
                             routingJSONURL: routingURL)
     }
 
@@ -275,8 +235,6 @@ public enum EncryptedBundleIO {
         return UnlockedHandle(scheme: .qemuPerfile,
                               bundleURL: bundleURL,
                               config: config,
-                              qemuSubKeys: subKeys,
-                              sparsebundleURL: nil,
-                              mountpoint: nil)
+                              qemuSubKeys: subKeys)
     }
 }

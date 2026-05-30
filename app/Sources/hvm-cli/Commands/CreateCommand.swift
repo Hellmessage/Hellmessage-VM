@@ -149,7 +149,6 @@ struct CreateCommand: AsyncParsableCommand {
                 )],
                 installerISO: isoPath,
                 bootFromDiskOnly: importInfo != nil,
-                macOS: nil,   // macOS guest 已随 VZ 移除
                 linux: os == .linux ? LinuxSpec() : nil,
                 windows: os == .windows ? WindowsSpec() : nil
             )

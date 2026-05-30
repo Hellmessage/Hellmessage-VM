@@ -57,9 +57,6 @@ public enum BackendError: Error, Sendable {
     case diskNotFound(path: String)
     case diskBusy(path: String)
     case unsupportedGuestOS(raw: String)
-    case rosettaUnavailable
-    case bridgedNotEntitled
-    case ipswInvalid(reason: String)
     case invalidTransition(from: String, to: String)
     case vzInternal(description: String)
     /// GUI 已拉起 `--host-mode-bundle` 子进程, 在时限内未观测到其持有 BundleLock (通常表示子进程已退出或极慢)
@@ -69,20 +66,14 @@ public enum BackendError: Error, Sendable {
 // MARK: - Install
 
 public enum InstallError: Error, Sendable {
-    case ipswNotFound(path: String)
-    case ipswUnsupported(reason: String)
     case ipswDownloadFailed(reason: String)
-    case auxiliaryCreationFailed(reason: String)
     case diskSpaceInsufficient(requiredBytes: UInt64, availableBytes: UInt64)
-    case installerFailed(reason: String)
-    case rosettaNotInstalled
     case isoNotFound(path: String)
 }
 
 // MARK: - Net
 
 public enum NetError: Error, Sendable {
-    case bridgedNotEntitled
     case bridgedInterfaceNotFound(requested: String, available: [String])
     case macInvalid(String)
     case macNotLocallyAdministered(String)
@@ -107,8 +98,6 @@ public enum IPCError: Error, Sendable {
 public enum EncryptionError: Error, Sendable {
     /// hdiutil 子命令以非 0 退出. verb 指 create/attach/detach/chpass/info 等
     case hdiutilFailed(verb: String, exitCode: Int32, stderr: String)
-    /// sparsebundle 已存在, create 拒绝覆盖
-    case sparsebundleAlreadyExists(path: String)
     /// 密码错 (attach / chpass 时 hdiutil 报 "Authentication error" 等)
     case wrongPassword
     /// 挂载点已有挂载或不可用
@@ -300,18 +289,6 @@ public extension BackendError {
             return .init(code: HVMErrorCode.backendUnsupportedGuestOS.rawValue,
                          message: "不支持的 guest OS",
                          details: ["raw": raw])
-        case .rosettaUnavailable:
-            return .init(code: HVMErrorCode.backendRosettaUnavailable.rawValue,
-                         message: "Rosetta 2 不可用",
-                         hint: "执行: softwareupdate --install-rosetta --agree-to-license")
-        case .bridgedNotEntitled:
-            return .init(code: HVMErrorCode.backendBridgedNotEntitled.rawValue,
-                         message: "桥接网络 entitlement 未启用",
-                         hint: "需要桥接网络 entitlement")
-        case .ipswInvalid(let r):
-            return .init(code: HVMErrorCode.backendIPSWInvalid.rawValue,
-                         message: "IPSW 文件无效或不被支持",
-                         details: ["reason": r])
         case .invalidTransition(let from, let to):
             return .init(code: "backend.invalid_transition",
                          message: "VM 状态不允许当前操作",
@@ -332,34 +309,14 @@ public extension BackendError {
 public extension InstallError {
     var userFacing: UserFacingError {
         switch self {
-        case .ipswNotFound(let p):
-            return .init(code: HVMErrorCode.installIPSWNotFound.rawValue,
-                         message: "IPSW 文件未找到",
-                         details: ["path": p])
-        case .ipswUnsupported(let r):
-            return .init(code: HVMErrorCode.installIPSWUnsupported.rawValue,
-                         message: "IPSW 版本不受 VZ 支持",
-                         details: ["reason": r])
         case .ipswDownloadFailed(let r):
             return .init(code: HVMErrorCode.installIPSWDownloadFailed.rawValue,
                          message: "IPSW 下载失败",
-                         details: ["reason": r])
-        case .auxiliaryCreationFailed(let r):
-            return .init(code: HVMErrorCode.installAuxCreationFailed.rawValue,
-                         message: "创建 auxiliary 数据失败",
                          details: ["reason": r])
         case .diskSpaceInsufficient(let req, let avail):
             return .init(code: HVMErrorCode.installDiskSpaceInsufficient.rawValue,
                          message: "磁盘空间不足以安装",
                          details: ["required": "\(req)", "available": "\(avail)"])
-        case .installerFailed(let r):
-            return .init(code: HVMErrorCode.installInstallerFailed.rawValue,
-                         message: "装机流程失败",
-                         details: ["reason": r])
-        case .rosettaNotInstalled:
-            return .init(code: HVMErrorCode.installRosettaNotInstalled.rawValue,
-                         message: "系统未安装 Rosetta 2",
-                         hint: "执行: softwareupdate --install-rosetta --agree-to-license")
         case .isoNotFound(let p):
             return .init(code: HVMErrorCode.installISONotFound.rawValue,
                          message: "ISO 文件未找到",
@@ -371,10 +328,6 @@ public extension InstallError {
 public extension NetError {
     var userFacing: UserFacingError {
         switch self {
-        case .bridgedNotEntitled:
-            return .init(code: HVMErrorCode.netBridgedNotEntitled.rawValue,
-                         message: "桥接网络 entitlement 未启用",
-                         hint: "需要桥接网络 entitlement")
         case .bridgedInterfaceNotFound(let req, let avail):
             return .init(code: HVMErrorCode.netBridgedInterfaceNotFound.rawValue,
                          message: "指定的桥接接口不存在",
@@ -442,11 +395,6 @@ public extension EncryptionError {
             return .init(code: HVMErrorCode.encryptionHdiutilFailed.rawValue,
                          message: "磁盘镜像操作失败 (hdiutil \(verb))",
                          details: ["verb": verb, "exitCode": "\(code)", "stderr": stderr.prefix(400).trimmingCharacters(in: .whitespacesAndNewlines)])
-        case .sparsebundleAlreadyExists(let p):
-            return .init(code: HVMErrorCode.encryptionSparsebundleAlreadyExists.rawValue,
-                         message: "加密容器已存在",
-                         details: ["path": p],
-                         hint: "换个名称或先删除已有 sparsebundle")
         case .wrongPassword:
             return .init(code: HVMErrorCode.encryptionWrongPassword.rawValue,
                          message: "密码错误",

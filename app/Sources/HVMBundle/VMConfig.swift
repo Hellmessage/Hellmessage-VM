@@ -246,16 +246,6 @@ extension NetworkSpec {
     }
 }
 
-public struct MacOSSpec: Codable, Sendable, Equatable {
-    public var ipsw: String?
-    public var autoInstalled: Bool
-
-    public init(ipsw: String? = nil, autoInstalled: Bool = false) {
-        self.ipsw = ipsw
-        self.autoInstalled = autoInstalled
-    }
-}
-
 public struct LinuxSpec: Codable, Sendable, Equatable {
     public var kernelCmdLineExtra: String?
     public var rosettaShare: Bool
@@ -444,7 +434,6 @@ public struct VMConfig: Codable, Sendable, Equatable {
     /// guest framebuffer 显式尺寸. nil 表示走 GuestOSType.defaultFramebufferSize 兜底.
     /// 加可选字段不变 schema 版本; 老 yaml decode 时缺该字段视为 nil, init(from:) 已兜底.
     public var displaySpec: DisplaySpec?
-    public var macOS: MacOSSpec?
     public var linux: LinuxSpec?
     public var windows: WindowsSpec?
     /// 加密元信息 (schema v3 加). nil 或 enabled=false → 明文 VM. 详见 EncryptionSpec.
@@ -470,7 +459,6 @@ public struct VMConfig: Codable, Sendable, Equatable {
         clipboardSharingEnabled: Bool = true,
         macStyleShortcuts: Bool = true,
         displaySpec: DisplaySpec? = nil,
-        macOS: MacOSSpec? = nil,
         linux: LinuxSpec? = nil,
         windows: WindowsSpec? = nil,
         encryption: EncryptionSpec? = nil,
@@ -492,7 +480,6 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.clipboardSharingEnabled = clipboardSharingEnabled
         self.macStyleShortcuts = macStyleShortcuts
         self.displaySpec = displaySpec
-        self.macOS = macOS
         self.linux = linux
         self.windows = windows
         self.encryption = encryption
@@ -503,7 +490,7 @@ public struct VMConfig: Codable, Sendable, Equatable {
         case schemaVersion, id, createdAt, displayName, guestOS, engine,
              cpuCount, memoryMiB, disks, networks, installerISO,
              bootFromDiskOnly, windowsDriversInstalled, clipboardSharingEnabled,
-             macStyleShortcuts, displaySpec, macOS, linux, windows, encryption,
+             macStyleShortcuts, displaySpec, linux, windows, encryption,
              sharedFolders
     }
 
@@ -533,7 +520,6 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.macStyleShortcuts = try c.decodeIfPresent(Bool.self, forKey: .macStyleShortcuts) ?? true
         // 老 yaml 缺 displaySpec → nil, effectiveDisplaySpec 计算属性兜底到 GuestOSType 默认
         self.displaySpec = try c.decodeIfPresent(DisplaySpec.self, forKey: .displaySpec)
-        self.macOS = try c.decodeIfPresent(MacOSSpec.self, forKey: .macOS)
         self.linux = try c.decodeIfPresent(LinuxSpec.self, forKey: .linux)
         self.windows = try c.decodeIfPresent(WindowsSpec.self, forKey: .windows)
         // 老 v2 yaml 缺 encryption → nil. 走 ConfigMigrator v2→v3 后会写入 enabled=false.

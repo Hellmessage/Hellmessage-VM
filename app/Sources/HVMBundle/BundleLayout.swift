@@ -20,9 +20,6 @@ public enum BundleLayout {
     /// 加密 VM 路径用的 NVRAM 文件名 (LUKS qcow2). 与 nvramFileName 互斥, 同 bundle 不能同时存在.
     /// 加密 / 明文 状态判定: 看哪个文件存在 (EncryptedBundleIO 路由层做).
     public static let nvramLuksFileName = "efi-vars.qcow2"
-    public static let auxStorageName    = "aux-storage"
-    public static let machineIdentifier = "machine-identifier"
-    public static let hardwareModel     = "hardware-model"
     public static let thumbnailName     = "thumbnail.png"
 
     public static func configURL(_ bundle: URL) -> URL {

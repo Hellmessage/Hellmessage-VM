@@ -32,24 +32,15 @@ public enum HVMErrorCode: String, Sendable {
     case backendDiskNotFound    = "backend.disk_not_found"
     case backendDiskBusy        = "backend.disk_busy"
     case backendUnsupportedGuestOS = "backend.unsupported_guest_os"
-    case backendRosettaUnavailable = "backend.rosetta_unavailable"
-    case backendBridgedNotEntitled = "backend.bridged_not_entitled"
-    case backendIPSWInvalid     = "backend.ipsw_invalid"
     case backendVZInternal      = "backend.vz_internal"
     case backendQemuHostStartupTimeout = "backend.qemu_host_startup_timeout"
 
     // install.*
-    case installIPSWNotFound    = "install.ipsw_not_found"
-    case installIPSWUnsupported = "install.ipsw_unsupported"
     case installIPSWDownloadFailed = "install.ipsw_download_failed"
-    case installAuxCreationFailed = "install.aux_creation_failed"
     case installDiskSpaceInsufficient = "install.disk_space_insufficient"
-    case installInstallerFailed = "install.installer_failed"
-    case installRosettaNotInstalled = "install.rosetta_not_installed"
     case installISONotFound     = "install.iso_not_found"
 
     // net.*
-    case netBridgedNotEntitled  = "net.bridged_not_entitled"
     case netBridgedInterfaceNotFound = "net.bridged_interface_not_found"
     case netMACInvalid          = "net.mac_invalid"
     case netMACNotLocallyAdministered = "net.mac_not_locally_administered"
@@ -72,7 +63,6 @@ public enum HVMErrorCode: String, Sendable {
 
     // encryption.* (整 VM 加密, sparsebundle + Keychain)
     case encryptionHdiutilFailed              = "encryption.hdiutil_failed"
-    case encryptionSparsebundleAlreadyExists  = "encryption.sparsebundle_already_exists"
     case encryptionWrongPassword              = "encryption.wrong_password"
     case encryptionMountpointInUse            = "encryption.mountpoint_in_use"
     case encryptionParseFailed                = "encryption.parse_failed"
