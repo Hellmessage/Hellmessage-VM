@@ -52,6 +52,7 @@ struct DetailOverviewView: View {
                 .padding(.horizontal, HVMTheme.space.xl)
                 .padding(.top, HVMTheme.space.xl)
                 .padding(.bottom, HVMTheme.space.lg)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             // 可滚动卡片区. 反向 zIndex (上→下递减) 让网络 section 的 Select 下拉浮在
             // 下方 saveFooter / 磁盘之上, 不被盖住.
@@ -76,6 +77,7 @@ struct DetailOverviewView: View {
             }
             .scrollIndicators(.hidden)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         // 选中 VM 变化 / 解锁后 config 出现时同步 draft; 1Hz 刷新不清 (靠守卫)
         .onChange(of: store.selectedID) { _, _ in syncDraftIfNeeded() }
         .onChange(of: store.selected?.config?.cpuCount) { _, _ in syncDraftIfNeeded() }
