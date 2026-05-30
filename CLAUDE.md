@@ -166,6 +166,19 @@
 - **无顶部 toolbar**: 窗口顶部仅原生标题栏. 新建 VM = sidebar 列表底部全宽主按钮 (`sidebar.button.create`); 刷新 = statusbar 右侧工具图标 (`statusbar.button.refresh`, 列表 1Hz 自动刷新, 手动为兜底)
 - probeID 命名: `sidebar.button.create` / `statusbar.button.refresh` / `vmlist.row.item-<vmID>` / `vmlist.confirm.delete-<vmID>` / `vmlist.input.password-<vmID>` / `detail.button.{start,stop,kill,delete}` / `main.alert.error`
 
+### 新 GUI 详情页配置编辑 (业务页 #2, docs/v4/NEW_GUI_VM_DETAIL.md)
+
+详情页 `DetailOverviewView` 铺 inline 可编辑 section: 资源(CPU/内存) / 网络(NIC) / 磁盘 / ISO&启动 / 共享目录 / 选项. 各 section 文件 `app/Sources/HVM/GUI/Layout/Detail<X>Section.swift`.
+
+- **配置写入唯一走 `store.saveConfig` (内部分流明文/加密), 禁止业务侧直接 BundleIO.save / EncryptedConfigIO.save**: `NewGUIStore.saveConfig(_:requireStopped:mutate:)` 明文走 `VMControl.saveConfig`, 加密走 `VMControl.saveConfigEncrypted` (需 configKey, 解锁后缓存于 `unlockedSubKeys`); 重密后刷新 `unlockedConfigs` 缓存. 磁盘走 `store.addDisk/resizeDisk/deleteDisk` (内部 `diskOp` 分流明文 DiskFactory / 加密 QcowLuksFactory). 剪贴板热改走 `store.setClipboardSharing` (明文 `VMControl.setClipboardSharing` / 加密 `setClipboardSharingEncrypted`, 都落 config + running 时 IPC `clipboard.setEnabled`)
+- **两类写入模式分清**: (a) **draft + 统一保存** — 资源(CPU/内存)+网络 共用 `draftCPU/draftMemGiB/draftNetworks` @State, dirty 才显 放弃/保存, 一次 `saveForm` 全写; (b) **即时动作** — 磁盘增删/扩容 / ISO 切换 / Windows 装机推进 / 共享目录增删 / readOnly+剪贴板+macStyle toggle 都即时调 store (不进 draft), 避免相互耦合字段进非法中间态
+- **requireStopped 分级**: 多数字段 (CPU/内存/网络/磁盘/ISO/共享目录) `requireStopped=true` (running 改抛 `.busy`, UI 侧 section 也 `editable = runState == .stopped` disabled); 剪贴板 + macStyleShortcuts `requireStopped=false` (可 running 热改)
+- **加密 VM 编辑必先解锁**: 锁定态 `vm.config == nil`, section 不渲染 (仅显 解锁/删除 按钮). 解锁走 `VMActions.unlock` → 密码 dialog → `store.unlock` (PBKDF2 600k detached, 缓存 subkeys/config/password, 5min auto-lock). 解锁后 section 才出. 未解锁就调编辑 → `lastError = "需先解锁"`
+- **toggle/binding 必须读 live `store.selected?.config`, 禁止捕获渲染时 cfg 快照**: probe `.hvmProbe` onAppear 只注册一次, binding getter 若捕获渲染时 `cfg` → 第二次 hvm-dbg gui click 读旧值翻转失效 (历史 bug). 所有 "静态 probeID + 随选中变化" 的 binding (剪贴板/macStyle/共享 readOnly toggle) getter 都读 `store.selected?.config?.<字段>`; setter 读 `store.selected` 再调 store. 同 detail 按钮动作读 store.selected 一致
+- **后端/guest gating**: 共享目录 + 选项 (剪贴板/macStyle) 仅 `engine==.qemu` (共享目录还需 `guestOS != .macOS`), VZ/macOS guest 灰显 + 文案; ISO&启动 macOS guest 不渲染 (走 IPSW); vmnet daemon 面板仅有 vmnet NIC 时显示 (走视图无关 `VMnetSupervisor`)
+- **破坏性操作二次确认**: 删除磁盘 / 删除网卡 / 删除共享目录 / 强制停止 全走 `dialog.confirm(destructive:true)` (CLAUDE.md 破坏性约束)
+- probeID 命名: `detail.field.{cpu,memory}` / `detail.button.{discard,save,unlock,lock}` / `detail.network.<i>.{item,mode,device,mac,mac.random,bridged,enabled,delete}` / `detail.disk.{add,resize-<path>,delete-<path>}` / `detail.boot.{selectISO,ejectISO,installed,driversInstalled}` / `detail.sharing.{add,writable-<name>,delete-<name>}` / `detail.options.{clipboard,macStyle}` / `detail.vmnet.{install,restart,uninstall}`
+
 ## VZ 能力边界约束 **必须遵守**
 
 以下能力 **VZ 不支持**, 即使用户要求也不得尝试实现, 直接提示用户能力边界:

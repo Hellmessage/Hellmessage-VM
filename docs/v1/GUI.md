@@ -1,5 +1,7 @@
 # GUI 设计 (`HVM.app`)
 
+> **注**: 本文档描述**老 GUI** (`app/Sources/HVM/UI/**`, `AppModel` 驱动). 新 GUI 重构 (`GUI=new`, 默认; `app/Sources/HVM/GUI/**`, `NewGUIStore` 驱动) 现状权威在 [docs/v4/](../v4/README.md): 主骨架+VM列表见 `NEW_GUI_MAIN_LAYOUT.md`, 详情完整配置编辑 (资源/网络/磁盘/ISO&启动/共享/选项 + 加密解锁编辑 + vmnet daemon) 见 `NEW_GUI_VM_DETAIL.md` (V1-V9 已合). 待全业务页迁完 + 老 GUI 退役 (NEW_GUI.md D8) 后本文档重写.
+
 ## 目标
 
 - 单一 macOS 原生 GUI 管理多台 VM (VZ + QEMU 双后端共存)

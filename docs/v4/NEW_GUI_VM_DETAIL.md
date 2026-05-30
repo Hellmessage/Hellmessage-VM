@@ -1,6 +1,6 @@
 # 新 GUI 业务页 — VM 详情完整配置编辑
 
-> 状态: **评审中 (用户已定 D1/D2/D3)** 2026-05-30 — 用户拍板: 编辑 UX = inline section; **加密 VM 编辑本稿做** (含解锁流程); **vmnet daemon 安装本稿做**. 范围相应扩大, PR 拆解见下 V1-V9.
+> 状态: **代码已合入** 2026-05-30 — V1-V9 全合 (inline section 编辑 + 加密 VM 解锁/编辑/重密 + vmnet daemon). 加密 throwaway VM (agent 自家密码) GUI 自动化跑通 解锁→改 CPU→保存重密→锁定→重解锁 CPU=3 持久化验证; bundle 无明文 config.yaml 泄漏. 期间修 滚动条 overlay 不预留空间 + stale probe binding (toggle getter 读 live store.selected). 约束回写 CLAUDE.md "新 GUI 详情页配置编辑" 节.
 >
 > 业务页 #2. 前置依赖: [NEW_GUI.md](NEW_GUI.md) 基础设施 + [NEW_GUI_MAIN_LAYOUT.md](NEW_GUI_MAIN_LAYOUT.md) (业务页 #1, 已合: 两栏骨架 + `NewGUIStore` + `HVMControl` 控制层 + 只读 `DetailOverviewView`). 本稿把 detail 从"只读概览 + 启停/删除"扩到"完整配置编辑".
 
@@ -205,7 +205,7 @@ DetailOverviewView (改名 / 扩展)
 | **V6** | feat(net,gui): VMnetSupervisor 核心视图无关化 (osascript admin + plist) + 网络 section [安装/重启/卸载 daemon] 按钮 | 真机: 装 daemon (Touch ID) → bridged VM 起; 重启 daemon. (需用户密码, 部分手动) |
 | **V7** ✅ | feat(gui): ISO & 启动 section (选/弹 ISO + bootFromDiskOnly + Windows 装机推进按钮) | ✅ hvm-dbg gui: ejectISO e2e config 翻转验证; Windows stage2 / Linux bootFromDisk 按钮可见性对照 config 实测; macOS guest 不显示. NSOpenPanel 选 ISO 无法自动化 (同 saveConfig 通路已 V3/V4 验证) |
 | **V8** ✅ | feat(gui): 共享目录 section (增删 + readOnly, QEMU) + 选项 section (剪贴板热改 + 快捷键) | ✅ hvm-dbg gui: 剪贴板/macStyle/writable toggle 往返双向 e2e (修 stale probe 闭包: binding 读 live store.selected); 删除共享二次确认+取消保留. NSOpenPanel 选目录 + running IPC 热改 (P0-3) 无法自动化 (config+IPC 同老 GUI 已证通路) |
-| **V9** | docs + 回写 (CLAUDE.md 新 GUI detail/解锁/daemon 约束 / v1 / TODO / 设计稿状态) + e2e 全路径走查 | 全 section + 解锁 e2e |
+| **V9** ✅ | docs + 回写 (CLAUDE.md 新 GUI detail/解锁/daemon 约束 / TODO / 设计稿状态) + e2e 全路径走查 | ✅ 加密 throwaway VM 解锁→改 CPU→重密→重解锁 持久化 + 无明文泄漏 e2e; CLAUDE.md "新 GUI 详情页配置编辑" 节 + TODO + 状态头回写 |
 
 **合入后回写**: `docs/v1/` 现状 + `CLAUDE.md` (新 GUI detail 编辑约束: saveConfig 走 VMControl 单一来源 / running 拒 / 加密解锁分流 / 校验 / daemon 入口) + 设计稿状态 + TODO.
 

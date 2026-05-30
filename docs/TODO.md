@@ -5,7 +5,7 @@
 > 跟 [docs/v1/ROADMAP.md](v1/ROADMAP.md) 不同 — ROADMAP 是历史 v2 残余清单, 已基本归档.
 > 本文件聚焦**当前进行中**的工作 + **新发现的待办**.
 >
-> **最后更新**: 2026-05-30 (业务页 #1 主骨架+VM列表 M1-M6 全合: HVMControl 控制层 + NewGUIStore + 两栏 MainLayoutView + sidebar/detail + 启停/删除/密码 dialog, hvm-dbg gui e2e 全绿; + capstone dylib bundling 修复. Phase D 全合 7/7; 剩 Phase L 防漂移 lint)
+> **最后更新**: 2026-05-30 (业务页 #2 详情完整配置编辑 V1-V9 全合: 资源/网络/磁盘/ISO&启动/共享目录/选项 inline section + 加密 VM 解锁→编辑→重密 + vmnet daemon 入口; 加密 throwaway VM GUI 自动化 e2e 全绿 + 无明文泄漏; 修 滚动条 overlay 预留 + stale probe binding. 业务页 #1 M1-M6 此前已合. Phase D 全合 7/7; 剩 Phase L 防漂移 lint)
 
 ---
 
@@ -100,9 +100,9 @@
 
 每个业务页独立子稿 `docs/v4/NEW_GUI_<feature>.md`. 引 NEW_GUI.md 作 R1-R9 + Theme/Components/Dialog 基础设施前置依赖.
 
-- [ ] `docs/v4/NEW_GUI_MAIN_LAYOUT.md` — sidebar + detail 两栏主窗口骨架 + 工具栏
-- [ ] `docs/v4/NEW_GUI_VM_LIST.md` — VM 列表项 (running/stopped/encrypted 状态 / 加密锁图标 / context menu)
-- [ ] `docs/v4/NEW_GUI_VM_DETAIL.md` — 详情页 (overview / sharing / network / disk / 加密 等 section)
+- [x] `docs/v4/NEW_GUI_MAIN_LAYOUT.md` — sidebar + detail 两栏主窗口骨架 (M1-M6 全合 + 拖拽重排 D7)
+- [x] `docs/v4/NEW_GUI_VM_LIST.md` — VM 列表项 (running/stopped/encrypted 状态 / 加密锁图标) — 随 MAIN_LAYOUT M4 合
+- [x] `docs/v4/NEW_GUI_VM_DETAIL.md` — 详情页配置编辑 (资源/网络/磁盘/ISO&启动/共享/选项 section + 加密解锁编辑 + vmnet daemon) — V1-V9 全合; 加密 throwaway VM 解锁→改 CPU→重密→重解锁 e2e 全绿; 滚动条 overlay + stale probe binding 修复
 - [ ] `docs/v4/NEW_GUI_CREATE_VM.md` — 创建 VM Wizard (复用 HVMUI.WizardDialog)
 - [ ] `docs/v4/NEW_GUI_ENCRYPTION.md` — 加密 / 解密 / rekey dialog
 - [ ] `docs/v4/NEW_GUI_FILE_TRANSFER.md` — 文件传输 dialog
