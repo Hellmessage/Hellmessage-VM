@@ -108,7 +108,7 @@ HVM 还在 1.0 之前, **API、CLI 子命令、`.hvmz` bundle schema (v3)、IPC 
 - macOS 14(Sonoma)或更高
 - Apple Silicon(M1 / M2 / M3 / M4 ...)
 - Xcode Command Line Tools — `xcode-select --install`
-- *(可选)* Apple Developer 个人证书 — 自动签出带 `com.apple.security.virtualization` entitlement 的 .app;没有也能 ad-hoc 签名跑
+- *(可选)* Apple Developer 个人证书 — 自动签出可分发 .app;没有也能 ad-hoc 签名跑。主进程不带特殊 entitlement (QEMU-only), HVF 加速由 QEMU 子进程的 `com.apple.security.hypervisor` 承载
 
 ## 构建
 
@@ -328,7 +328,7 @@ QEMU 通过 `-netdev stream,addr.type=unix,addr.path=<sock>` 直接连 daemon(4-
 
 launchd plist label namespace `com.hellmessage.hvm.vmnet.*`,跟 lima / hell-vm / colima 区分互不干扰。
 
-> VZ 后端的桥接(`com.apple.vm.networking` entitlement)仍在 Apple 审批中,审批通过前 VZ 路径只能用 NAT。
+> 桥接网络走 `socket_vmnet` 系统级 launchd daemon (brew 安装 + osascript admin 提权),不依赖任何 VZ networking entitlement。
 
 ### `hvm-dbg`(调试探针 / AI agent 入口)
 

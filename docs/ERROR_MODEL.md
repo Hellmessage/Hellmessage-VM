@@ -32,7 +32,7 @@ public enum HVMError: Error, Sendable {
 
 每个子系统是独立 enum, case 各自携带强类型 payload (路径 / errno / pid 等)。
 
-> 注: 部分 case 名 / 文案带 VZ 历史残留 (如 `backend.vzInternal` / `install.ipswUnsupported "不受 VZ 支持"`)。VZ 后端已移除, 但 `vzInternal` 仍作为"非 HVMError 的任意 Error 兜底通道"在用 (见 §2.4), 没删。
+> 注: `backend.vzInternal` (code `backend.vz_internal`, message "VZ 内部错误") 是 VZ 历史残留命名, VZ 后端已移除, 但该 case 仍作为"非 HVMError 的任意 Error 兜底通道"保留在用 (见 §2.4), 没删。一批 VZ / macOS guest 专属的死 case (Rosetta / IPSW / 桥接 entitlement / sparsebundle 相关) 已随 VZ 移除整批删除, 本文已按当前代码 (`HVMError.swift` / `ErrorCodes.swift`) 更新。
 
 ### 1.2 各子系统 case
 
@@ -53,18 +53,16 @@ public enum HVMError: Error, Sendable {
 **`BackendError`** (`backend.*`)
 - `configInvalid(field, reason)` / `cpuOutOfRange(requested, min, max)` / `memoryOutOfRange(requestedMiB, minMiB, maxMiB)`
 - `diskNotFound(path)` / `diskBusy(path)` / `unsupportedGuestOS(raw)`
-- `rosettaUnavailable` / `bridgedNotEntitled` / `ipswInvalid(reason)`
 - `invalidTransition(from, to)` — VM 状态机不允许当前操作
 - `vzInternal(description)` — 兜底任意非 HVMError 错误 (见 §2.4)
 - `qemuHostStartupTimeout(waitedSeconds, logPath)` — GUI 拉起 `--host-mode-bundle` 子进程后时限内未观测到其持有 BundleLock
 
 **`InstallError`** (`install.*`)
-- `ipswNotFound` / `ipswUnsupported` / `ipswDownloadFailed` / `auxiliaryCreationFailed`
-- `diskSpaceInsufficient(requiredBytes, availableBytes)` / `installerFailed(reason)`
-- `rosettaNotInstalled` / `isoNotFound(path)`
+- `ipswDownloadFailed(reason)` — 复用为通用镜像下载失败 (原 IPSW 专用语义, VZ 移除后泛化)
+- `diskSpaceInsufficient(requiredBytes, availableBytes)` / `isoNotFound(path)`
 
 **`NetError`** (`net.*`)
-- `bridgedNotEntitled` / `bridgedInterfaceNotFound(requested, available)`
+- `bridgedInterfaceNotFound(requested, available)`
 - `macInvalid(String)` / `macNotLocallyAdministered(String)` — MAC 必须 locally-administered (首字节低位)
 
 **`IPCError`** (`ipc.*`)
@@ -75,7 +73,7 @@ public enum HVMError: Error, Sendable {
 
 **`EncryptionError`** (`encryption.*`) — 整 VM 加密
 - `hdiutilFailed(verb, exitCode, stderr)` / `qemuImgFailed(verb, exitCode, stderr)` — 子命令非 0 退出 (stderr 截断 400 字符入 details)
-- `sparsebundleAlreadyExists(path)` / `wrongPassword` / `mountpointInUse(path)` / `parseFailed(reason)`
+- `wrongPassword` / `mountpointInUse(path)` / `parseFailed(reason)`
 - `invalidKeyLength(got, expected)` — master KEK 固定 32 字节
 - `randomGenerationFailed(status)` / `kdfFailed(reason)` — PBKDF2 派生失败
 - `luksRekeyHalfDone(reason)` — LUKS 改密 step1 (加新 keyslot) 成功但 step2 (删旧) 失败, 数据不丢但需重跑 rekey
@@ -102,7 +100,6 @@ public struct UserFacingError: Sendable, Equatable, Codable {
 - **`message`** 一律中文短句, 不含可变上下文 (上下文进 `details`)。
 - **`details`** 携带可定位字段 (path / pid / errno / requested-min-max 等)。**未脱敏** — `userFacing` 注释明确"调用方入日志时应自行 sanitize"。
 - **`hint`** 仅在有明确可执行修复时给。例:
-  - `rosettaUnavailable` → `执行: softwareupdate --install-rosetta --agree-to-license`
   - `crossVolumeNotAllowed` → `APFS clonefile 不能跨卷; 把目标位置选在与源同卷的目录`
   - `macNotLocallyAdministered` → `首字节低两位第二位必须为 1, 例: 02:xx:xx:xx:xx:xx`
   - `luksRekeyHalfDone` → `重跑 rekey 即可销毁老 keyslot; 数据未损失`

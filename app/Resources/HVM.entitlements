@@ -2,16 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- VZ 基础能力, Apple Developer 账号自带, 不用申请 -->
-    <key>com.apple.security.virtualization</key>
-    <true/>
-
-    <!--
-        桥接网络能力, 需向 Apple 申请 com.apple.vm.networking entitlement
-        审批通过后取消下面注释并重签
-
-        <key>com.apple.vm.networking</key>
-        <true/>
-    -->
+    <!-- QEMU-only: HVM 主进程不需特殊 entitlement.
+         HVF 加速由 QEMU 子进程走 QEMU.entitlements 的 com.apple.security.hypervisor;
+         主进程只做 GUI + 子进程编排 + IPC. VZ 移除后 com.apple.security.virtualization
+         与桥接 com.apple.vm.networking 均不再需要 (网络走 socket_vmnet daemon). -->
 </dict>
 </plist>

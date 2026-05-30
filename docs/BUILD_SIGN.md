@@ -4,11 +4,10 @@ HVM 的构建 / 签名现状文档。基于真实代码 (`Makefile` / `scripts/b
 `scripts/verify-build.sh` / `app/Package.swift` / `app/Resources/*.entitlements`)。本项目走
 **QEMU 后端单一路线** (`qemu-system-aarch64` + HVF), guest 仅 Linux/Windows arm64。
 
-> 现状提示 (代码留痕)：仓库 `app/Resources/HVM.entitlements` 主进程 entitlement 与
-> `scripts/bundle.sh` / `scripts/verify-build.sh` 内仍写 `com.apple.security.virtualization`
-> (VZ) 字样, 这是 VZ 移除 (2026-05-30) 后尚未清理的残留。**真正必需的 entitlement** 是
-> QEMU 子进程的 `com.apple.security.hypervisor` (HVF 加速)。下文以代码实际行为为准, 同时把
-> VZ 残留处显式标出。
+> 现状 (QEMU-only)：VZ 移除 (2026-05-30) 后, `com.apple.security.virtualization` 已从
+> `app/Resources/HVM.entitlements` 清理 — **HVM 主进程不带 virtualization entitlement**。
+> **唯一必需的 entitlement** 是 QEMU 子进程的 `com.apple.security.hypervisor` (HVF 加速,
+> 走 `QEMU.entitlements`)。下文以代码实际行为为准。
 
 ---
 
@@ -155,7 +154,7 @@ QEMU 子进程与 HVM 主进程用**两份不同 entitlement**, 严禁混用：
 | 对象 | entitlement 文件 | 关键 key |
 | --- | --- | --- |
 | `Resources/QEMU/{bin,lib,libexec}/*` | `app/Resources/QEMU.entitlements` | `com.apple.security.hypervisor` (HVF 必需) |
-| `Contents/MacOS/{HVM,hvm-cli,hvm-dbg}` + `.app` + `build/{hvm-cli,hvm-dbg}` | `app/Resources/HVM.entitlements` | `com.apple.security.virtualization` (VZ 残留, 见顶部提示) |
+| `Contents/MacOS/{HVM,hvm-cli,hvm-dbg}` + `.app` + `build/{hvm-cli,hvm-dbg}` | `app/Resources/HVM.entitlements` | 无 (主进程 QEMU-only, 不需特殊 entitlement) |
 
 签名顺序 **由内向外**, 保证嵌套 mach-o 先签：
 
@@ -236,8 +235,8 @@ CLAUDE.md 反复强调：commit 涉及上述包内第三方二进制 / 脚本改
 1. 产物结构：`HVM.app/Contents/MacOS/HVM` 可执行 + `Info.plist` + `build/{hvm-cli,hvm-dbg}` 存在。
 2. Bundle ID = `com.hellmessage.vm` (`plutil -extract CFBundleIdentifier`)。
 3. 签名有效：`codesign --verify --deep --strict` 验 `.app` + CLI / dbg。
-4. entitlement 存在：grep `com.apple.security.virtualization` (**VZ 残留检查**, 与顶部提示一致,
-   QEMU-only 转向后此项尚未改为查 `com.apple.security.hypervisor`)。
+4. entitlement 存在：grep QEMU 子进程的 `com.apple.security.hypervisor` (HVF 必需);
+   主进程 QEMU-only 已不带 virtualization entitlement。
 5. CLI 可启动：`hvm-cli --version` / `hvm-dbg --version`。
 6. patch 孤儿检测：`patches/qemu/*.patch` + `patches/edk2/*.patch` 必须全列入对应 `series`。
 7. GUI 约束守卫：`grep` `app/Sources/HVM/UI/` 确认业务侧无 `NSAlert()` 实例化 (须走
@@ -249,7 +248,7 @@ CLAUDE.md 反复强调：commit 涉及上述包内第三方二进制 / 脚本改
 
 - **必需 entitlement**：`com.apple.security.hypervisor` (QEMU 子进程, HVF 加速；走
   `QEMU.entitlements`)。VZ 的 `com.apple.security.virtualization` / 桥接
-  `com.apple.vm.networking` 已随 VZ 移除不再实际需要 (代码内 `HVM.entitlements` 残留待清)。
+  `com.apple.vm.networking` 已随 VZ 移除并从 `HVM.entitlements` 清理 — 主进程不带特殊 entitlement。
 - **签名方式**：自动 `codesign --sign "Apple Development"` 或 ad-hoc `-`, 不公证不分发。
 - **桥接网络**：走 `socket_vmnet` launchd daemon (brew + osascript admin 提权), 不依赖任何
   VZ networking entitlement。

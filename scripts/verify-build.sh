@@ -31,11 +31,8 @@ codesign --verify --strict "$BUILD/hvm-cli" || fail "hvm-cli 签名验证失败"
 codesign --verify --strict "$BUILD/hvm-dbg" || fail "hvm-dbg 签名验证失败"
 pass "签名验证通过"
 
-# virtualization entitlement 存在
-ENT=$(codesign -d --entitlements :- "$APP" 2>/dev/null || true)
-echo "$ENT" | grep -q "com.apple.security.virtualization" || \
-    fail "HVM.app 缺少 com.apple.security.virtualization entitlement"
-pass "virtualization entitlement 已注入"
+# QEMU-only: 主进程不带特殊 entitlement (HVF 由 QEMU 子进程 hypervisor 承载),
+# 故不再检查 virtualization. 主进程签名有效性已在上面 codesign --verify 覆盖.
 
 # CLI 能输出版本
 "$BUILD/hvm-cli" --version > /dev/null || fail "hvm-cli --version 执行失败"

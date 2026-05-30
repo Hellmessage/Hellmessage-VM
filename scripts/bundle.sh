@@ -22,7 +22,7 @@ else
     SIGN="-"
     cat <<'EOF'
 ⚠ ad-hoc 签名 (本机 Keychain 没有 Apple Development 证书)
-  - 本机开发期可用: AMFI 接受 com.apple.security.virtualization, VZ guest 能正常起
+  - 本机开发期可用: QEMU-only 主进程不带 virtualization entitlement, HVF 由 QEMU 子进程 (QEMU.entitlements hypervisor) 承载
   - 不能拷给其他人用: 其他 Mac 上 AMFI 会拒绝 entitlement, .app 启动即崩
   - 想出可分发版本: 在 Apple Developer 注册个人证书后 make build 会自动用真实身份
 EOF
@@ -140,7 +140,7 @@ fi
 
 # 5. 签名
 #    QEMU 子进程使用独立 entitlement (com.apple.security.hypervisor, HVF 必需);
-#    HVM 主进程 entitlement 含 com.apple.security.virtualization, 二者不能混用
+#    QEMU-only 后 HVM 主进程 entitlements 已空 (无 virtualization), 二者职责分离
 #    真实证书走 hardened runtime; ad-hoc 签名不叠加 --options runtime
 SIGN_ARGS=(--force --sign "$SIGN" --entitlements "$ENTITLEMENTS" --timestamp=none)
 if [ "$SIGN" != "-" ]; then

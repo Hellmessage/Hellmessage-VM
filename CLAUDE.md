@@ -76,7 +76,7 @@ QEMU 已满足 Linux/Windows/加密)。下文若仍有 VZ / macOS guest /
 
 ## 签名与 Entitlement 约束
 
-- 必须的 entitlement: `com.apple.security.hypervisor`(HVF 加速必需; QEMU 二进制走 `app/Resources/QEMU.entitlements`, 见「QEMU 后端约束」签名闭环)。VZ 的 `com.apple.security.virtualization` / 桥接网络 `com.apple.vm.networking` 已随 VZ 移除不再需要 (entitlement 申请未批正是剥 VZ 主因之一)
+- 必须的 entitlement: `com.apple.security.hypervisor`(HVF 加速必需; QEMU 二进制走 `app/Resources/QEMU.entitlements`, 见「QEMU 后端约束」签名闭环)。VZ 的 `com.apple.security.virtualization` / 桥接网络 `com.apple.vm.networking` 已随 VZ 移除并从 `HVM.entitlements` 清理, 主进程不带特殊 entitlement (entitlement 申请未批正是剥 VZ 主因之一)
 - 签名方式: 自动 `codesign --sign "Apple Development"` ad-hoc 签名, 不公证不分发
 - 桥接网络走 `socket_vmnet` 系统级 launchd daemon (brew 安装 + osascript admin 提权), 不依赖任何 VZ networking entitlement, 见「socket_vmnet 网络约束」
 - 签名相关代码或日志**不得输出任何 team ID / 证书 SHA / 私钥路径**

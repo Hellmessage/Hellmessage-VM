@@ -193,7 +193,7 @@ open: run-app
 # debug 模式 dev loop: 跳过 release 全模块优化 (~14s → ~3-5s).
 # debug / release 各自走 .build/debug / .build/release 子目录, BUNDLE_STAMP 在 build/
 # 顶层只一份, 切 CONFIGURATION 会 invalidate stamp 重 bundle — 跟 swift build 同步.
-# AMFI + entitlement 在 debug 签名也走 com.apple.security.virtualization, VZ guest 能正常起.
+# QEMU-only: 主进程不带 virtualization entitlement, HVF 由 QEMU 子进程 (QEMU.entitlements hypervisor) 承载.
 # 想要 release 性能测试或发布走 `make open` / `make build`.
 dev-open:
 	@$(MAKE) open CONFIGURATION=debug
