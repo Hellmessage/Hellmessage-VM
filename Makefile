@@ -9,6 +9,14 @@ SWIFTPM_DIR   := $(PKG_DIR)/.build
 SIGN_IDENTITY ?= auto
 ENTITLEMENTS  := $(PKG_DIR)/Resources/HVM.entitlements
 
+-include makefile.local
+
+ifeq ($(SIGN_IDENTITY),auto)
+ifneq ($(strip $(MACOS_CODESIGN_IDENTITY)),)
+SIGN_IDENTITY := $(MACOS_CODESIGN_IDENTITY)
+endif
+endif
+
 # GUI 开关:
 #   GUI=new (默认) — 新 GUI (app/Sources/HVM/GUI/**, NewGUIAppLauncher; 重构中)
 #   GUI=old        — 老 GUI (app/Sources/HVM/UI/**, HVMAppLauncher; 整套保留作回退)
@@ -30,7 +38,8 @@ QEMU_BIN      := $(QEMU_STAGE)/bin/qemu-system-aarch64
 
 # SwiftPM 产物路径 (CONFIGURATION 决定 release / debug 子目录).
 # 让 bundle stamp 依赖三个 binary mtime —— SwiftPM no-op 时 mtime 不变, 整个 bundle 跳过.
-SWIFT_BUILD_DIR := $(SWIFTPM_DIR)/$(CONFIGURATION)
+SWIFT_PLATFORM ?= arm64-apple-macosx
+SWIFT_BUILD_DIR := $(SWIFTPM_DIR)/$(SWIFT_PLATFORM)/$(CONFIGURATION)
 HVM_BIN         := $(SWIFT_BUILD_DIR)/HVM
 HVM_CLI_BIN     := $(SWIFT_BUILD_DIR)/hvm-cli
 HVM_DBG_BIN     := $(SWIFT_BUILD_DIR)/hvm-dbg
@@ -94,6 +103,7 @@ $(BUNDLE_STAMP): $(HVM_BIN) $(HVM_CLI_BIN) $(HVM_DBG_BIN) \
                  $(PKG_DIR)/Resources/Info.plist.template \
                  $(wildcard guest-helper/dist/aarch64/hvm-guest-helper.exe) \
                  $(wildcard guest-helper/dist/aarch64/libunwind.dll) \
+                 $(wildcard makefile.local) \
                  | icon
 	@CONFIGURATION=$(CONFIGURATION) SIGN_IDENTITY="$(SIGN_IDENTITY)" bash scripts/bundle.sh
 	@mkdir -p $(@D)
@@ -159,7 +169,8 @@ xed:
 # 安装到 /Applications/ (覆盖旧版). admin 用户对 /Applications 有写权限, 不需 sudo;
 # /Applications/HVM.app 若存在则先删 (.app 是 directory, 不能直接 cp 覆盖).
 # 安装后 lsregister 刷新 LaunchServices, 让 .hvmz 关联 + Spotlight 索引立即生效.
-install: build
+install: 
+	@$(MAKE) build GUI=old
 	@if [ ! -d "$(BUILD_DIR)/HVM.app" ]; then \
 		echo "✗ $(BUILD_DIR)/HVM.app 不存在; 先 make build"; exit 1; \
 	fi
@@ -179,7 +190,8 @@ install: build
 # 主 GUI 进程 cmdline 第二个 token 以 .../HVM.app/Contents/MacOS/HVM 结尾 (build/ 与
 # /Applications/ 两条路径都满足); host 子进程 cmdline 带 --host-mode-bundle 后缀 (regex
 # 不匹配, 不被误杀). regex 同时杀 build/ 与 /Applications/ 的 GUI 主进程, 避免两份并存.
-run-app: build
+run-app: 
+	@$(MAKE) build GUI=new
 	@OLDPID=$$(ps -axo pid,command | awk '$$2 ~ /\/HVM\.app\/Contents\/MacOS\/HVM$$/ {print $$1}' | head -1); \
 	if [ -n "$$OLDPID" ]; then \
 		echo "ℹ 重启 GUI 主进程 pid=$$OLDPID (host 子进程不动)"; \

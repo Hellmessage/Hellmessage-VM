@@ -50,3 +50,5 @@ third_party/edk2-stage/
 third_party/spice-server-src/
 third_party/spice-server-stage/
 
+
+makefile.local
