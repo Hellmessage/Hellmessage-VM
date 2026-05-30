@@ -69,6 +69,8 @@ struct DetailOverviewView: View {
                             .zIndex(30)
                         diskSection(vm).zIndex(10)
                         DetailBootSection(vm: vm).zIndex(5)
+                        DetailSharingSection(vm: vm).zIndex(4)
+                        DetailOptionsSection(vm: vm).zIndex(3)
                     }
                 }
                 .padding(.horizontal, HVMTheme.space.xl)

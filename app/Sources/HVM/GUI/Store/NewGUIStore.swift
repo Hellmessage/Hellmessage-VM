@@ -261,6 +261,29 @@ public final class NewGUIStore {
         }
     }
 
+    // MARK: - 选项: 剪贴板共享 (业务页 #2, V8, 可 running 热改)
+
+    /// 切剪贴板共享 (vdagent). 落 config + running 时 IPC 即时生效 (P0-3). 明文/加密分流.
+    /// 仅 QEMU 后端有意义 (UI 侧已 gate); 此处不再判后端.
+    public func setClipboardSharing(_ s: VMSummary, enabled: Bool) {
+        if s.isEncrypted {
+            guard let configKey = unlockedSubKeys[s.id]?.config else {
+                lastError = StoreError(title: "需先解锁", message: "请先解锁加密 VM 再改剪贴板共享.")
+                return
+            }
+            run("剪贴板切换失败") {
+                try VMControl.setClipboardSharingEncrypted(bundleURL: s.bundleURL,
+                                                           enabled: enabled, configKey: configKey)
+                self.unlockedConfigs[s.id] = try? EncryptedConfigIO.load(from: s.bundleURL, key: configKey)
+                self.unlockedAt[s.id] = Date()
+            }
+        } else {
+            run("剪贴板切换失败") {
+                try VMControl.setClipboardSharing(bundleURL: s.bundleURL, enabled: enabled)
+            }
+        }
+    }
+
     // MARK: - 加密 VM 解锁 (业务页 #2, V2)
 
     public func isUnlocked(_ id: UUID) -> Bool { unlockedConfigs[id] != nil }

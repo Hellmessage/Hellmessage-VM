@@ -204,7 +204,7 @@ DetailOverviewView (改名 / 扩展)
 | **V5** | feat(gui): 网络 section (NIC mode/device/MAC/bridged/enabled 编辑 + 校验) | hvm-dbg gui: 改 NIC mode/MAC → 保存 → 重启验证; 校验拦截 (P0-4) |
 | **V6** | feat(net,gui): VMnetSupervisor 核心视图无关化 (osascript admin + plist) + 网络 section [安装/重启/卸载 daemon] 按钮 | 真机: 装 daemon (Touch ID) → bridged VM 起; 重启 daemon. (需用户密码, 部分手动) |
 | **V7** ✅ | feat(gui): ISO & 启动 section (选/弹 ISO + bootFromDiskOnly + Windows 装机推进按钮) | ✅ hvm-dbg gui: ejectISO e2e config 翻转验证; Windows stage2 / Linux bootFromDisk 按钮可见性对照 config 实测; macOS guest 不显示. NSOpenPanel 选 ISO 无法自动化 (同 saveConfig 通路已 V3/V4 验证) |
-| **V8** | feat(gui): 共享目录 section (增删 + readOnly, QEMU) + 选项 section (剪贴板热改 + 快捷键) | hvm-dbg gui: 加共享 → 重启验证; 剪贴板 running 热改 IPC 生效 (P0-3) |
+| **V8** ✅ | feat(gui): 共享目录 section (增删 + readOnly, QEMU) + 选项 section (剪贴板热改 + 快捷键) | ✅ hvm-dbg gui: 剪贴板/macStyle/writable toggle 往返双向 e2e (修 stale probe 闭包: binding 读 live store.selected); 删除共享二次确认+取消保留. NSOpenPanel 选目录 + running IPC 热改 (P0-3) 无法自动化 (config+IPC 同老 GUI 已证通路) |
 | **V9** | docs + 回写 (CLAUDE.md 新 GUI detail/解锁/daemon 约束 / v1 / TODO / 设计稿状态) + e2e 全路径走查 | 全 section + 解锁 e2e |
 
 **合入后回写**: `docs/v1/` 现状 + `CLAUDE.md` (新 GUI detail 编辑约束: saveConfig 走 VMControl 单一来源 / running 拒 / 加密解锁分流 / 校验 / daemon 入口) + 设计稿状态 + TODO.

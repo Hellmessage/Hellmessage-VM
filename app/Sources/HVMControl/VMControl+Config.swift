@@ -151,12 +151,26 @@ public extension VMControl {
 
     // MARK: - 剪贴板共享 (可 running 热改)
 
-    /// 切剪贴板共享: 落 config (requireStopped=false 可 running 改) + running 时 IPC 即时生效.
+    /// 切剪贴板共享 (明文 VM): 落 config (requireStopped=false 可 running 改) + running 时 IPC 即时生效.
     static func setClipboardSharing(bundleURL: URL, enabled: Bool) throws {
         try saveConfig(bundleURL: bundleURL, requireStopped: false) { config in
             config.clipboardSharingEnabled = enabled
         }
-        // running → IPC 即时切换 (vdagent). 未运行则下次启动生效.
+        sendClipboardIPC(bundleURL: bundleURL, enabled: enabled)
+    }
+
+    /// 切剪贴板共享 (加密 VM): 用 configKey 重密 config + running 时 IPC 即时生效.
+    static func setClipboardSharingEncrypted(bundleURL: URL, enabled: Bool,
+                                             configKey: SymmetricKey) throws {
+        try saveConfigEncrypted(bundleURL: bundleURL, requireStopped: false,
+                                configKey: configKey) { config in
+            config.clipboardSharingEnabled = enabled
+        }
+        sendClipboardIPC(bundleURL: bundleURL, enabled: enabled)
+    }
+
+    /// running → IPC 即时切换 (vdagent). 未运行则下次启动生效. 失败 fail-soft (config 已落).
+    private static func sendClipboardIPC(bundleURL: URL, enabled: Bool) {
         guard let holder = BundleLock.inspect(bundleURL: bundleURL),
               !holder.socketPath.isEmpty else { return }
         let req = IPCRequest(op: IPCOp.clipboardSetEnabled.rawValue,
