@@ -8,6 +8,14 @@ SWIFTPM_DIR   := $(PKG_DIR)/.build
 # 签名身份: 空/auto = bundle.sh 自动探测 (Apple Development 优先, 否则 ad-hoc)
 SIGN_IDENTITY ?= auto
 ENTITLEMENTS  := $(PKG_DIR)/Resources/HVM.entitlements
+
+-include makefile.local
+
+ifeq ($(SIGN_IDENTITY),auto)
+ifneq ($(strip $(MACOS_CODESIGN_IDENTITY)),)
+SIGN_IDENTITY := $(MACOS_CODESIGN_IDENTITY)
+endif
+endif
 # QEMU 后端产物 (由 scripts/qemu-build.sh 生成, 仓库 ignore, 详见 docs/QEMU_INTEGRATION.md)
 # stage 即裁剪 + 签名 + LICENSE/MANIFEST 后的最终成品, bundle.sh 直接拷进 .app
 # 不再有 third_party/qemu/ 中间 vendor 层
@@ -16,7 +24,8 @@ QEMU_BIN      := $(QEMU_STAGE)/bin/qemu-system-aarch64
 
 # SwiftPM 产物路径 (CONFIGURATION 决定 release / debug 子目录).
 # 让 bundle stamp 依赖三个 binary mtime —— SwiftPM no-op 时 mtime 不变, 整个 bundle 跳过.
-SWIFT_BUILD_DIR := $(SWIFTPM_DIR)/$(CONFIGURATION)
+SWIFT_PLATFORM ?= arm64-apple-macosx
+SWIFT_BUILD_DIR := $(SWIFTPM_DIR)/$(SWIFT_PLATFORM)/$(CONFIGURATION)
 HVM_BIN         := $(SWIFT_BUILD_DIR)/HVM
 HVM_CLI_BIN     := $(SWIFT_BUILD_DIR)/hvm-cli
 HVM_DBG_BIN     := $(SWIFT_BUILD_DIR)/hvm-dbg
@@ -70,6 +79,7 @@ $(BUNDLE_STAMP): $(HVM_BIN) $(HVM_CLI_BIN) $(HVM_DBG_BIN) \
                  $(PKG_DIR)/Resources/Info.plist.template \
                  $(wildcard patches/guest/helper-win/dist/aarch64/hvm-guest-helper.exe) \
                  $(wildcard patches/guest/helper-win/dist/aarch64/libunwind.dll) \
+                 $(wildcard makefile.local) \
                  | icon
 	@CONFIGURATION=$(CONFIGURATION) SIGN_IDENTITY="$(SIGN_IDENTITY)" bash scripts/bundle.sh
 	@mkdir -p $(@D)
