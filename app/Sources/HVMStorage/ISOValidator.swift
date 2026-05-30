@@ -1,5 +1,5 @@
 // HVMStorage/ISOValidator.swift
-// ISO 路径合法性校验. ISO 不进 bundle, 只存绝对路径 (见 docs/STORAGE.md)
+// ISO 路径合法性校验. ISO 不进 bundle, 只存绝对路径.
 
 import Foundation
 import HVMCore

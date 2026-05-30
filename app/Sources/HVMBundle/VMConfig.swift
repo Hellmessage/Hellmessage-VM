@@ -1,5 +1,5 @@
 // HVMBundle/VMConfig.swift
-// config.yaml schema v2 的 Codable 映射. schema 见 docs/VM_BUNDLE.md
+// config.yaml schema v2 的 Codable 映射.
 // schema 历史:
 //   v1 (.json): 老格式, 已断兼容, 不再读取
 //   v2 (.yaml): 当前. DiskSpec 加 format 字段 (raw/qcow2)
@@ -10,7 +10,7 @@ import HVMCore
 public enum GuestOSType: String, Codable, Sendable, CaseIterable {
     case linux
     case windows
-    // macOS guest 已随 VZ 移除 (QEMU-only 转向, docs/v4/QEMU_ONLY_PIVOT.md):
+    // macOS guest 已随 VZ 移除 (QEMU-only 转向):
     // QEMU 无 Apple Silicon macOS 虚拟化路径. 老 config 带 "macOS" 解码会失败 (无此 case),
     // 该 VM 不加载 — 用户实际无 macOS guest VM, 可接受.
 }
@@ -318,7 +318,7 @@ public struct WindowsSpec: Codable, Sendable, Equatable {
 }
 
 /// host ↔ guest 共享目录 (SPICE WebDAV). 一个 VM 可挂多条, v1 单条.
-/// 仅 QEMU 后端 + Linux/Windows guest 生效. 设计稿 docs/v3/SHARED_FOLDER.md.
+/// 仅 QEMU 后端 + Linux/Windows guest 生效.
 public struct SharedFolderSpec: Codable, Sendable, Equatable {
     /// host 端绝对路径. 不允许相对路径 / symlink 越界 (CLI/GUI 入口校验).
     public var hostPath: String
@@ -361,7 +361,7 @@ public struct SharedFolderSpec: Codable, Sendable, Equatable {
     }
 }
 
-/// 整 VM 加密元信息 (schema v3 加). 设计稿 docs/v3/ENCRYPTION.md.
+/// 整 VM 加密元信息 (schema v3 加).
 /// 明文 VM 缺该字段或 enabled=false. 真正加密 VM 加密形态见 scheme.
 /// 注: KDF 参数 (salt / iterations) **不**在这里 — 它们在 routing JSON (`meta/encryption.json` /
 /// `<bundle>.encryption.json`), 因为 config 自身可能加密了 (QEMU per-file 路径), 解开 config 才能

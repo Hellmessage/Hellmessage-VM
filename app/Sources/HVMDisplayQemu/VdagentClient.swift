@@ -755,8 +755,8 @@ public final class VdagentClient: @unchecked Sendable {
         case VdagentClient.MIME_FILE_LIST:
             // 注: 探针实验 (2026-05-28) 实测 UTM Guest Tools vdagent.exe 不实现 FILE_LIST,
             // 永远不会走到这里. 留代码备用 — 万一未来 vdagent 升级支持了能直接用.
-            // 真正的 UTM-style 文件剪贴板走 HVMFileClipboardBridge + 自家 helper EXE
-            // (docs/v3/HOST_FILE_CLIPBOARD.md), 跟 vdagent 完全独立通路.
+            // 真正的 UTM-style 文件剪贴板走 HVMFileClipboardBridge + 自家 helper EXE,
+            // 跟 vdagent 完全独立通路.
             guard let paths = pendingHostFileList, !paths.isEmpty else {
                 log.info("vdagent guest REQUEST FILE_LIST sel=\(selection, privacy: .public) 但 pendingHostFileList 为空, skip")
                 return

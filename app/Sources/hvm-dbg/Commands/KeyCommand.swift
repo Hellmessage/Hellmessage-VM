@@ -4,8 +4,6 @@
 // 两种模式互斥:
 //   --text "..."   逐字符敲入 (US ASCII printable + \n \t)
 //   --press "..."  组合键, 空格分隔多组动作: "cmd+t" / "Return" / "shift+a cmd+s"
-//
-// 详见 docs/DEBUG_PROBE.md "key" 节.
 
 import ArgumentParser
 import Foundation

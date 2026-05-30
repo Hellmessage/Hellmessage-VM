@@ -14,7 +14,7 @@ import SwiftUI
 
 public extension View {
     /// 给当前 view 打 hvm-probe id + action. onAppear 注册到 ProbeRegistry, onDisappear 移除.
-    /// 设计稿 docs/v3/HVM_DBG_GUI_PROTOCOL.md PR-G2.
+    /// PR-G2.
     func hvmProbe(id: String,
                    label: String = "",
                    action: ProbeAction) -> some View {

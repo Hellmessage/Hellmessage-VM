@@ -1,6 +1,6 @@
 // HVMEncryption/SparsebundleTool.swift
 // 加密 sparsebundle 工具层: 包 macOS hdiutil 子命令 (create / attach / detach / info / chpass).
-// 设计稿见 docs/v3/ENCRYPTION.md "方案 A".
+// 整 VM 加密设计 "方案 A".
 //
 // 严格约束:
 //   - 加密算法固定 AES-256, 文件系统固定 APFS, 镜像格式固定 SPARSEBUNDLE

@@ -1,4 +1,4 @@
-// SidebarView.swift — 左栏 VM 列表 (业务页 #1, docs/v4/NEW_GUI_MAIN_LAYOUT.md M4).
+// SidebarView.swift — 左栏 VM 列表 (业务页 #1, M4).
 //
 // 行: 运行态圆点 + displayName + guestOS badge + 加密锁图标; 选中行 bgHover + 左侧
 // accent 竖条. 点击选中, 右键 context menu (启停/删除). probeID `vmlist.row.item-<id>`.

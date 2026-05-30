@@ -1,5 +1,5 @@
 // HVMEncryption/MountReaper.swift
-// 加密 VM (VZ 路径) 的 stale sparsebundle 挂载清理. 设计稿 docs/v3/ENCRYPTION.md v2.3.
+// 加密 VM (VZ 路径) 的 stale sparsebundle 挂载清理. 整 VM 加密设计 v2.3.
 //
 // 触发场景:
 //   - host crash / panic / kill -9 → VMHost 子进程死, sparsebundle 没 detach 留下挂载

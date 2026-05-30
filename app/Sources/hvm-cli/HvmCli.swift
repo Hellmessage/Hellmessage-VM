@@ -1,5 +1,4 @@
 // hvm-cli 主入口
-// 详见 docs/CLI.md
 
 import ArgumentParser
 import HVMCore

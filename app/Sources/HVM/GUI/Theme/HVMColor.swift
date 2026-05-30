@@ -3,7 +3,7 @@
 // 业务侧禁止 Color(red:..., green:..., blue:...) 或 Color(hex:...) 直写,
 // 一律走 HVMTheme.color.<name>. 防漂移 lint script (PR-L1) 会扫整个 GUI/ 拦.
 //
-// accent: 青 #06B6D4 (D1 已决 2026-05-28, 设计稿 docs/v3/NEW_GUI.md).
+// accent: 青 #06B6D4 (D1 已决 2026-05-28).
 //
 // 嵌进 HVMTheme namespace, 避免跟老 GUI 顶层 `public enum HVMColor`
 // (UI/Style/Theme.swift) 撞名.

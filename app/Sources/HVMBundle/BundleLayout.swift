@@ -1,6 +1,6 @@
 // HVMBundle/BundleLayout.swift
 // .hvmz 目录布局的路径助手. 所有相对路径定义集中于此
-// 布局规范见 docs/VM_BUNDLE.md
+// VM bundle 布局规范.
 
 import Foundation
 

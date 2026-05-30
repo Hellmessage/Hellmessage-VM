@@ -1,6 +1,6 @@
 // HVMDisplayQemu/FilePasteBridge.swift
 //
-// host → guest 文件粘贴桥. 详见 docs/v3/HOST_FILE_PASTE.md.
+// host → guest 文件粘贴桥.
 //
 // 流程:
 //   GUI 主进程 framebuffer view 拦 Cmd+V → 读 NSPasteboard file URLs

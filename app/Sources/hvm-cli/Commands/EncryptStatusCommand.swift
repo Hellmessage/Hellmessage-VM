@@ -1,7 +1,5 @@
 // EncryptStatusCommand.swift
 // hvm-cli encrypt-status <vm> — 不解密显示 VM 加密信息 (走 routing JSON).
-//
-// 设计稿 docs/v3/ENCRYPTION.md v2.4 PR-10b.
 
 import ArgumentParser
 import Foundation

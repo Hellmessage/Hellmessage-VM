@@ -1,8 +1,6 @@
 // EncryptCommand.swift
 // hvm-cli encrypt <vm> — 把现有明文 QEMU VM 转成加密 VM (冷迁移 in-place).
 //
-// 设计稿 docs/v3/ENCRYPTION.md v2.4 PR-10a.
-//
 // 限制 (实现层面):
 //   - 仅 QEMU engine. VZ engine VM 拒绝 (raw → LUKS qcow2 切引擎需独立 PR)
 //   - VM 必须 stopped (.edit lock 抢)

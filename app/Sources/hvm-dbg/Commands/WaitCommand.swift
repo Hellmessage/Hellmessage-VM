@@ -136,7 +136,7 @@ struct WaitCommand: AsyncParsableCommand {
         case .json:  printJSON(["match": false, "reason": reason])
         case .human: fputs("✗ \(reason)\n", stderr)
         }
-        // ipc.timed_out → exit 6, 与 hvm-cli / docs/DEBUG_PROBE.md 退出码对齐
+        // ipc.timed_out → exit 6, 与 hvm-cli 退出码对齐
         Foundation.exit(6)
     }
 }

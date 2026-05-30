@@ -1,7 +1,7 @@
 // HVMDisplay/BootPhaseClassifier.swift
 // 纯函数: OCR 文本 + guestOS → boot 阶段分类 (bios / boot-logo / ready-tty / ready-gui / unknown).
 //
-// 算法: 与 hvm-dbg dbg.boot_progress 文档对齐 (docs/DEBUG_PROBE.md).
+// 算法: 与 hvm-dbg dbg.boot_progress 文档对齐.
 // VZ DbgOps + QEMU QemuHostState 都走此 helper, 行为一致.
 //
 // 上层调用方负责截屏 + OCR; 把结果传进 classify 即可拿到 (phase, confidence).
@@ -23,7 +23,7 @@ public enum BootPhaseClassifier {
         }
     }
 
-    // MARK: - 关键字常量 (与上游 docs 对齐, 改动需同步 docs/DEBUG_PROBE.md)
+    // MARK: - 关键字常量 (与上游 docs 对齐)
 
     /// 字符行命中 = ready-tty (登录提示符). 全 lowercase 比对.
     public static let ttyKeywords: [String] = [

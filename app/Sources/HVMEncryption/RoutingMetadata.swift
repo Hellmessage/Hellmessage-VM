@@ -3,7 +3,7 @@
 // 跨机器 portable 入口: 目标机读 routing JSON 拿 KDF 参数 + scheme,
 // 用户输密码 → PBKDF2(password, salt) → master KEK → 解锁 VM.
 //
-// 设计稿 docs/v3/ENCRYPTION.md v2.3.
+// 整 VM 加密设计 v2.3.
 //
 // 文件位置:
 //   - VZ-sparsebundle: <parent>/<name>.hvmz.encryption.json (sparsebundle 同级)

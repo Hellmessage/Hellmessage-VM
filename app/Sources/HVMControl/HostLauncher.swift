@@ -1,6 +1,6 @@
 // HostLauncher.swift
 // HVM.app 作为 VMHost 子进程 (--host-mode-bundle 分支) 的拉起层. CLI + GUI store 共用.
-// docs/ARCHITECTURE.md 设计: HVM executable 自带 host 分派
+// 设计: HVM executable 自带 host 分派
 //
 // HVM binary 探测顺序 (locateHVMBinary):
 //   1. HVM_APP_PATH env (CI / 显式覆盖)
@@ -8,7 +8,7 @@
 //      - 装进 .app: 调用方 (hvm-cli / GUI 的 HVM) 在 Contents/MacOS/, 兄弟即 Contents/MacOS/HVM
 //      - dev build:  hvm-cli 在 build/hvm-cli, 兄弟 .app 是 build/HVM.app (无需 make install)
 //   3. /Applications/HVM.app, ~/Applications/HVM.app (兜底)
-// 设计稿 docs/v4/NEW_GUI_MAIN_LAYOUT.md (M1): dev 期 hvm-cli/GUI 自动用 build/HVM.app,
+// dev 期 hvm-cli/GUI 自动用 build/HVM.app,
 // 避免误用 /Applications 下的旧版 (两者 QEMU 资源可能不同步).
 
 import Foundation

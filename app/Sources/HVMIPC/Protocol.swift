@@ -126,7 +126,6 @@ public enum IPCOp: String, Sendable {
     /// timeoutSec? (默认 600). 走 qemu-guest-agent guest-file-* API, 不依赖 9p / virtiofs.
     /// VMHost 直接 open(2) localPath (HVM 是 sandboxless app, 子进程同样可读用户文件) →
     /// 1 MiB chunk base64 经 qga unix socket → guest qemu-ga 写入 remotePath.
-    /// 设计稿: docs/v3/FILE_COPY.md
     case dbgFilePush     = "dbg.file.push"
     /// guest → host 单文件 pull. args: remotePath, localPath, timeoutSec? (默认 600).
     /// 与 dbgFilePush 反向, 同款协议. 本地走 .hvm-tmp + atomic rename 防中断半成品.
@@ -146,12 +145,12 @@ public enum IPCOp: String, Sendable {
     /// host (GUI) 把用户 Cmd+V 选中的 host 文件 list 推给 VMHost,
     /// VMHost 走 SPICE vdagent VD_AGENT_FILE_XFER_* 流式传给 guest spice-vdagent,
     /// guest 落 ~/Downloads. args.paths = JSON 编码的 host 绝对路径数组.
-    /// 设计稿 docs/v3/HOST_FILE_PASTE.md. 仅 QEMU 后端 + Linux/Windows guest.
+    /// 仅 QEMU 后端 + Linux/Windows guest.
     /// 长事务: GUI 侧 timeoutSec 应 ≥ 600 (跟 FileTransferDialog 一致).
     case clipboardPasteFiles = "clipboard.paste-files"
     /// host (GUI) 触发"一键装 helper": 走 QGA 推 EXE + 注册 schtasks ONLOGON HIGHEST
     /// + 立即拉起. 仅 QEMU + Windows guest. args.force = "1" 时跳过 marker 检测强制重装.
-    /// 详见 docs/v3/HOST_FILE_CLIPBOARD.md §4.5 + GuestHelperInstaller.
+    /// 详见 GuestHelperInstaller.
     case clipboardInstallHelper = "clipboard.install-helper"
 }
 
@@ -214,7 +213,7 @@ public struct IPCDbgExecPayload: Codable, Sendable {
 }
 
 /// dbg.file.push / dbg.file.pull 响应 — 文件传输结果摘要. 进度反馈走 client 端
-/// 字节计数 (v1 不走 IPC stream, 见 docs/v3/FILE_COPY.md D4).
+/// 字节计数 (v1 不走 IPC stream).
 public struct IPCDbgFileTransferPayload: Codable, Sendable {
     public let bytesTransferred: Int64
     public let durationMs: Int64
@@ -344,7 +343,7 @@ public struct IPCDbgConsoleReadPayload: Codable, Sendable {
 }
 
 /// dbg.boot_progress 响应. 启发式判断 guest 启动阶段, confidence < 0.5 时 phase=unknown.
-/// 阶段定义见 docs/DEBUG_PROBE.md 的 boot-progress 章节.
+/// 阶段定义见 boot-progress 实现.
 public struct IPCDbgBootProgressPayload: Codable, Sendable {
     public var phase: String          // bios | boot-logo | ready-tty | ready-gui | unknown
     public var confidence: Float      // [0, 1]

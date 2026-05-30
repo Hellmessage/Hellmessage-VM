@@ -1,6 +1,6 @@
 // HVMBundle/BundleIO.swift
 // .hvmz bundle 的创建 / 加载 / 原子写入. config 落盘格式 = YAML (Yams).
-// 布局规范见 docs/VM_BUNDLE.md
+// VM bundle 布局规范.
 
 import Foundation
 import HVMCore

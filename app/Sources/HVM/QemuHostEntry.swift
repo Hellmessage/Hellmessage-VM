@@ -252,7 +252,7 @@ public enum QemuHostEntry {
 
         // 2.9 vmnet bridged 模式: 启 QEMU 前 ~200ms 探测 daemon 响应性. 抓 socket 孤儿 /
         //     daemon 协议错配 / daemon 异常拒绝. **不抓** "bridge attach silent 死" 那条
-        //     (user-space 无法可靠区分, 见 VMnetBridgeProbe.swift / docs/v3/VMNET_DAEMON_HEALTH.md R5).
+        //     (user-space 无法可靠区分, 见 VMnetBridgeProbe.swift R5).
         //     仅 warn, 不阻断启动 — argv 构造里的 SocketPaths.isReady 仍是硬门.
         //     shared / host 模式不探 (没物理桥, 这类故障路径不一样).
         for (idx, net) in config.networks.enumerated() {
@@ -377,7 +377,7 @@ public enum QemuHostEntry {
                 fputs("HVMHost(qemu): clipboard sharing 关闭 (config.clipboardSharingEnabled=false)\n", stderr)
             }
 
-            // 6.4c HVM 自家 guest helper bridge (UTM 风格文件剪贴板, docs/v3/HOST_FILE_CLIPBOARD.md).
+            // 6.4c HVM 自家 guest helper bridge (UTM 风格文件剪贴板).
             // 仅 Windows guest 起 — helper EXE 只有 Win ARM64 build, Linux guest 没意义.
             // 启动后立即异步 connect, helper 没就绪不报错 (silently retry 5s, 等 guest helper
             // 进程拉起来). PR-3 接 PasteboardBridge.onFileURLs callback 走 publishFiles 完整通路.
@@ -415,7 +415,7 @@ public enum QemuHostEntry {
                 }
             }
 
-            // 6.4b SPICE WebDAV server (共享目录, docs/v3/SHARED_FOLDER.md):
+            // 6.4b SPICE WebDAV server (共享目录):
             // sharedFolders 非空才起. SpiceWebdavServer 跟 vdagent 一样是 single-client
             // (-chardev server=on, HVM 主进程作 client 连入). guest 内 spice-webdavd 服务
             // 通过 virtio-port org.spice-space.webdav.0 跟我们说 WebDAV-over-mux-frame 协议.
@@ -735,16 +735,16 @@ final class QemuHostState {
     var vdagent: VdagentClient?
     /// host ↔ guest 剪贴板桥. nil 表示用户关掉了 clipboard sharing.
     var pasteboardBridge: PasteboardBridge?
-    /// host → guest 文件粘贴桥 (设计稿 docs/v3/HOST_FILE_PASTE.md).
+    /// host → guest 文件粘贴桥.
     /// 跟 PasteboardBridge 共享同一 VdagentClient (不同 callback slot, 不抢).
     /// lazy: 第一个 clipboard.paste-files 请求到达时创建 + install.
     /// clipboard sharing 关掉时**不**自动 uninstall — 文件粘贴是显式 Cmd+V 触发, 跟
     /// 文本剪贴板 1Hz 轮询是不同语义, 不联动开关.
     var filePasteBridge: FilePasteBridge?
-    /// SPICE WebDAV server (共享目录, docs/v3/SHARED_FOLDER.md). nil = 该 VM config.sharedFolders 空.
+    /// SPICE WebDAV server (共享目录). nil = 该 VM config.sharedFolders 空.
     /// 跟 vdagent 同款 single-client socket, 由 VMHost 唯一持有. tearDown 不需特殊清理 (deinit 自动关 fd).
     var spiceWebdav: SpiceWebdavServer?
-    /// HVM 自家 guest helper 通路 — docs/v3/HOST_FILE_CLIPBOARD.md UTM 风格文件剪贴板.
+    /// HVM 自家 guest helper 通路 — UTM 风格文件剪贴板.
     /// 仅 Windows guest 启动. tearDown 时 stop() 让 read loop 退出 + 清 pending continuations.
     var fileClipboardBridge: HVMFileClipboardBridge?
 
@@ -1619,7 +1619,7 @@ final class QemuHostState {
     /// QEMU 后端的 thumbnail 抓帧改在 GUI 进程做 (QemuEmbeddedSession), 直接读
     /// FramebufferRenderer 的 bytesNoCopy mmap shm 编 PNG, 0 暂停 0 拷贝.
     /// host 进程不再调 QMP screendump (它是 stop-the-world, 每 10s 卡顿一次,
-    /// 严重影响 guest 体验, 详见 docs/QEMU_INTEGRATION.md). 这里保留空函数仅为
+    /// 严重影响 guest 体验). 这里保留空函数仅为
     /// API 兼容, 本身 no-op.
     func startThumbnailTimer() {
         thumbnailTimer?.invalidate()

@@ -1,5 +1,5 @@
 // HVMEncryption/DecryptVMOperation.swift
-// 加密 QEMU VM → 明文 VM 冷迁移. 设计稿 docs/v3/ENCRYPTION.md v2.4 PR-10b.
+// 加密 QEMU VM → 明文 VM 冷迁移. 整 VM 加密设计 v2.4 PR-10b.
 //
 // 流程 (`hvm-cli decrypt <vm>`):
 //   1. 校验 VM stopped + 加密形态

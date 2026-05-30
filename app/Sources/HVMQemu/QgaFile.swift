@@ -14,7 +14,7 @@
 //   - VM 在跑 + qemu-ga.exe 服务已 attach (Win UTM Guest Tools / Linux apt install)
 //   - guest-file-* 在 qemu-ga blacklist 之外 (默认开放, 装包脚本不强制 disable)
 //
-// v1 限制 (设计稿 docs/v3/FILE_COPY.md):
+// v1 限制:
 //   - 单文件, 不递归
 //   - 远端写入非原子 — 中断会留半成品 dst (调用方自决是否 .hvm-tmp + rename 兜底,
 //     这层不掺合 OS 路径分隔符判定)

@@ -1,6 +1,6 @@
 // HVMBundle/BundleLock.swift
 // 对 bundle/.lock 文件加 fcntl flock(LOCK_EX|LOCK_NB)
-// 语义见 docs/VM_BUNDLE.md "互斥锁 (flock)"
+// 语义: bundle 互斥锁 (flock)
 //
 // 跨主机限制: flock(2) 只在本机 inode 上互斥. bundle 若放在 NFS / SMB 共享卷上,
 // 两台主机可同时拿到锁, 触发 docs 里"一 bundle 同时只能被一个进程打开"的硬约束失效.

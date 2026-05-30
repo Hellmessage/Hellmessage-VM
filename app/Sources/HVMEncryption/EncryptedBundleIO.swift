@@ -1,6 +1,6 @@
 // HVMEncryption/EncryptedBundleIO.swift
 // 加密 VM 路由层 — 把 PR-1~7 全部底层模块缝合成一个干净接口.
-// 设计稿 docs/v3/ENCRYPTION.md v2.3.
+// 整 VM 加密设计 v2.3.
 //
 // 双 scheme:
 //   vz-sparsebundle: 整 bundle 套加密 sparsebundle, attach 后 mountpoint 内是普通 .hvmz

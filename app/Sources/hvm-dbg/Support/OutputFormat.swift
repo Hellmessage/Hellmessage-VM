@@ -12,7 +12,7 @@ public enum OutputFormat: String, ExpressibleByArgument, Sendable {
     case json
 }
 
-/// docs/DEBUG_PROBE.md 退出码: 与 hvm-cli 一致, + 20/21/22/23 给 hvm-dbg 专属.
+/// 退出码: 与 hvm-cli 一致, + 20/21/22/23 给 hvm-dbg 专属.
 public func exitCode(for code: String) -> Int32 {
     if code.hasPrefix("dbg.vm_not_running") { return 20 }
     if code.hasPrefix("ipc.socket_not_found") || code.hasPrefix("ipc.connection_refused") { return 21 }

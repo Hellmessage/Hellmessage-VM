@@ -8,7 +8,6 @@
 
     <!--
         桥接网络能力, 需向 Apple 申请 com.apple.vm.networking entitlement
-        详见 docs/ENTITLEMENT.md
         审批通过后取消下面注释并重签
 
         <key>com.apple.vm.networking</key>

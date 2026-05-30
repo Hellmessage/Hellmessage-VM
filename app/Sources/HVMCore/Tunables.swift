@@ -42,7 +42,7 @@ public enum HVMScreenshot {
     /// 调小 = OCR 精度损失; 调大 = 单张 PNG 体积膨胀.
     public static let apiMaxEdge: Int = 1568
 
-    /// VM 列表 thumbnail 的最长边. docs/VM_BUNDLE.md 约定 512.
+    /// VM 列表 thumbnail 的最长边. 约定 512.
     public static let thumbnailMaxEdge: Int = 512
 
     /// thumbnail 抓帧间隔 (秒). VZ + QEMU 后端共用. 调小耗 CPU, 调大列表里看到的画面更滞后.

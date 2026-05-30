@@ -1,7 +1,6 @@
 // HVMDisplayQemu/HVMFileClipboardBridge.swift
 //
 // UTM 风格 host → guest 文件剪贴板 — host 端的 JSON 协议 client.
-// 详见 docs/v3/HOST_FILE_CLIPBOARD.md.
 //
 // 通路:
 //   macOS Cmd+C 文件 → PasteboardBridge 通知 (走独立 onFileURLs callback)
@@ -41,8 +40,7 @@ public final class HVMFileClipboardBridge: @unchecked Sendable {
     private static let reconnectDelaySec: TimeInterval = 5
 
     /// Guest 端 staging 目录. 用 `C:\ProgramData\HVM\clipboard\` (world-writable +
-    /// world-readable, 任何 user-session app 都能 paste 读). 跟 docs/v3/HOST_FILE_CLIPBOARD.md
-    /// D4 一致.
+    /// world-readable, 任何 user-session app 都能 paste 读).
     public static let guestStagingDir = #"C:\ProgramData\HVM\clipboard"#
 
     /// 单文件 1 GiB 软上限. 比 FILE_XFER 4 GiB 严些 — 剪贴板期望 snappy, 大文件用户走

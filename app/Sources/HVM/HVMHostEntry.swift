@@ -1,6 +1,6 @@
 // HVMHostEntry.swift — VMHost 子进程入口 (`--host-mode-bundle`).
 //
-// QEMU-only 转向后 (docs/v4/QEMU_ONLY_PIVOT.md): VZ 后端整条移除. 本入口只做
+// QEMU-only 转向后: VZ 后端整条移除. 本入口只做
 // 加密检测 + 解锁 + 抢锁 等共用前置, 然后一律分派 QemuHostEntry (QEMU 子进程跑
 // qemu-system-aarch64 + HDP IOSurface 显示). 老的 VZ 离屏 window / HVMView / HostState
 // 已删. 明文/加密 (qemuPerfile) 都走 QEMU; vz / vz-sparsebundle 报错下线.

@@ -8,7 +8,7 @@
 //      b) prod: open /Applications/HVM.app → Bundle.main = /Applications/HVM.app
 //
 // 不再支持 swift run / swift test 直接跑 QEMU 路径 (测试用 env override 覆盖).
-// 决策记录见 docs/QEMU_INTEGRATION.md + CLAUDE.md "第三方二进制 / Helper 脚本约束".
+// 决策记录见 CLAUDE.md "第三方二进制 / Helper 脚本约束".
 
 import Foundation
 
@@ -72,7 +72,7 @@ public enum QemuPaths {
     // `-netdev stream,addr.type=unix,addr.path=...` 连 daemon — daemon 协议 (4-byte
     // length-prefix framing) 跟 QEMU `-netdev stream` 兼容, 不需要 socket_vmnet_client
     // wrapper, 不需要父进程透传 fd (老 sidecar fd-passing 路径已下线).
-    // 详见 CLAUDE.md "socket_vmnet 网络约束" 与 docs/v1/NETWORK.md.
+    // 详见 CLAUDE.md "socket_vmnet 网络约束".
 
     /// EDK2 aarch64 UEFI firmware (Linux + Windows arm64 启动必需)
     public static func edk2Firmware() throws -> URL {

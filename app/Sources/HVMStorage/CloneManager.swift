@@ -1,6 +1,5 @@
 // HVMStorage/CloneManager.swift
 // 整 VM 克隆: APFS clonefile(2) 复制磁盘 + nvram/tpm/auxiliary/meta + 重生身份字段.
-// 设计稿见 docs/v3/CLONE.md + docs/v3/CLONE_SNAPSHOT_ENCRYPTED.md (加密分支).
 //
 // 重生策略:
 //   - config.id            → UUID()
@@ -262,7 +261,7 @@ public enum CloneManager {
 
     // MARK: - 加密 QEMU clone (D9 = 等价复制 + 同密码)
 
-    /// 加密 QEMU VM clone. 设计稿 docs/v3/CLONE_SNAPSHOT_ENCRYPTED.md PR-B.
+    /// 加密 QEMU VM clone.
     ///
     /// 关键不变量:
     ///   - 源密码 → 目标密码 (一字不差; clone 不改密码)

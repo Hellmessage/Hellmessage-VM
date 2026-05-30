@@ -1,6 +1,5 @@
 // HVMCore/SignalGuard.swift
 // 加密长事务 (encrypt / decrypt / rekey) 的 SIGINT/SIGTERM 防中断 + 兜底清理.
-// 设计稿 docs/v3/SIGINT_CLEANUP.md.
 //
 // 用户体验:
 //   - 第一次 Ctrl-C → 打印警告 "操作进行中, 请等待结束 (再次 Ctrl-C 强制退出, 可能留残留)"

@@ -1,6 +1,6 @@
 // hvm-dbg/Commands/PasteFilesCommand.swift
 // hvm-dbg paste-files — 模拟用户在 FramebufferHostView 按 Cmd+V 的整条 host→guest
-// 文件粘贴通路. 设计稿 docs/v3/HOST_FILE_PASTE.md.
+// 文件粘贴通路.
 //
 // 用法:
 //   hvm-dbg paste-files <vm> --file /local/a.txt --file /local/b.zip

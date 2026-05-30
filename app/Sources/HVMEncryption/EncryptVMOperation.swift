@@ -1,5 +1,5 @@
 // HVMEncryption/EncryptVMOperation.swift
-// 老明文 QEMU VM → 加密 VM 冷迁移. 设计稿 docs/v3/ENCRYPTION.md v2.4 PR-10a.
+// 老明文 QEMU VM → 加密 VM 冷迁移. 整 VM 加密设计 v2.4 PR-10a.
 //
 // 流程 (`hvm-cli encrypt <vm>`):
 //   1. 校验 VM stopped (调用方抢 .edit lock)

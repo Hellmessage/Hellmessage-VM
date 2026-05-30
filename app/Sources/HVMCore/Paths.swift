@@ -23,7 +23,6 @@ public enum HVMPaths {
 
     /// 加密 VM (VZ 路径) sparsebundle attach 后的挂载点根目录,
     /// ~/Library/Application Support/HVM/mounts.
-    /// 设计稿 docs/v3/ENCRYPTION.md v2.3.
     public static var mountsRoot: URL {
         appSupport.appendingPathComponent("mounts", isDirectory: true)
     }
@@ -140,7 +139,7 @@ public enum HVMPaths {
     public static func qgaSocketPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).qga.sock")
     }
-    /// SPICE WebDAV virtio-serial chardev socket — host ↔ guest 共享目录 (docs/v3/SHARED_FOLDER.md).
+    /// SPICE WebDAV virtio-serial chardev socket — host ↔ guest 共享目录.
     /// QEMU 作 chardev server, HVM 主进程 SpiceWebdavServer 作 client 连入读写 mux frame.
     /// guest 内 spice-webdavd 通过 virtio-port `org.spice-space.webdav.0` 把本地
     /// \\localhost\dav (Win) / GVFS davs:// (Linux) HTTP 流转给 host.
@@ -148,7 +147,7 @@ public enum HVMPaths {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).webdav.sock")
     }
     /// HVM 自家 guest helper virtio-serial chardev socket — UTM 风格文件剪贴板
-    /// (docs/v3/HOST_FILE_CLIPBOARD.md). QEMU 作 chardev server, HVM 主进程
+    /// QEMU 作 chardev server, HVM 主进程
     /// HVMFileClipboardBridge 作 client 连入. guest 内 hvm-guest-helper.exe 通过
     /// virtio-port `com.hellmessage.hvm-clipboard.0` 收 host 端 JSON 指令调
     /// OleSetClipboard 设 Win 用户剪贴板.

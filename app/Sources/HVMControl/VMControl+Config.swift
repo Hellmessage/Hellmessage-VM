@@ -1,4 +1,4 @@
-// VMControl+Config.swift — 配置编辑 + 磁盘操作 (业务页 #2, docs/v4/NEW_GUI_VM_DETAIL.md V1).
+// VMControl+Config.swift — 配置编辑 + 磁盘操作 (业务页 #2).
 //
 // 视图无关的配置保存层, 收口老 AppModel.saveConfig + DiskFactory 调用. CLI + 新 GUI 共用.
 // 明文走 BundleIO; 加密走 EncryptedConfigIO (调用方传 config subkey, 解锁流程 V2 产出).

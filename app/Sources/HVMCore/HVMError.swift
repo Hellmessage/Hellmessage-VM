@@ -1,6 +1,5 @@
 // HVMCore/HVMError.swift
 // 错误根类型 + 各子错误具体 case + UserFacing 映射
-// 完整设计见 docs/ERROR_MODEL.md
 
 import Foundation
 
@@ -103,7 +102,7 @@ public enum IPCError: Error, Sendable {
     case serverBindFailed(path: String, errno: Int32)
 }
 
-// MARK: - Encryption (整 VM 加密, sparsebundle + Keychain, docs/v3/ENCRYPTION.md)
+// MARK: - Encryption (整 VM 加密, sparsebundle + Keychain)
 
 public enum EncryptionError: Error, Sendable {
     /// hdiutil 子命令以非 0 退出. verb 指 create/attach/detach/chpass/info 等
@@ -308,7 +307,7 @@ public extension BackendError {
         case .bridgedNotEntitled:
             return .init(code: HVMErrorCode.backendBridgedNotEntitled.rawValue,
                          message: "桥接网络 entitlement 未启用",
-                         hint: "详见 docs/ENTITLEMENT.md")
+                         hint: "需要桥接网络 entitlement")
         case .ipswInvalid(let r):
             return .init(code: HVMErrorCode.backendIPSWInvalid.rawValue,
                          message: "IPSW 文件无效或不被支持",
@@ -375,7 +374,7 @@ public extension NetError {
         case .bridgedNotEntitled:
             return .init(code: HVMErrorCode.netBridgedNotEntitled.rawValue,
                          message: "桥接网络 entitlement 未启用",
-                         hint: "详见 docs/ENTITLEMENT.md")
+                         hint: "需要桥接网络 entitlement")
         case .bridgedInterfaceNotFound(let req, let avail):
             return .init(code: HVMErrorCode.netBridgedInterfaceNotFound.rawValue,
                          message: "指定的桥接接口不存在",

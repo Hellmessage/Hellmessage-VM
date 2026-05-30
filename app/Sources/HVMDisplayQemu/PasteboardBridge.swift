@@ -92,7 +92,7 @@ public final class PasteboardBridge {
 
     /// macOS Cmd+C 一个文件时触发. closure 由 QemuHostEntry 注入, 内部走
     /// HVMFileClipboardBridge.publishFiles — QGA 上传 + 通知 guest helper 设 Win clipboard
-    /// (UTM 风格 paste-where-you-paste, docs/v3/HOST_FILE_CLIPBOARD.md).
+    /// (UTM 风格 paste-where-you-paste).
     /// nil = 没接入文件剪贴板通路 (例如 Linux guest 或老 binary), file URLs 直接忽略.
     /// 在内部 Pasteboard 轮询线程上调; 调用方负责切到目标线程.
     public var onFileURLs: (([URL]) -> Void)?
@@ -112,8 +112,7 @@ public final class PasteboardBridge {
 
         // 同时取 text + image PNG + file URLs. text/image 走 vdagent (mime 1/2),
         // file URLs 走 onFileURLs callback (独立的 HVMFileClipboardBridge 通路, 因为
-        // UTM Guest Tools vdagent.exe 不实现 CLIPBOARD_FILE_LIST mime=6, 详见
-        // docs/v3/HOST_FILE_CLIPBOARD.md).
+        // UTM Guest Tools vdagent.exe 不实现 CLIPBOARD_FILE_LIST mime=6).
         //
         // 优先级: file URLs 跟 text/image 都试 — Cmd+C 一个 file 时 NSPasteboard 通常
         // 同时含 file URL + 文件名文本, 我们各走各的 (guest 端 helper 设 CF_HDROP,

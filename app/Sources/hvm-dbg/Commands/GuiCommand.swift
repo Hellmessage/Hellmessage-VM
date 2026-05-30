@@ -1,6 +1,5 @@
 // hvm-dbg/Commands/GuiCommand.swift
 // hvm-dbg gui — 跟 HVM GUI 主进程对话 (HDP-GUI 协议).
-// 设计稿 docs/v3/HVM_DBG_GUI_PROTOCOL.md.
 //
 // 子命令 (PR-G1 仅 ping / screenshot; G2-G4 扩):
 //   - hvm-dbg gui ping        健康探测, 验证 server 已启

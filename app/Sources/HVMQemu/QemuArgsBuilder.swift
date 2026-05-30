@@ -72,17 +72,16 @@ public enum QemuArgsBuilder {
         /// SPICE WebDAV virtio-serial chardev socket (host ↔ guest 共享目录).
         /// 非 nil 时 argv 加 chardev webdav + virtserialport name=org.spice-space.webdav.0,
         /// guest 内 spice-webdavd 服务自动 attach. host 端 SpiceWebdavServer 在此 socket
-        /// 上跑 WebDAV server. 仅 config.sharedFolders 非空 + QEMU 后端时设. 详见
-        /// docs/v3/SHARED_FOLDER.md.
+        /// 上跑 WebDAV server. 仅 config.sharedFolders 非空 + QEMU 后端时设.
         public let webdavSocketPath: String?
 
         /// 非 nil 时 argv 加 chardev hvmclipboard + virtserialport name=com.hellmessage.hvm-clipboard.0,
         /// 给 HVM 自家 guest helper (hvm-guest-helper.exe) 收 host 指令调 OleSetClipboard
         /// 设 Win 用户剪贴板 (UTM 风格 paste-where-you-paste). 仅 QEMU + Windows guest 时设.
-        /// host 端 HVMFileClipboardBridge 作 client 连入. 详见 docs/v3/HOST_FILE_CLIPBOARD.md.
+        /// host 端 HVMFileClipboardBridge 作 client 连入.
         public let hvmClipboardSocketPath: String?
 
-        // ---- 加密 (qemu-perfile, docs/v3/ENCRYPTION.md v2.4) ----
+        // ---- 加密 (qemu-perfile) ----
         /// 加密 LUKS qcow2 主盘 / 数据盘的 secret 文件路径 (base64 ASCII passphrase).
         /// 由 LuksSecretFile 创建 (0o600 + base64 binary key). 启动后调用方立即 unlink.
         /// nil → 走明文 disks 路径 (现状行为, 不变).
@@ -151,7 +150,7 @@ public enum QemuArgsBuilder {
         //   Win11 ARM64 bootmgfw 能成功 ConvertPages. **要求配套 patch 过的 EDK2 firmware**;
         //   stock kraxel firmware 看到 0x10000000 /memory 节点会 ASSERT 挂死, 所以默认关.
         //   开启路径: 跑 scripts/edk2-build.sh build 出 patched firmware 拷进 stage, 再 export
-        //   HVM_QEMU_WIN11_LOWRAM=1 启动 Win11 VM. 详见 docs/QEMU_INTEGRATION.md.
+        //   HVM_QEMU_WIN11_LOWRAM=1 启动 Win11 VM.
         var machineOpts = "virt,gic-version=3"
         if cfg.guestOS == .windows,
            ProcessInfo.processInfo.environment["HVM_QEMU_WIN11_LOWRAM"] == "1" {
@@ -436,7 +435,7 @@ public enum QemuArgsBuilder {
             args += ["-chardev", "socket,id=qga,path=\(qgaSocket),server=on,wait=off"]
             args += ["-device", "virtserialport,bus=vsp0.0,chardev=qga,name=org.qemu.guest_agent.0"]
         }
-        // SPICE WebDAV 通路 — host ↔ guest 共享目录 (docs/v3/SHARED_FOLDER.md).
+        // SPICE WebDAV 通路 — host ↔ guest 共享目录.
         // chardev server=on 让 QEMU listen, host 端 SpiceWebdavServer 作 client 连进来
         // (跟 vdagent 同款 single-client 模式). guest 内 spice-webdavd 服务连虚拟串口
         // /dev/virtio-ports/org.spice-space.webdav.0, 把本地 \\localhost\dav (Win) 或
@@ -445,7 +444,7 @@ public enum QemuArgsBuilder {
             args += ["-chardev", "socket,id=webdav,path=\(webdavSocket),server=on,wait=off"]
             args += ["-device", "virtserialport,bus=vsp0.0,chardev=webdav,name=org.spice-space.webdav.0"]
         }
-        // HVM 自家 guest helper 通路 — docs/v3/HOST_FILE_CLIPBOARD.md.
+        // HVM 自家 guest helper 通路.
         // host 端 HVMFileClipboardBridge 作 client 连入, guest 内 hvm-guest-helper.exe 打开
         // \\.\Global\com.hellmessage.hvm-clipboard.0 作 server-side port. JSON 协议跑
         // length-prefix framing (跟 HVMIPC 同款).

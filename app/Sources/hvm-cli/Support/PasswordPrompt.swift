@@ -2,7 +2,7 @@
 // 加密 VM 操作 (start / encrypt / decrypt / rekey) 的密码输入助手.
 // 走 BSD readpassphrase(3) — 关闭终端 echo, 不显示用户输入字符.
 //
-// 设计稿 docs/v3/ENCRYPTION.md v2.4: 强制每次输入密码, 不缓存到 Keychain.
+// 强制每次输入密码, 不缓存到 Keychain.
 
 import Foundation
 import Darwin

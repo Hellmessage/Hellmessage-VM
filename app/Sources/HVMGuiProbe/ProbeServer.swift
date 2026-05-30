@@ -1,6 +1,6 @@
 // HVMGuiProbe/ProbeServer.swift
 // hvm-dbg ↔ HVM GUI 测试协议 (HDP-GUI) 服务端.
-// 设计稿 docs/v3/HVM_DBG_GUI_PROTOCOL.md.
+// HDP-GUI 协议.
 //
 // 跨 module 依赖说明: 引 HVMDisplayQemu 拿 FramebufferHostView (debug.simulate-drop /
 // debug.show-drop-overlay 直接戳 view 测拖放通路).

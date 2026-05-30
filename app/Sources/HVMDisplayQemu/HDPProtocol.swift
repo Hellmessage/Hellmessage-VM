@@ -2,7 +2,7 @@
 //
 // HVM-QEMU 显示嵌入协议 (HDP) 的 Swift 端定义
 //
-// 协议规范 (canonical): docs/QEMU_DISPLAY_PROTOCOL.md v1.0.0
+// 协议规范 (canonical): HDP v1.0.0
 // C 端镜像头:           include/ui/hvm_display_proto.h (在 patches/qemu/0002 中)
 //
 // **同步规则**: 修改本文件必须同步上述两份文件并在协议规范文档 §13 追加版本条目.

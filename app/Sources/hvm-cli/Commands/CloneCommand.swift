@@ -6,7 +6,7 @@
 //   - prompt 源密码 → unlock 拿 sub keys → 字节复制 + 用源 sub.config 重新加密 config
 //   - clone 出来跟源同密码; 想换密码自跑 hvm-cli rekey
 //
-// 实现见 HVMStorage/CloneManager.swift; 设计稿 docs/v3/CLONE.md + CLONE_SNAPSHOT_ENCRYPTED.md.
+// 实现见 HVMStorage/CloneManager.swift.
 
 import ArgumentParser
 import Foundation

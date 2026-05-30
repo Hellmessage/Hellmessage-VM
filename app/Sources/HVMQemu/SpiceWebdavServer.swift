@@ -1,6 +1,6 @@
 // HVMQemu/SpiceWebdavServer.swift
 //
-// host ↔ guest 共享目录 SPICE WebDAV server. 设计稿 docs/v3/SHARED_FOLDER.md.
+// host ↔ guest 共享目录 SPICE WebDAV server.
 //
 // 架构:
 //   QEMU chardev (server=on) ── unix socket ── SpiceWebdavServer 作 client 连入
@@ -16,7 +16,7 @@
 //                                                  │
 //                                                  └─ roots: [Root] (host 路径 + RO flag, 唯一来源)
 //
-// Wire 协议 (per docs/v3/SHARED_FOLDER.md 调研, 跟 phodav 源码对齐):
+// Wire 协议 (跟 phodav 源码对齐):
 //   frame: [client_id u64_le][size u16_le][payload <= 65535 bytes]
 //   size=0 是 client 主动关连接 signal.
 //   HTTP 跨多 frame 时同 client_id 关联, payload 按字节拼接还原 HTTP 流.

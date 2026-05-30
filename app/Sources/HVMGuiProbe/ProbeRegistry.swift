@@ -1,6 +1,6 @@
 // HVMGuiProbe/ProbeRegistry.swift
 // 自家 SwiftUI 控件 → 测试 closure 的全局注册表.
-// 设计稿 docs/v3/HVM_DBG_GUI_PROTOCOL.md D-G2 (重构版).
+// HDP-GUI 协议 D-G2 (重构版).
 //
 // 为什么不用 NSAccessibility:
 //   SwiftUI 通过 NSHostingView 合成 a11y children, 但默认只在 VoiceOver 激活时

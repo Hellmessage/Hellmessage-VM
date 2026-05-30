@@ -25,7 +25,6 @@ else
   - 本机开发期可用: AMFI 接受 com.apple.security.virtualization, VZ guest 能正常起
   - 不能拷给其他人用: 其他 Mac 上 AMFI 会拒绝 entitlement, .app 启动即崩
   - 想出可分发版本: 在 Apple Developer 注册个人证书后 make build 会自动用真实身份
-  - 详见 docs/BUILD_SIGN.md
 EOF
 fi
 
@@ -93,7 +92,7 @@ fi
 
 # 4.4b 拷贝 HVM Guest Helper EXE (arm64 Windows) + libunwind.dll 入 Resources/GuestHelper/.
 #      QemuHostEntry 启 Windows VM 后通过 QGA push 到 guest C:\Program Files\HVM Guest Helper\.
-#      详见 docs/v3/HOST_FILE_CLIPBOARD.md §4.5. 缺 EXE 时不 fail (Linux/macOS guest 不需要,
+#      缺 EXE 时不 fail (Linux/macOS guest 不需要,
 #      Win guest 跑没 helper 也只是文件剪贴板不可用, 其他功能不受影响).
 #      libunwind.dll: helper EXE 用 llvm-mingw 链 LLVM 异常 unwinder, 默认动态依赖 libunwind.dll;
 #      不带这个 DLL Windows 启 helper 直接静默死掉 (api-ms-win-* DLL 加载失败前 ldr 就 abort).

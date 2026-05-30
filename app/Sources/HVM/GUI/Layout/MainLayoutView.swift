@@ -1,4 +1,4 @@
-// MainLayoutView.swift — 新 GUI 主界面骨架 (业务页 #1, docs/v4/NEW_GUI_MAIN_LAYOUT.md M3).
+// MainLayoutView.swift — 新 GUI 主界面骨架 (业务页 #1, M3).
 //
 // 两栏: toolbar / [sidebar 240 | detail] / statusbar. 自绘固定宽 sidebar (Linear 风,
 // 不用 NavigationSplitView 免系统 vibrancy). 持 NewGUIStore 经 .environment 下传;

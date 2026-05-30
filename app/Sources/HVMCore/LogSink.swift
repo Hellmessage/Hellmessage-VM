@@ -1,6 +1,6 @@
 // HVMCore/LogSink.swift
 // 把 os.Logger 的日志异步 mirror 到 ~/Library/Application Support/HVM/logs/<yyyy-MM-dd>.log,
-// 按天 rotate, 保留 14 天 (docs/ARCHITECTURE.md "日志").
+// 按天 rotate, 保留 14 天.
 //
 // 实现路径: 用 OSLogStore.getEntries 周期性拉取本进程的 OSLogEntry, 过滤 subsystem,
 // 写入当日文件. 优点:

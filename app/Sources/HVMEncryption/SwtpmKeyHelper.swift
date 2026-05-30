@@ -1,7 +1,7 @@
 // HVMEncryption/SwtpmKeyHelper.swift
 // 给 swtpm 子进程注入 32 字节 NVRAM 加密 key. 走 stdin (fd=0) + Pipe, 不落盘.
 //
-// 设计稿 docs/v3/ENCRYPTION.md v2.3 D10.
+// 整 VM 加密设计 v2.3 D10.
 //
 // 流程 (启动加密 Win VM 时):
 //   1. HVM 主进程派生 swtpm-key (HKDF from master, 32 字节 binary)

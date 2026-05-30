@@ -1,6 +1,5 @@
 // HVM executable 主入口
-// 根据 argv 分派到 GUI 模式或 VMHost 模式
-// 详见 docs/ARCHITECTURE.md "进程模型"
+// 根据 argv 分派到 GUI 模式或 VMHost 模式 (进程模型)
 
 import Foundation
 import HVMCore
@@ -48,7 +47,7 @@ if args.count >= 3, args[1] == "--host-mode-bundle" {
 
     HVMHostEntry.run(bundlePath: args[2], password: password, embeddedInGUI: embeddedInGUI)
 } else {
-    // GUI 模式: AppKit NSApplication runloop. 老 GUI (UI/**) 已随 QEMU-only 转向退役删除
-    // (docs/v4/QEMU_ONLY_PIVOT.md), 唯一 GUI 走 GUI/** 下的 NewGUIAppLauncher.
+    // GUI 模式: AppKit NSApplication runloop. 老 GUI (UI/**) 已随 QEMU-only 转向退役删除,
+    // 唯一 GUI 走 GUI/** 下的 NewGUIAppLauncher.
     NewGUIAppLauncher.run()
 }

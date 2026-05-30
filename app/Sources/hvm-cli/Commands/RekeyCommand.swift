@@ -1,7 +1,6 @@
 // RekeyCommand.swift
 // hvm-cli rekey <vm> — 加密 QEMU VM 改密.
 //
-// 设计稿 docs/v3/ENCRYPTION.md v2.4 PR-10b.
 // rekey 重置 TPM (swtpm 现有 state 用 old swtpm-key 加密, 用 new 启动 swtpm 解不开).
 
 import ArgumentParser

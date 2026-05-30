@@ -1,6 +1,6 @@
 // HVMCore/Logger.swift
 // 薄封装 os.Logger, 统一 subsystem 与 category 命名.
-// 敏感字段脱敏约束见 docs/ERROR_MODEL.md.
+// 敏感字段脱敏约束见错误模型.
 //
 // 副作用: 第一次调 HVMLog.logger() 会 lazy 启动 LogSink, 把本进程发的 log 异步 mirror
 // 到 ~/Library/Application Support/HVM/logs/<yyyy-MM-dd>.log, 按天 rotate, 保留 14 天.

@@ -4,7 +4,7 @@
 // V1: hardcoded 7 个常用 arm64 发行版 ISO (Ubuntu LTS x2 / Debian / Fedora / Alpine / Rocky / openSUSE)
 // 加用户自定义 URL 兜底 (custom). 后续可加运行时 fetch 动态解析 SHA256SUMS 自动刷新版本.
 //
-// 数据由 docs/GUEST_OS_INSTALL.md 维护 + 升级时同步到本文件; 升级时:
+// 数据升级时同步到本文件; 升级时:
 //   1. webfetch 各发行版 SHA256SUMS / CHECKSUM 拿新 ISO 文件名 + hash
 //   2. 更新本文件 entries 数组 (URL + sha256 + version)
 //   3. make build 跑通 + 实测下载 1 个验证

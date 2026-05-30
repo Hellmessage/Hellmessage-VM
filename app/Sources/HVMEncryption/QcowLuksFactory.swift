@@ -2,7 +2,7 @@
 // QEMU 路径加密: qcow2 native LUKS create / resize / rekey 包.
 // 走 HVM 包内 qemu-img (Bundle.main/Resources/QEMU/bin/qemu-img).
 //
-// 设计稿 docs/v3/ENCRYPTION.md v2.2.
+// 整 VM 加密设计 v2.2.
 //
 // API:
 //   - create(at:, sizeBytes:, key:, qemuImg:) — qemu-img create LUKS qcow2

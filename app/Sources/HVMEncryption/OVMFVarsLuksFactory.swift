@@ -2,7 +2,7 @@
 // QEMU 路径加密 VM 的 OVMF VARS 加密化. 把 stock raw `edk2-aarch64-vars.fd` 模板
 // 转成 LUKS 加密 qcow2 (efi-vars.qcow2), QEMU 启动期走 -drive file.driver=luks 加载.
 //
-// 设计稿 docs/v3/ENCRYPTION.md v2.2 "QEMU 路径 加密点四件套".
+// 整 VM 加密设计 v2.2 "QEMU 路径 加密点四件套".
 //
 // 流程 (创建加密 Win VM 时):
 //   1. CreateVMDialog / EncryptedBundleIO 拿到 master KEK + HKDF 派生 nvramKey (32B)

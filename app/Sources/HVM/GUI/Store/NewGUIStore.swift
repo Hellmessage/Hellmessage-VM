@@ -1,4 +1,4 @@
-// NewGUIStore.swift — 新 GUI 精简数据 store (业务页 #1, docs/v4/NEW_GUI_MAIN_LAYOUT.md M2)
+// NewGUIStore.swift — 新 GUI 精简数据 store (业务页 #1, M2)
 //
 // 不依赖老 AppModel — 直接调视图无关的 HVMControl 门面 (枚举/启停/删除). 不背
 // embeddedID / detachedQemuVMs / VZ in-process session 等老 GUI 历史耦合.
@@ -366,7 +366,7 @@ public final class NewGUIStore {
         refresh()
     }
 
-    // MARK: - 加密事务 (业务页 #3, docs/v4/NEW_GUI_ENCRYPTION.md E1)
+    // MARK: - 加密事务 (业务页 #3, E1)
 
     /// 加密/解密/改密 进度行 (dialog 订阅, @Observable 自动驱动 UI). 每次事务开始清空.
     public private(set) var encProgress: [String] = []

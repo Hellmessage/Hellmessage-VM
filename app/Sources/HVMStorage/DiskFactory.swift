@@ -5,7 +5,7 @@
 // VZ 后端: VZDiskImageStorageDeviceAttachment 只接受 raw, 强约束.
 // QEMU 后端: 新建走 qcow2; 老 VM 已是 raw 仍可继续运行 (DiskSpec.format 持久化在 config).
 //
-// 详见 docs/STORAGE.md + CLAUDE.md "磁盘与存储约束".
+// 详见 CLAUDE.md "磁盘与存储约束".
 
 import Foundation
 import Darwin

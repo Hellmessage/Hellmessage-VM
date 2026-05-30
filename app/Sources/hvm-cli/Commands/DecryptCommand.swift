@@ -1,7 +1,5 @@
 // DecryptCommand.swift
 // hvm-cli decrypt <vm> — 加密 QEMU VM 转回明文 (冷迁移 in-place).
-//
-// 设计稿 docs/v3/ENCRYPTION.md v2.4 PR-10b.
 
 import ArgumentParser
 import Foundation

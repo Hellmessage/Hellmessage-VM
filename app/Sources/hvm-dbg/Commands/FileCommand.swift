@@ -1,8 +1,6 @@
 // hvm-dbg/Commands/FileCommand.swift
 // hvm-dbg file push / pull — host ↔ guest 单文件传输, 走 qemu-guest-agent guest-file-* API.
 //
-// 设计稿: docs/v3/FILE_COPY.md
-//
 // 用法:
 //   hvm-dbg file push <vm> --src /local/x.iso --dst 'C:\Windows\Temp\x.iso'
 //   hvm-dbg file pull <vm> --src 'C:\path\file.log' --dst /local/path.log

@@ -1,5 +1,5 @@
 // HVMCore/ErrorCodes.swift
-// 错误码权威清单. 新增错误必须同时在此登记 + docs/ERROR_MODEL.md 更新表格
+// 错误码权威清单. 新增错误必须在此登记
 // M0 先列框架, 具体 case 随模块实现补齐
 
 /// 稳定字符串错误码, dotted 风格 "<domain>.<name>"

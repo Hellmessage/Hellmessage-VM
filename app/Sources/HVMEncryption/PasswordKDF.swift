@@ -1,6 +1,6 @@
 // HVMEncryption/PasswordKDF.swift
 // 用户密码 → master KEK 派生. PBKDF2-SHA256, 跨机器 portable 的核心.
-// 设计稿 docs/v3/ENCRYPTION.md v2.2.
+// 整 VM 加密设计 v2.2.
 //
 // 流程:
 //   1. 创建加密 VM 时, 生成 16 字节 random salt, 写明文 routing JSON

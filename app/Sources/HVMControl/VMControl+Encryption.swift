@@ -1,4 +1,4 @@
-// VMControl+Encryption.swift — 整 VM 加密事务包装 (业务页 #3, docs/v4/NEW_GUI_ENCRYPTION.md E1).
+// VMControl+Encryption.swift — 整 VM 加密事务包装 (业务页 #3).
 //
 // 视图无关的加密/解密/rekey 收口, 给新 GUI dialog + (未来) CLI 复用. 内部解析 qemuImg +
 // Win OVMF VARS 模板路径 (跟 addDiskEncrypted 同款走 QemuPaths), 业务侧不碰后端路径.

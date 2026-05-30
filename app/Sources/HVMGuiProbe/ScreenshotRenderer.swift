@@ -1,6 +1,6 @@
 // HVMGuiProbe/ScreenshotRenderer.swift
 // 截 HVM 主进程主窗口 (含弹层 dialog) → PNG.
-// 设计稿 docs/v3/HVM_DBG_GUI_PROTOCOL.md D-G3.
+// HDP-GUI 协议 D-G3.
 //
 // 实现:
 //   1. 用 NSView.bitmapImageRepForCachingDisplay 渲染主 contentView (SwiftUI 普通绘制)

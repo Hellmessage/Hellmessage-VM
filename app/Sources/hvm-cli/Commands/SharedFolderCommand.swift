@@ -1,6 +1,6 @@
 // SharedFolderCommand.swift
 // hvm-cli shared-folder — 管理 host ↔ guest 共享目录 (SPICE WebDAV).
-// 详见 docs/v3/SHARED_FOLDER.md. 仅改 config; mount 在 VM 启动时由 SpiceWebdavServer 接管.
+// 仅改 config; mount 在 VM 启动时由 SpiceWebdavServer 接管.
 
 import ArgumentParser
 import Foundation

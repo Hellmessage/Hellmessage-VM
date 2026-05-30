@@ -14,7 +14,7 @@
 // (典型 daemon 进入异常状态, 进程仍在但拒绝服务). 这两条都通过启 VM 前 ~200ms 内
 // 完成判定, 启动 latency 几乎不可感.
 //
-// 设计稿: docs/v3/VMNET_DAEMON_HEALTH.md (实现期"silent bridge 探测"已撤回, 见 R5)
+// 实现期"silent bridge 探测"已撤回 (见 R5)
 
 import Foundation
 import Darwin

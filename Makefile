@@ -17,11 +17,11 @@ SIGN_IDENTITY := $(MACOS_CODESIGN_IDENTITY)
 endif
 endif
 
-# GUI: 老 GUI (app/Sources/HVM/UI/**) 已随 QEMU-only 转向退役删除
-# (docs/v4/QEMU_ONLY_PIVOT.md). 唯一 GUI 走 app/Sources/HVM/GUI/** (NewGUIAppLauncher).
+# GUI: 老 GUI (app/Sources/HVM/UI/**) 已随 QEMU-only 转向退役删除.
+# 唯一 GUI 走 app/Sources/HVM/GUI/** (NewGUIAppLauncher).
 # 老的 `#if NEW_GUI` 条件编译 guards 已全部去除 (GUI/** 无条件编译), 不再需要 -DNEW_GUI.
 SWIFT_DEFINES :=
-# QEMU 后端产物 (由 scripts/qemu-build.sh 生成, 仓库 ignore, 详见 docs/QEMU_INTEGRATION.md)
+# QEMU 后端产物 (由 scripts/qemu-build.sh 生成, 仓库 ignore)
 # stage 即裁剪 + 签名 + LICENSE/MANIFEST 后的最终成品, bundle.sh 直接拷进 .app
 # 不再有 third_party/qemu/ 中间 vendor 层
 QEMU_STAGE    := third_party/qemu-stage
@@ -58,7 +58,7 @@ help:
 	@echo "                    注: open / dev-open 不再同步 /Applications/HVM.app, 想测 hvm-cli start 先 make install"
 	@echo "  make clean      — 清除 build/ 和 app/.build/"
 	@echo
-	@echo "QEMU 后端 (Win arm64 / 可选 Linux arm64; 详见 docs/QEMU_INTEGRATION.md):"
+	@echo "QEMU 后端 (Win arm64 / 可选 Linux arm64):"
 	@echo "  make edk2       — 拉 EDK2 + apply Win11 patch + 编译 (~5 分钟; 仅打包者跑; Win11 ARM64 装机必需)"
 	@echo "  make edk2-clean — 清除 third_party/edk2-src/, third_party/edk2-stage/"
 	@echo "  make qemu       — 装 brew 依赖 + 拉源码 + 编译 QEMU (10-30 分钟; 仅打包者跑)"
@@ -124,7 +124,7 @@ edk2-clean:
 	rm -rf third_party/edk2-src third_party/edk2-stage
 	@echo "✔ 已清除 third_party/edk2-src/, third_party/edk2-stage/"
 
-# QEMU 后端构建 (仅打包者跑; 详见 scripts/qemu-build.sh 与 docs/QEMU_INTEGRATION.md)
+# QEMU 后端构建 (仅打包者跑; 详见 scripts/qemu-build.sh)
 # 第一次跑会自动装 Homebrew + 一组锁定 brew 依赖, 拉 v10.2.0 源码, 编译 ~10-30 分钟
 # 优先用 third_party/edk2-stage/ 里的 patched firmware (给 Win11 ARM64); 没有则降级 QEMU 自带
 qemu:

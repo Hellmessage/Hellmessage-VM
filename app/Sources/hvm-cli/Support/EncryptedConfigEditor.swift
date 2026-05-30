@@ -2,8 +2,6 @@
 // 加密-aware config 读写助手. 把 "明文 BundleIO" 与 "加密 EncryptedConfigIO" 路径
 // 收敛成单一接口, 给 config/disk/iso/boot-from-disk 等子命令复用.
 //
-// 设计稿 docs/v3/TODO.md #1-#4 (CLI 适配缺失).
-//
 // 边界:
 //   - VZ-sparsebundle: 暂未实现 (ENCRYPTION.md v2.4 QEMU 优先), 抛错
 //   - QEMU-perfile: PasswordPrompt + EncryptedBundleIO.unlock + EncryptedConfigIO.save

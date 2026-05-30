@@ -1,6 +1,6 @@
 // HVMEncryption/EncryptionKDF.swift
 // 从 master KEK 派生 4 个 32 字节子 key. HKDF-SHA256, info 字符串当版本.
-// 设计稿 docs/v3/ENCRYPTION.md v2.2 "密钥管理 三层密钥".
+// 整 VM 加密设计 v2.2 "密钥管理 三层密钥".
 //
 // 流程 (启动加密 QEMU VM 时):
 //   master_KEK = PasswordKDF.deriveMasterKey(password, salt, iter)   // 32 字节

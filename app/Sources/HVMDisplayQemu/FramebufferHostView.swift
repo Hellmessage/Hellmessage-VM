@@ -13,7 +13,7 @@
 // 由上层 (DetailContainerView 在 Phase 3) 创建并 attach DisplayChannel +
 // InputForwarder + FramebufferRenderer 三件套.
 //
-// ---- 键盘捕获双态 (UTM 风格, 详见 docs/v3/INPUT_CAPTURE.md 草案) ----
+// ---- 键盘捕获双态 (UTM 风格) ----
 //
 //   released (默认): view 接收键鼠事件, 但 macOS 系统快捷键 (Cmd+Tab / Cmd+Space /
 //                    Mission Control / 截图) 仍由 macOS 处理, 不进 guest.
@@ -131,7 +131,7 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
     /// VMConfig.macStyleShortcuts 设置.
     public var macStyleShortcuts: Bool = true
 
-    /// host → guest 文件粘贴 closure (docs/v3/HOST_FILE_PASTE.md).
+    /// host → guest 文件粘贴 closure.
     /// keyDown 拦到 Cmd+V 且 NSPasteboard 有 file URLs 时调; closure 由 GUI 层注入,
     /// 内部通常走 Task.detached → IPC clipboard.paste-files → VMHost FilePasteBridge.
     /// 仅 macStyleShortcuts=true 时拦截 (跟用户"Cmd 当主操作键"的预期一致).
@@ -186,7 +186,7 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
         delegate = self
         setupCaptureOverlay()
         setupDropOverlay()
-        // host → guest 文件拖放接入 (docs/v3/HOST_FILE_DRAG.md). 复用 Cmd+V 后端通路,
+        // host → guest 文件拖放接入. 复用 Cmd+V 后端通路,
         // 只接 file URLs (拒非 file URL / 文本 / 图片).
         registerForDraggedTypes([.fileURL])
     }
@@ -704,7 +704,7 @@ public final class FramebufferHostView: MTKView, MTKViewDelegate {
         ])
     }
 
-    // MARK: - 文件拖放 (docs/v3/HOST_FILE_DRAG.md)
+    // MARK: - 文件拖放
     //
     // 跟 Cmd+V 共一条后端: drag perform 时调 onFilePaste(urls) 闭包, 走同样的
     // AppModel.pasteFilesToVM → IPC clipboard.paste-files → FilePasteBridge 通路.

@@ -13,7 +13,7 @@
 //   字节复制不解密 (snapshot 不需 prompt 密码). master KEK / sub keys 全程未变,
 //   restore 后用源密码可继续解.
 //   注: snapshot 创建后用户跑 rekey, restore 后 LUKS keyslot 是 snapshot 时点的老密码,
-//   必须用老密码启动 — 是预期行为, 设计稿 docs/v3/CLONE_SNAPSHOT_ENCRYPTED.md R3.
+//   必须用老密码启动 — 是预期行为.
 //
 // 限制:
 //   - VM 必须 stopped (running 时 disk 在写, snapshot 不一致)

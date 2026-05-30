@@ -208,7 +208,7 @@ public final class SidecarProcessRunner: @unchecked Sendable {
     /// 强制结束子进程. runAsRoot=true 时 SIGKILL 不能被 sudo forward, 走 pkill -P
     /// 杀 sudo 的真正 binary 子进程.
     ///
-    /// 双段杀策略 (修 swtpm NVRAM 腰斩 race, 见 docs/v2/01-P0-immediate.md #3):
+    /// 双段杀策略 (修 swtpm NVRAM 腰斩 race):
     ///   1. pkill -15 (SIGTERM) 给 swtpm 100ms 关 NVRAM + flush
     ///   2. pkill -9 (SIGKILL) 兜底
     ///   3. 最后 process.waitUntilExit 等 sudo wrapper 真退 — 此时 kernel 已 reap

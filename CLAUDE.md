@@ -4,21 +4,19 @@
 
 本项目走 **QEMU 后端单一路线** (`qemu-system-aarch64` + HVF 加速 + HDP IOSurface 显示)。
 VZ (Apple Virtualization.framework) 后端 + macOS guest 已于 2026-05-30 整条移除 (entitlement 未批 +
-QEMU 已满足 Linux/Windows/加密; 详见 `docs/v4/QEMU_ONLY_PIVOT.md`)。下文若仍有 VZ / macOS guest /
+QEMU 已满足 Linux/Windows/加密)。下文若仍有 VZ / macOS guest /
 双后端 残留措辞, 一律以"仅 QEMU 单后端、guest 仅 Linux+Windows"为准。
 
 **老 GUI (`app/Sources/HVM/UI/**`) 已随上述转向退役删除**, 唯一 GUI 是新 GUI (`app/Sources/HVM/GUI/**`,
 `GUI=new` 恒开)。下文凡引用 `UI/**` 路径 / 老组件 (`HVMFormSelect` / `HVMTextField` / `HVMModal` /
 `ConfirmDialog` / `ErrorDialog` / `PrimaryButtonStyle` 等) 或 `AppModel` 的约束 (尤其「UI 控件使用约束」
 「GUI 约束」「HDP-GUI」老条款), 一律以新 GUI 的 `HVMUI.*` 组件 + `NewGUIStore` + 「新 GUI ...」小节为准;
-老条款仅作历史参考, 不再适用。CLAUDE.md 全量逐行清理是后续 (docs/v4/QEMU_ONLY_PIVOT.md P1b-6 收尾)。
+老条款仅作历史参考, 不再适用。
 
 ## 文档约束
 
 - `CLAUDE.md` 只存放约束, 不放其他东西
 - `README.md` 存放项目说明(开发完成后再写)
-- `docs/` 下的设计文档是决策沉淀, 约束变更必须同步更新
-- `docs/TODO.md`: 跨 session TODO 清单, 当前进行中工作 + 待办项追踪; **每开新 session 先读**, 知道节奏卡在哪
 
 ## 身份与命名约束 **必须遵守**
 
@@ -74,7 +72,7 @@ QEMU 已满足 Linux/Windows/加密; 详见 `docs/v4/QEMU_ONLY_PIVOT.md`)。下�
 - 原因: XCTest framework 仅 Xcode.app 自带, 用户机器 `xcode-select -p` 指向 `/Library/Developer/CommandLineTools` (CLT only) 时 swift test 直接 `no such module 'XCTest'` 跑不起. 历史 38 个测试在 CLT 设置下静默失效, 维护成本高反误判 "测试通过"
 - **不在 `app/Tests/` 下落任何 .swift 文件** — Tests/ 整个目录已清, 不重建. Package.swift 不再带 `.testTarget(...)`
 - **验证手段**: 走 `make build` (编译期保证) + 真机 e2e (`hvm-cli` / `hvm-dbg gui` 自动化). 不用单测框架
-- 例外: 若未来真要加测试, 先在 docs/v3/ 起设计稿讨论框架选型 (swift-testing / Quick-Nimble / 纯 Swift assertion 函数), 不得直接落 XCTest
+- 例外: 若未来真要加测试, 先起设计稿讨论框架选型 (swift-testing / Quick-Nimble / 纯 Swift assertion 函数), 不得直接落 XCTest
 
 ## 签名与 Entitlement 约束
 
@@ -98,12 +96,12 @@ QEMU 已满足 Linux/Windows/加密; 详见 `docs/v4/QEMU_ONLY_PIVOT.md`)。下�
   - 创建 / clone / encrypt / decrypt / rekey 全部走 dialog (CreateVMDialog 的加密 toggle / CloneVMDialog 加密源 prompt / Encrypt+Decrypt+RekeyVMDialog 三独立 dialog), 加密事务进行中 `closeAction = nil` 不可关
   - 加密事务后台 `Task.detached` 跑, 完成回主线程刷 list — 不阻 UI
   - VZ-sparsebundle 加密 GUI 暂未接入 (推后跟 ENCRYPTION.md v2.4 一致)
-- **文件传输** (Sharing 区, 设计稿 `docs/v3/FILE_COPY.md`):
+- **文件传输** (Sharing 区):
   - 详情页 Sharing 区 [传文件到 VM…] / [从 VM 取文件…] 按钮 → NSOpenPanel/NSSavePanel → `FileTransferDialog`
   - 仅 QEMU 后端 + VM running 时按钮可用, 其它态 disabled + 灰文案
   - dialog 三态: form / running (closeAction = nil 不可关) / done; 取消语义 v1 不支持中断 chunk 循环
   - IPC 走 `Task.detached` 跑 `SocketClient.request` (长事务 600s 不能阻 main)
-- **Cmd+V 文件粘贴** (设计稿 `docs/v3/HOST_FILE_PASTE.md`, 跟 FileTransferDialog 走不同通路):
+- **Cmd+V 文件粘贴** (跟 FileTransferDialog 走不同通路):
   - 用户在 Finder Cmd+C 文件 → 切到 VM framebuffer view 按 Cmd+V → 自动走 SPICE vdagent VD_AGENT_FILE_XFER_* 流到 guest, 落 **guest `~/Downloads`** (不是当前焦点目录, 那个能力推 v2 自家 guest agent)
   - **QEMU 后端 + Linux/Windows guest** (vdagent 通路, 唯一后端)
   - **拦截条件**: `FramebufferHostView.keyDown` + `macStyleShortcuts=true` + Cmd 单按 (排除 Cmd+Opt / Cmd+Shift / Cmd+Ctrl) + NSPasteboard 有 file URLs. 三条全过才吃掉这次 Cmd+V; 任一不过走老的文本粘贴路径
@@ -114,7 +112,7 @@ QEMU 已满足 Linux/Windows/加密; 详见 `docs/v4/QEMU_ONLY_PIVOT.md`)。下�
   - **GUI 反馈**: 成功 → `UNUserNotificationCenter` 原生通知 (首次 requestAuthorization, 拒绝 → silently 不通知); 失败 / 部分跳过 → `ErrorDialog` 列原因. **禁止** NSAlert
   - **host → guest 文件传输统一走 vdagent file_xfer (后续方向)** — 当前 `FileTransferDialog` 还走 QGA (1-10 MB/s), 后续应迁到 vdagent (~50 MB/s) 统一通路. 暂保留两条通路, v1.1 决策合并
   - **测试**: `hvm-dbg paste-files <vm> --file ...` 模拟整条通路, 不依赖 framebuffer view 的 NSPasteboard 拦截 (server 端走相同 `clipboard.paste-files` IPC, 但绕过 Cmd+V 触发)
-- **键盘捕获 / 释放快捷键** (UTM 风格, 设计稿 `docs/v3/INPUT_CAPTURE.md`):
+- **键盘捕获 / 释放快捷键** (UTM 风格):
   - **统一 `Cmd+Opt`** 切换捕获. 老的 `Cmd+Ctrl` 因跟 macOS 系统快捷键 (Mission Control / 截图 / 第三方 app) 严重冲突已废弃, **禁止**再用
   - **QEMU 后端 captured 模式**: `CGSSetGlobalHotKeyOperatingMode(.disable)` (Skylight 私有 API, `HVMDisplayQemu/CGSPrivate.swift`) 禁用 macOS 全局热键, cmd+tab / cmd+space 也送 guest. 右上角 `⌘⌥ 退出捕获` overlay 显式提示
   - **退出 captured 闭环**: `viewWillMove(toWindow:nil)` / `resignFirstResponder` / `inputCaptureEnabled=false` 必须查 `if isCaptured { releaseCapture() }`, 否则系统热键留在 disable 状态用户无法 cmd+tab 切别 app — **体验灾难**
@@ -150,7 +148,7 @@ QEMU 已满足 Linux/Windows/加密; 详见 `docs/v4/QEMU_ONLY_PIVOT.md`)。下�
 - 派生 probe id (复合控件): 不需业务侧传, 组件内部自动派生
   - `<select.probeID>.trigger` — Select trigger button
   - `<select.probeID>.search`  — Select 内 search field
-  - **Dialog 系派生** (业务侧只传 base, dialog 内子控件自动派生; 完整规范见 [docs/v3/HVM_DBG_GUI_PROTOCOL.md "Dialog probe id 命名规范" 节](docs/v3/HVM_DBG_GUI_PROTOCOL.md)):
+  - **Dialog 系派生** (业务侧只传 base, dialog 内子控件自动派生):
     - `<dialog.probeID>.close` — 右上 X (all dialogs)
     - `<dialog.probeID>.confirm` — Alert / Confirm / Input 主按钮
     - `<dialog.probeID>.cancel` — Confirm / Input / Wizard 副按钮 (取消)
@@ -159,9 +157,9 @@ QEMU 已满足 Linux/Windows/加密; 详见 `docs/v4/QEMU_ONLY_PIVOT.md`)。下�
     - `<dialog.probeID>.step.<idx>` — WizardDialog 步骤指示器 (仅 past step 注册, current/future 不点)
 - 业务侧 closure / binding 必须 `@MainActor @Sendable` (跟 ProbeAction 签名对齐)
 
-**为什么强制**: 业务侧偷懒不传 probeID 会让 hvm-dbg gui 自动化覆盖率漏斗, 业务页接入 dialog / wizard 后再补麻烦. 必传让 "每个可点 / 可输 / 可切控件都能被自动化测" 成为编译期保证 (而不是 lint 后置). 详细规范见 [docs/v4/NEW_GUI.md "R6" 节](docs/v4/NEW_GUI.md) + [docs/v3/HVM_DBG_GUI_PROTOCOL.md "Dialog probe id 规范" 节](docs/v3/HVM_DBG_GUI_PROTOCOL.md).
+**为什么强制**: 业务侧偷懒不传 probeID 会让 hvm-dbg gui 自动化覆盖率漏斗, 业务页接入 dialog / wizard 后再补麻烦. 必传让 "每个可点 / 可输 / 可切控件都能被自动化测" 成为编译期保证 (而不是 lint 后置).
 
-### 新 GUI 主界面 + 数据 store (业务页 #1, docs/v4/NEW_GUI_MAIN_LAYOUT.md)
+### 新 GUI 主界面 + 数据 store (业务页 #1)
 
 新 GUI (`GUI=new`, 默认) 主界面是 `app/Sources/HVM/GUI/Layout/MainLayoutView.swift` 两栏骨架 (toolbar / sidebar 240 + detail / statusbar). `HVM_GUI_SHOWCASE=1` 退回组件 Showcase (`NewGUIRootView`).
 
@@ -173,7 +171,7 @@ QEMU 已满足 Linux/Windows/加密; 详见 `docs/v4/QEMU_ONLY_PIVOT.md`)。下�
 - **无顶部 toolbar**: 窗口顶部仅原生标题栏. 新建 VM = sidebar 列表底部全宽主按钮 (`sidebar.button.create`); 刷新 = statusbar 右侧工具图标 (`statusbar.button.refresh`, 列表 1Hz 自动刷新, 手动为兜底)
 - probeID 命名: `sidebar.button.create` / `statusbar.button.refresh` / `vmlist.row.item-<vmID>` / `vmlist.confirm.delete-<vmID>` / `vmlist.input.password-<vmID>` / `detail.button.{start,stop,kill,delete}` / `main.alert.error`
 
-### 新 GUI 详情页配置编辑 (业务页 #2, docs/v4/NEW_GUI_VM_DETAIL.md)
+### 新 GUI 详情页配置编辑 (业务页 #2)
 
 详情页 `DetailOverviewView` 铺 inline 可编辑 section: 资源(CPU/内存) / 网络(NIC) / 磁盘 / ISO&启动 / 共享目录 / 选项. 各 section 文件 `app/Sources/HVM/GUI/Layout/Detail<X>Section.swift`.
 
@@ -186,7 +184,7 @@ QEMU 已满足 Linux/Windows/加密; 详见 `docs/v4/QEMU_ONLY_PIVOT.md`)。下�
 - **破坏性操作二次确认**: 删除磁盘 / 删除网卡 / 删除共享目录 / 强制停止 全走 `dialog.confirm(destructive:true)` (CLAUDE.md 破坏性约束)
 - probeID 命名: `detail.field.{cpu,memory}` / `detail.button.{discard,save,unlock,lock}` / `detail.network.<i>.{item,mode,device,mac,mac.random,bridged,enabled,delete}` / `detail.disk.{add,resize-<path>,delete-<path>}` / `detail.boot.{selectISO,ejectISO,installed,driversInstalled}` / `detail.sharing.{add,writable-<name>,delete-<name>}` / `detail.options.{clipboard,macStyle}` / `detail.vmnet.{install,restart,uninstall}`
 
-### 新 GUI 加密 / 解密 / rekey dialog (业务页 #3, docs/v4/NEW_GUI_ENCRYPTION.md)
+### 新 GUI 加密 / 解密 / rekey dialog (业务页 #3)
 
 整 VM 加密事务接进新 GUI. 入口 `DetailEncryptionSection` (详情页最底沉底), 事务走单参数化三态 dialog `NewGUIEncryptionDialog` (mode: encrypt/decrypt/rekey). 底层 `EncryptVMOperation/DecryptVMOperation/RekeyVMOperation` (CLI 同源) 已全有, 本层只接 dialog + 入口 + store async.
 
@@ -219,11 +217,11 @@ QEMU 已满足 Linux/Windows/加密; 详见 `docs/v4/QEMU_ONLY_PIVOT.md`)。下�
 
 ## QEMU 后端约束 **必须遵守**
 
-QEMU 是唯一后端, 承载 Linux arm64 + Windows arm64, 详见 `docs/QEMU_INTEGRATION.md`。
+QEMU 是唯一后端, 承载 Linux arm64 + Windows arm64。
 
 - **架构限定**: 仅 `qemu-system-aarch64`(Apple Silicon 宿主机 + AArch64 guest), 不打包 x86_64 / riscv 等其他 `qemu-system-*` 目标
 - **版本锁定**: 包内 QEMU 与 `scripts/qemu-build.sh` 中的 `QEMU_TAG` (当前 `v10.2.0`), EDK2 与 `scripts/edk2-build.sh` 中的 `EDK2_TAG` (当前 `edk2-stable202408`) 严格绑定; 升级任一组件必须同步改 tag + 重跑 build + 重 commit. **EDK2 用 stable202408 不是 202508**: 上游 202508 改了 `OvmfPkg/Library/PlatformBootManagerLibLight` 行为 (无 NV BootOrder 时落 EFI Shell, 不再自动 boot first device), 切到 202508 必须额外 patch 改用 PlatformBootManagerLib full 才能装机.
-- **构建参数固定**: QEMU `--target-list=aarch64-softmmu --enable-cocoa --enable-hvf --enable-iosurface`; EDK2 `-p ArmVirtPkg/ArmVirtQemu.dsc -a AARCH64 -t GCC5 -b RELEASE` (cross compile via brew aarch64-elf-gcc), 控体积与签名面. `--enable-iosurface` 是 HVM patch 0002 引入的 macOS-only display backend (`-display iosurface,socket=...`, AF_UNIX + POSIX shm + SCM_RIGHTS), 协议规范见 `docs/QEMU_DISPLAY_PROTOCOL.md` v1.0.0; configure 识别该选项依赖 patch 0002 内同时 patch 了 `scripts/meson-buildoptions.sh` (该 .sh 是从 `meson_options.txt` 由 `meson-buildoptions.py` 派生的中间文件, 不打进 patch 则 configure 报 unknown option 必须改用 `-D` 直传 — 所以新加任何自家 feature option 时必须同步打 .sh). cocoa 保留作 fallback/调试, 生产路径由 HVM 主进程 argv 选 `iosurface`
+- **构建参数固定**: QEMU `--target-list=aarch64-softmmu --enable-cocoa --enable-hvf --enable-iosurface`; EDK2 `-p ArmVirtPkg/ArmVirtQemu.dsc -a AARCH64 -t GCC5 -b RELEASE` (cross compile via brew aarch64-elf-gcc), 控体积与签名面. `--enable-iosurface` 是 HVM patch 0002 引入的 macOS-only display backend (`-display iosurface,socket=...`, AF_UNIX + POSIX shm + SCM_RIGHTS), 协议规范 v1.0.0; configure 识别该选项依赖 patch 0002 内同时 patch 了 `scripts/meson-buildoptions.sh` (该 .sh 是从 `meson_options.txt` 由 `meson-buildoptions.py` 派生的中间文件, 不打进 patch 则 configure 报 unknown option 必须改用 `-D` 直传 — 所以新加任何自家 feature option 时必须同步打 .sh). cocoa 保留作 fallback/调试, 生产路径由 HVM 主进程 argv 选 `iosurface`
 - **补丁串行管理**: 所有 QEMU 上游补丁放 `patches/qemu/*.patch` 顺序由 `patches/qemu/series` 决定; 所有 EDK2 上游补丁放 `patches/edk2/*.patch` 顺序由 `patches/edk2/series` 决定; 任一 patch apply 失败立即中断; **禁止 fork 上游仓库**以避免 rebase 黑盒
 - **patches/qemu/0001-hvm-win11-lowram.patch** + **patches/edk2/0001-armvirt-extra-ram-region-for-win11.patch** 配对启用 Win11 ARM64 装机: QEMU 加 opt-in `-machine virt,hvm-win11-lowram=on` 在 0x10000000 挂 16MB RAM 孔, EDK2 ArmVirtPkg 按 PcdSystemMemoryBase 选主 RAM + 把额外 /memory 节点注册成 SYSTEM_MEMORY/MMU. 两者必须同时打 (单打 QEMU 那个 stock EDK2 看到额外 /memory 节点会 ASSERT 挂死).
 - **patches/qemu/0003-hw-display-hvm-gpu-ramfb-pci.patch**: 新 PCI 设备 `hvm-gpu-ramfb-pci` (套版 hw/display/virtio-vga.c, 把 VGA 路径换成 ramfb), 单设备同时挂 ramfb (UEFI/bootmgfw GOP 兼容) + virtio-gpu-pci (OS 期 viogpudo.sys / 内核 virtio-gpu driver 接管做 dynamic resize). vendor/device id 复用 0x1AF4/0x1050 让 viogpudo.inf 自动 match. Windows guest argv 走 `-device hvm-gpu-ramfb-pci` 替代单挂 ramfb. 内部 dispatcher 按 `g->parent_obj.enable` 切: 0 走 ramfb_display_update, 1 走 virtio-gpu cmd handler 自己的 dpy_gfx_update. ui_info 始终转给 virtio-gpu 让 vdagent / EDID 通路在 OS 期立刻拿到 host 端尺寸 hint.
@@ -246,7 +244,7 @@ QEMU 是唯一后端, 承载 Linux arm64 + Windows arm64, 详见 `docs/QEMU_INTE
 - **进程模型**: HVM 主进程通过 `Process` 启动包内 `qemu-system-aarch64`, **不**链接 `libqemu`; QMP 控制 socket 仅监听 unix domain socket (`run/<vm-id>.qmp`), **严禁 TCP 监听**
 - **Bundle 互斥**: VM 遵守"单 `.hvmz` 单进程"原则, 复用现有 fcntl flock
 - **首版优先级**: Linux arm64 跑通通路后再做 Windows arm64; Linux QEMU 通路是 Windows 集成的前置验证
-- **socket_vmnet 网络约束** (hell-vm 同款 osascript admin Touch ID 方案, 详见 `docs/NETWORK.md`):
+- **socket_vmnet 网络约束** (hell-vm 同款 osascript admin Touch ID 方案):
   - macOS `vmnet` 必须 root, 用 `socket_vmnet` 系统级 launchd daemon 把权限闭环
   - **socket_vmnet 二进制不打包入 .app**: 用户机器自己 `brew install socket_vmnet`. `scripts/install-vmnet-daemons.sh` 从 brew 路径 (`/opt/homebrew/opt/socket_vmnet/bin/socket_vmnet`) 拉 binary 写 launchd plist
   - **提权方式**: GUI `编辑配置 → 网络 → 安装 daemon` 按钮通过 `VMnetSupervisor.installAllDaemons` 走 `osascript "do shell script ... with administrator privileges"` 弹原生 Touch ID / 密码框, 一次到位装 shared + host + N 个 bridged.<iface>. **不**写 `/etc/sudoers.d/*`, **不**拉 Terminal sudo bash, **不**做自动 kickstart 防 stale (daemon 由 launchd KeepAlive 管)
@@ -264,7 +262,7 @@ QEMU 是唯一后端, 承载 Linux arm64 + Windows arm64, 详见 `docs/QEMU_INTE
   - **daemon 在 ≠ bridge 在** (重要陷阱, 2026-05-23 实测撞过): vmnet.framework 内核侧 bridge attach 可能进入"半死"状态 — daemon 进程在跑, socket 文件在, launchctl 视图正常, QEMU 能连上 socket, 但帧根本不打到物理 iface (tcpdump 0 帧 from guest MAC). 多次 bootout/bootstrap 残留是已知触发. **idempotent install 跳过修不了**这条 (它的幂等检查正好绕开破坏性重启). **唯一可靠的修复**: bootout + bootstrap 强制重起 daemon (会断已连 VM 的网络, 不可避免). 入口:
     - GUI: 状态栏 vmnet popup / VM 设置网络面板的 **[重启 daemon]** 按钮 (走 osascript admin)
     - CLI: `sudo scripts/install-vmnet-daemons.sh --restart` (跟 `--uninstall` 区别: plist 保留, 仅重起内核态)
-    - 启 VM 前 `HVMQemu/VMnetBridgeProbe` 做 ~200ms 响应性轻探, 抓 socket 孤儿 / 协议错配 / daemon 拒服务; **不抓** silent-bridge-死 (实测 user-space 无法可靠区分, 见 `docs/v3/VMNET_DAEMON_HEALTH.md` R5)
+    - 启 VM 前 `HVMQemu/VMnetBridgeProbe` 做 ~200ms 响应性轻探, 抓 socket 孤儿 / 协议错配 / daemon 拒服务; **不抓** silent-bridge-死 (实测 user-space 无法可靠区分)
 
 ## 第三方二进制 / Helper 脚本约束 **必须遵守**
 
@@ -288,8 +286,6 @@ QEMU 是唯一后端, 承载 Linux arm64 + Windows arm64, 详见 `docs/QEMU_INTE
 
 ## 共享目录约束 **必须遵守**
 
-详见 [docs/v1/SHARING.md](docs/v1/SHARING.md) + 设计稿 [docs/v3/SHARED_FOLDER.md](docs/v3/SHARED_FOLDER.md).
-
 - **协议固定**: SPICE WebDAV over virtio-serial `org.spice-space.webdav.0` mux 协议. **不**新走 9p / virtiofs / SMB / 其他通路 (一致性 + 共用 UTM Guest Tools 链路)
 - **后端限定**: QEMU 后端 + Linux / Windows guest (唯一后端)
 - **WebDAV server 在 Swift 主进程内自实现**, **不**链 libspice-server / libphodav, **不**给 QEMU 加 `--enable-spice`. 跟 vdagent / qga 同款 single-client 模式 (HVM 主进程作 client 连 QEMU chardev server=on socket); QEMU 不打 spice patch
@@ -308,16 +304,16 @@ QEMU 是唯一后端, 承载 Linux arm64 + Windows arm64, 详见 `docs/QEMU_INTE
 - **禁止使用 osascript / AppleScript UI scripting 模拟 GUI 点击**(脆弱、依赖屏幕坐标和辅助功能权限, 不可复现)
 - 需要启动/停止 VM 走 `hvm-cli` 或 `hvm-dbg`, 不靠 HVM GUI
 - 需要在 guest 内做操作(看桌面、点按钮、键入命令)走 `hvm-dbg` 子命令
-- 需要 host ↔ guest 复制文件走 `hvm-dbg file push/pull`(QEMU 后端, qemu-guest-agent `guest-file-*` API; 1-10 MB/s; 软警告 100 MiB / 硬上限 4 GiB; 设计稿 `docs/v3/FILE_COPY.md`)
-- 想测 host → guest 文件粘贴 (Cmd+V 通路) 走 `hvm-dbg paste-files <vm> --file ...`(走 SPICE vdagent file_xfer, 落 guest `~/Downloads`; 模拟 GUI Cmd+V 但绕过 NSPasteboard 拦截; 设计稿 `docs/v3/HOST_FILE_PASTE.md`)
-- 需要长期 host ↔ guest 共享 host 目录走"共享目录" (SPICE WebDAV; `hvm-cli shared-folder add` / GUI 详情页 Sharing 区; 详见 `docs/v1/SHARING.md`)
+- 需要 host ↔ guest 复制文件走 `hvm-dbg file push/pull`(QEMU 后端, qemu-guest-agent `guest-file-*` API; 1-10 MB/s; 软警告 100 MiB / 硬上限 4 GiB)
+- 想测 host → guest 文件粘贴 (Cmd+V 通路) 走 `hvm-dbg paste-files <vm> --file ...`(走 SPICE vdagent file_xfer, 落 guest `~/Downloads`; 模拟 GUI Cmd+V 但绕过 NSPasteboard 拦截)
+- 需要长期 host ↔ guest 共享 host 目录走"共享目录" (SPICE WebDAV; `hvm-cli shared-folder add` / GUI 详情页 Sharing 区)
 - 调试 WebDAV 协议层走 `hvm-dbg webdav-test` (44 case 离线单测) + `hvm-dbg webdav-serve --listen` (起 server 监听本地 socket 给 curl / Python client 测)
 - `hvm-dbg` 扩展原则: 零新协议实现, 只复用已暴露的公开 QEMU/QMP/HDP API 封装
 - 遇到能力缺失**立即扩展 `hvm-dbg`**, 不要退回用 osascript
 
 ### HVM GUI 自动化测试 (HDP-GUI 协议, PR-G 落地后强制)
 
-测试 HVM 主进程 GUI 自身行为 (创建向导 / 加密 dialog / 详情页等) 走 **HDP-GUI 协议**. 设计稿 [docs/v3/HVM_DBG_GUI_PROTOCOL.md](docs/v3/HVM_DBG_GUI_PROTOCOL.md).
+测试 HVM 主进程 GUI 自身行为 (创建向导 / 加密 dialog / 详情页等) 走 **HDP-GUI 协议**.
 
 - **启用 server**: `HVM_GUI_PROBE=1 open /Applications/HVM.app` — release 默认不启 (体积 +几十 KB, 不暴露 socket)
 - **socket**: `~/Library/Application Support/HVM/run/hvm-dbg-gui.sock` (0600, 同用户)
@@ -377,7 +373,7 @@ QEMU 是唯一后端, 承载 Linux arm64 + Windows arm64, 详见 `docs/QEMU_INTE
 
 ## 克隆约束 **必须遵守**
 
-整 VM 克隆走 `HVMStorage/CloneManager`. 设计稿 `docs/v3/CLONE.md`, 现状 `docs/v1/STORAGE.md "Clone"` 节. 关键边界:
+整 VM 克隆走 `HVMStorage/CloneManager`. 关键边界:
 
 - **必须 stopped**: CloneManager 内部抢源 `.edit` lock; 已被 `.runtime` 持有 → `.bundle(.busy)`. **GUI 不自动 stop 源 VM** (用户掌控)
 - **必须同 APFS 卷**: clonefile(2) 跨卷 `EXDEV`. 提前 `stat.st_dev` 探测, 跨卷抛 `.storage(.crossVolumeNotAllowed)`. 复制到外接 NVMe 等场景需用户手动 `cp -R` 或先在同卷克隆再移动
@@ -388,7 +384,7 @@ QEMU 是唯一后端, 承载 Linux arm64 + Windows arm64, 详见 `docs/QEMU_INTE
 - **不带文件**: `.lock` (目标首次启动自然创建) / `logs/console-*.log` / `.unattend-stage` + `unattend.iso` (Win 装机产物按需重生) / **`snapshots/` (永不带. 没有 `--include-snapshots` 选项, D15 用户决策 2026-05-04)**
 - **不做的**: linked clone (qcow2 backing 暂不做) / cross-host 克隆 / 在线克隆 / schema 升级 / 删源
 - **Windows guest 克隆**: tpm 状态保留 → 装机后激活通常仍生效, 但部分场景需重新激活. GUI 弹窗 done 态显式提示
-- **加密 VM 克隆 (D9 = 等价复制 + 同密码)**: CLI 路径已支持 (`hvm-cli clone <enc-vm>` 走 prompt 密码 + APFS clonefile 字节级 COW + 用源 sub.config 重新加密 config.yaml.enc). **新 VM 跟源同密码** — 想换密码用户自跑 `hvm-cli rekey`. master KEK / sub keys 全程不变 → LUKS keyslot 同步可解 / swtpm tpm/permall 同步可开. routing JSON 仅改 vmId + displayName, salt/iter 保留. **GUI 暂不接** (PR-11 GUI 加密范围). 设计稿 `docs/v3/CLONE_SNAPSHOT_ENCRYPTED.md`
+- **加密 VM 克隆 (D9 = 等价复制 + 同密码)**: CLI 路径已支持 (`hvm-cli clone <enc-vm>` 走 prompt 密码 + APFS clonefile 字节级 COW + 用源 sub.config 重新加密 config.yaml.enc). **新 VM 跟源同密码** — 想换密码用户自跑 `hvm-cli rekey`. master KEK / sub keys 全程不变 → LUKS keyslot 同步可解 / swtpm tpm/permall 同步可开. routing JSON 仅改 vmId + displayName, salt/iter 保留. **GUI 暂不接** (PR-11 GUI 加密范围).
 
 ## VM 配置 (config.yaml) 约束 **必须遵守**
 
@@ -404,7 +400,6 @@ QEMU 是唯一后端, 承载 Linux arm64 + Windows arm64, 详见 `docs/QEMU_INTE
 
 任何**新功能 / 重大修改 / 架构决策**, 都必须**先落地设计稿, 再开始编码**. 这条优先级高于"快速试错": 写代码前先把范围 / 选型 / 边界 / PR 拆解写在文档里, 用户敲定后再动手, 避免"做完才发现方案不对"返工.
 
-- **设计稿位置**: `docs/v3/<TOPIC>.md` (v2 → v3 能力归档, 单提案单文档, 状态机: `设计稿` → `评审中` → `实现中` → `代码已合入`); 索引登 `docs/v3/README.md`. **新 GUI 重构主线**走独立目录 `docs/v4/<TOPIC>.md` + 索引 `docs/v4/README.md` (NEW_GUI.md 及后续业务页子稿)
 - **设计稿必须包含**:
   - **目标 + 范围** (做什么, 不做什么)
   - **选型对比** (至少 2 个备选 + tradeoff 表; 不能只列已选方案)
@@ -413,15 +408,10 @@ QEMU 是唯一后端, 承载 Linux arm64 + Windows arm64, 详见 `docs/QEMU_INTE
   - **PR 拆解** (每 PR 时间盒 + 验收, 颗粒 ≤ 2 天)
   - **未决事项 (Decisions)** (D1 / D2 ... 表; 标注当前默认 + 决策时机)
 - **评审通过再动代码**: 用户口头同意或文档敲定后再开第一个 PR. **禁止**先动代码再补文档
-- **设计变更先回写设计稿**: 开发期发现方案不可行 / 需调整 → **先改 `docs/v3/<TOPIC>.md` 标"设计变更"**, 用户确认后再改代码. 反面: PR-1 落 sparsebundle 后才发现"VZ 用 sparsebundle / QEMU 用 per-file 混合"才是真正方案 — 这种返工应该在设计稿阶段拍板, 不进代码
-- **实现合入后回写**:
-  - 现状描述回写 `docs/v1/` 对应文档
-  - 约束回写 `CLAUDE.md` 对应小节
-  - 设计稿头部状态改 `代码已合入`, 留底不删 (决策溯源)
+- **设计变更先确认**: 开发期发现方案不可行 / 需调整 → 先跟用户说明设计变更, 确认后再改代码. 反面: PR-1 落 sparsebundle 后才发现"VZ 用 sparsebundle / QEMU 用 per-file 混合"才是真正方案 — 这种返工应该在设计阶段拍板, 不进代码
+- **实现合入后回写**: 约束回写 `CLAUDE.md` 对应小节
 - **不在此约束范围**: bugfix / 文档错字 / 单纯重构 / 已有功能 < 50 行的小修小补 / 紧急修线上问题
-- **判定参考**: 不确定要不要先写文档时, 默认"要写". 沉没成本 (写了文档发现不需要做) 永远小于"做错了重做"成本
-
-例: [docs/v3/CLONE.md](docs/v3/CLONE.md) / [docs/v3/ENCRYPTION.md](docs/v3/ENCRYPTION.md) 都是先稿后码.
+- **判定参考**: 不确定要不要先写设计时, 默认"要写". 沉没成本 (写了发现不需要做) 永远小于"做错了重做"成本
 
 ## 提交信息约束
 
@@ -437,28 +427,6 @@ Agent (Claude Code 等) 跨 session / 跨电脑都要保留, 写入项目 CLAUDE
 ### 回复语言: 中文
 
 跟用户的所有对话回复一律用中文 (代码 / 命令 / 文件名 / log 原文等技术 token 保留英文). 包括: 任务汇报 / 方案说明 / 进度更新 / 错误解释 / 提问澄清. 不切英文, 不混用. 代码内中文注释已是项目约定 (见 "代码约束").
-
-### TODO 元数据回写合并到主 commit
-
-`docs/TODO.md` 这类**跟 PR 强绑定**的进度元数据更新, 跟当前主功能 commit 合并, **不**单独切 commit. 同理: 设计稿状态头从"实现中" → "代码已合入" / `docs/v4/README.md` 索引行同步 / NEW_GUI.md 的"PR 拆解"已合标记等.
-
-- 单独 commit TODO 改动只是 PR 的元数据回写, 没独立信息量, 让 git log 多 noise
-- 合并后, 一条 PR 的代码 + 文档 + 进度回写在一个 commit 一目了然
-- 操作: 主 commit 前一并 stage TODO.md / 设计稿状态 / 索引更新; commit type 用主功能的 (例 `feat(gui,docs)`)
-- 已分两 commit 但都未 push 时安全修复: `git reset --soft HEAD~2` 把改动放回 staged 区, 重新合并 commit (不算 amend, 不破坏 working tree)
-- 已 push 的不动 — Git Safety Protocol 优先
-
-**例外**: TODO 改动跟当前主 PR 完全无关 (例如修补遗漏的旧 PR 进度) / 纯设计稿大改 (例如增补设计规范节, 体量大独立成段) 可单独 commit.
-
-### 待开发项写入 docs/TODO.md, 不靠 session 记忆
-
-任何"现在不做但后续要做"的项 (待办 / 已知 work-around / 用户反馈待复现 / 设计变更暂缓 / 未决项), 立即写入 `docs/TODO.md` 对应小节, **不**留在 session 上下文里 "等会再处理".
-
-- session 上下文跨 conversation 会丢; TODO.md 跨 session 持久
-- TODO.md 已划好分区: 主线 PR 进度 / 已知 work-around / 未决事项 / 业务页迁移 / 老 GUI 残余 / 用户反馈待复现 / 跨主题低优
-- 新发现的待办: 立即 append 到对应分区, 用 `[ ]` 标未做
-- 完成时 `[ ] → [x]` + 加 commit hash 引用 (跟主 commit 一起回写, 见上条约束)
-- "下个 session 记得做 X" 这种话不允许出现 — 必须落 TODO.md
 
 ### commit 前先询问用户, 不自动 commit
 

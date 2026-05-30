@@ -4,7 +4,7 @@
 // 老 GUI (app/Sources/HVM/UI/**) 一行不动, 默认构建仍走 HVMAppLauncher.
 //
 // 目前页面是 Theme token 演示卡片 (色板 / 字号 / spacing / radius / accent),
-// 给设计稿 docs/v3/NEW_GUI.md PR-T1 + T2 验收用. 后续 PR-C* 落基础组件时,
+// 给 PR-T1 + T2 验收用. 后续 PR-C* 落基础组件时,
 // 这里逐步替换为业务页 (sidebar + detail) 骨架, 演示页留 Components Showcase 子稿.
 
 
@@ -31,7 +31,7 @@ final class NewGUIAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         //      minWidth/minHeight 自动同步到 window.contentMinSize
         //   3. win.contentMinSize = ... — 直接锁 content 区下限 (不含标题栏); 双保险
         // 不用 win.minSize: 它含 28px 标题栏, 设 1080×720 时 content 仍能压到 1080×692.
-        // 默认走业务页 MainLayoutView (sidebar + detail 两栏, docs/v4/NEW_GUI_MAIN_LAYOUT.md);
+        // 默认走业务页 MainLayoutView (sidebar + detail 两栏);
         // HVM_GUI_SHOWCASE=1 时退回 NewGUIRootView 组件 Showcase (组件 living doc / 视觉回归).
         // .hvmDialogHost() 套在 NSHostingController root view 外层 — 作为根 view 的真正祖先,
         // 让内部 @EnvironmentObject 能拿到 DialogPresenter.
@@ -1263,7 +1263,7 @@ private struct NewGUIRootView: View {
 
     private var footerBlock: some View {
         HStack(spacing: HVMTheme.space.sm) {
-            Text("docs/v3/NEW_GUI.md")
+            Text("HVM 新 GUI")
                 .font(HVMTheme.font.monoSm)
                 .foregroundStyle(HVMTheme.color.textTertiary)
             Spacer()

@@ -1,5 +1,5 @@
 // HVMEncryption/RekeyVMOperation.swift
-// 加密 QEMU VM 改密. 设计稿 docs/v3/ENCRYPTION.md v2.4 PR-10b + TODO #12 原子化加固.
+// 加密 QEMU VM 改密. 整 VM 加密设计 v2.4 PR-10b + TODO #12 原子化加固.
 //
 // 流程 (`hvm-cli rekey <vm>`) — TODO #12 原子化重排:
 //   1. 校验 VM stopped + 加密形态

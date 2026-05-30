@@ -10,7 +10,7 @@
 //      消费者必须 mmap + close fd 副本 (生命周期约定见 SurfaceArrival 注释)
 //   5. 主动 disconnect 发 GOODBYE 后再 close
 //
-// 协议规范: docs/QEMU_DISPLAY_PROTOCOL.md v1.0.0.
+// 协议规范: HDP v1.0.0.
 // 三处文件 (本 .swift / hvm_display_proto.h / 协议规范) 必须同步改.
 
 import Foundation

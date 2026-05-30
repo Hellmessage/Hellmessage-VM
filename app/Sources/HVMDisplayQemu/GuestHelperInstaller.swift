@@ -1,6 +1,6 @@
 // HVMDisplayQemu/GuestHelperInstaller.swift
 //
-// HVM Guest Helper EXE 自动安装. 详见 docs/v3/HOST_FILE_CLIPBOARD.md §4.5.
+// HVM Guest Helper EXE 自动安装.
 //
 // 触发时机: QemuHostEntry 在 Windows VM 启动 + QGA 就绪后调一次 install(...).
 //

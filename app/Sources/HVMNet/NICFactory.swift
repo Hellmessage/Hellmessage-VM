@@ -6,7 +6,7 @@
 //   .vmnetBridged                              → VZBridgedNetworkDeviceAttachment
 //
 // .vmnetShared / .vmnetHost 在 VZ 上的退化 NAT 行为是兜底 — 用户若要真 vmnet 多 guest
-// 互通, 应当走 QEMU 后端. 见 docs/NETWORK.md (待更新).
+// 互通, 应当走 QEMU 后端.
 
 import Foundation
 @preconcurrency import Virtualization

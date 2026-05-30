@@ -1,6 +1,5 @@
 // HVMInstall/InstallProgress.swift
 // macOS guest 装机过程的进度阶段. CLI/GUI 监听此事件流上报给用户.
-// 详见 docs/GUEST_OS_INSTALL.md "安装状态机"
 
 import Foundation
 
