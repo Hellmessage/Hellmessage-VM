@@ -19,10 +19,10 @@ struct CreateCommand: AsyncParsableCommand {
     @Option(name: .long, help: "VM 名称 (必填)")
     var name: String
 
-    @Option(name: .long, help: "Guest OS: linux | macOS | windows")
+    @Option(name: .long, help: "Guest OS: linux | windows (macOS 已下线 — VZ 后端移除)")
     var os: String = "linux"
 
-    @Option(name: .long, help: "后端引擎: vz | qemu (默认按 guestOS: linux/macOS=vz, windows=qemu)")
+    @Option(name: .long, help: "后端引擎: qemu (VZ 已下线; 此项保留仅为兼容, 恒 qemu)")
     var engine: Engine?
 
     @Option(name: .long, help: "CPU 核心数")
@@ -37,7 +37,7 @@ struct CreateCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Linux 装机 ISO 绝对路径 (--os linux 必填)")
     var iso: String?
 
-    @Option(name: .long, help: "macOS 装机 IPSW 绝对路径 (--os macOS 必填)")
+    @Option(name: .long, help: "(已下线 — macOS guest 随 VZ 移除; 保留仅为报错提示)")
     var ipsw: String?
 
     @Option(name: .customLong("import-disk"),
@@ -63,6 +63,17 @@ struct CreateCommand: AsyncParsableCommand {
         do {
             let os = try parseGuestOS(self.os)
 
+            // QEMU-only 转向 (docs/v4/QEMU_ONLY_PIVOT.md P1a): VZ 后端 + macOS guest 已下线.
+            // macOS guest 唯一通路是 VZ (QEMU 跑不了 macOS); VZ entitlement 未批 + QEMU 已满足.
+            if os == .macOS {
+                throw HVMError.config(.invalidEnum(field: "os", raw: "macOS",
+                    allowed: ["linux", "windows", "(macOS guest 已下线 — VZ 后端移除)"]))
+            }
+            if self.engine == .vz {
+                throw HVMError.config(.invalidEnum(field: "engine", raw: "vz",
+                    allowed: ["qemu", "(VZ 后端已下线)"]))
+            }
+
             // ---- 导入磁盘镜像分支 (跳过 ISO 装机, 直接 boot) ----
             // 与 --iso / --ipsw 互斥, 仅 --os linux 支持; engine 由镜像格式锁定 (qcow2→qemu, raw→vz)
             var importInfo: DiskFactory.ImportableDiskInfo? = nil
@@ -85,17 +96,9 @@ struct CreateCommand: AsyncParsableCommand {
             // engine: 导入时由镜像格式锁定; 否则按 --engine / guestOS 默认.
             // ArgumentParser 已在解析阶段把非 vz/qemu 的拼写错挡掉, self.engine 只可能是
             // .vz / .qemu / nil, 这里不再校验字符串.
-            let engineValue: Engine
-            if let info = importInfo {
-                let inferred: Engine = info.format == .qcow2 ? .qemu : .vz
-                if let user = self.engine, user != inferred {
-                    throw HVMError.config(.invalidEnum(field: "engine", raw: user.rawValue,
-                                                       allowed: ["导入 \(info.format.rawValue) 镜像时 engine 锁定为 \(inferred.rawValue)"]))
-                }
-                engineValue = inferred
-            } else {
-                engineValue = resolveEngine(explicit: self.engine, guestOS: os)
-            }
+            // QEMU-only (P1a): engine 恒 qemu (vz 已在上面拒). 导入 raw/qcow2 均走 qemu.
+            let engineValue: Engine = .qemu
+            _ = importInfo   // 格式由 inspectImage 决定 DiskSpec.format, engine 不再随格式分流
 
             // OS 分支专属字段校验 (导入分支已在上面处理, 此处只走 ISO/IPSW)
             var isoPath: String? = nil

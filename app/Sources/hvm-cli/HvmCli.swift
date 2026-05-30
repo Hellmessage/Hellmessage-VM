@@ -13,7 +13,6 @@ struct HvmCli: AsyncParsableCommand {
         subcommands: [
             CreateCommand.self,
             InstallCommand.self,
-            IpswCommand.self,
             OsImageCommand.self,
             ListCommand.self,
             StatusCommand.self,
