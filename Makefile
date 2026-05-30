@@ -96,6 +96,7 @@ icon:
 # install-vmnet-daemons.sh 也跟踪, 因 bundle.sh 把它拷进 Resources/scripts/, GUI VMnetSupervisor
 # 严格只查 Bundle.main 路径, 改这脚本不重 bundle 会让线上 .app 跑老脚本.)
 $(BUNDLE_STAMP): $(HVM_BIN) $(HVM_CLI_BIN) $(HVM_DBG_BIN) \
+                 $(wildcard $(QEMU_BIN)) \
                  scripts/bundle.sh \
                  scripts/install-vmnet-daemons.sh \
                  $(PKG_DIR)/Resources/HVM.entitlements \

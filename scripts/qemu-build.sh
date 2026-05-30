@@ -465,6 +465,52 @@ bundle_dylib_deps() {
     done
 }
 
+# ---- 9.6 嵌入主 qemu 二进制依赖 dylib (capstone/gnutls/pixman/glib/zstd/slirp 等) ----
+# bundle_swtpm 只处理了 swtpm; 主 qemu 二进制 (qemu-system-aarch64 / qemu-img /
+# qemu-storage-daemon / qemu-nbd / qemu-io / qemu-edid) 历史上一直引用 /opt/homebrew
+# 绝对路径, 偷偷依赖 host homebrew (违反"最终用户机零依赖"; 且 homebrew 升级重签
+# dylib 后, 加固运行时库校验拒绝加载非同 team 的 adhoc dylib → QEMU 一起来就 signal 6
+# 崩). 这里对每个 qemu 二进制跑 bundle_dylib_deps, 把全部非系统 dylib 拷进 lib/ +
+# install_name_tool 重定向到 @executable_path/../lib/, 实现真正零依赖. 共享 processed
+# set 让多个二进制共用的 dylib (glib 等) 只拷一次. bundle.sh 后续逐文件 codesign.
+bundle_qemu_dylibs() {
+    step "嵌入主 qemu 二进制依赖 dylib (capstone/gnutls/pixman/glib/...)"
+
+    local bin_dir="$STAGING_DIR/bin"
+    local lib_dir="$STAGING_DIR/lib"
+    mkdir -p "$lib_dir"
+
+    # 套 sub-shell + EXIT trap 清 tmp (同 bundle_swtpm). processed set 跨 6 个 qemu
+    # 二进制共享, 共用 dylib 只拷一次; -change 在 processed 判定外, 每个二进制都做.
+    (
+        set -euo pipefail
+        processed="$(mktemp -t hvm-qemu-deps)"
+        trap 'rm -f "$processed"' EXIT
+        : > "$processed"
+
+        for qbin in "$bin_dir"/*; do
+            base="$(basename "$qbin")"
+            [[ "$base" == "swtpm" ]] && continue          # swtpm 已由 bundle_swtpm 处理
+            [[ -f "$qbin" ]] || continue
+            file "$qbin" 2>/dev/null | grep -q "Mach-O" || continue
+            chmod u+w "$qbin"
+            # 去 brew adhoc 签名让 install_name_tool 不被 codesign integrity 拦
+            codesign --remove-signature "$qbin" 2>/dev/null || true
+            bundle_dylib_deps "$qbin" "$lib_dir" "$processed"
+        done
+    )
+
+    # 校验: qemu-system-aarch64 不应再含 /opt/homebrew (那意味着遗漏)
+    local leftover
+    leftover="$(otool -L "$bin_dir/qemu-system-aarch64" 2>/dev/null | grep -E '(/opt/homebrew|/usr/local)' || true)"
+    if [[ -n "$leftover" ]]; then
+        warn "qemu-system-aarch64 仍引用 brew 路径 (打包不完整):"
+        echo "$leftover"
+    else
+        ok "qemu 二进制 dylib 嵌入完成 (无残留 brew 引用)"
+    fi
+}
+
 # ---- 10. 写 LICENSE + MANIFEST (GPL 合规) ----
 write_manifest() {
     step "写 MANIFEST.json + LICENSE (GPL 合规闭环)"
@@ -527,6 +573,7 @@ main() {
     fetch_edk2_firmware
     prune_share
     bundle_swtpm
+    bundle_qemu_dylibs
     strip_xattrs
     write_manifest
     echo
@@ -538,4 +585,19 @@ main() {
     echo "  下一步:  make build-all   (组装 .app 并嵌入 QEMU, bundle.sh 直接从 stage 拷)"
 }
 
-main "$@"
+# 入口分派:
+#   (无参)            完整构建 (源码 → 编译 → stage → bundle dylib → manifest)
+#   --relocate-dylibs 只对现有 stage 重做 dylib 嵌入 (不重编 qemu), 给"homebrew 升级后
+#                     dylib 失效 / 历史 stage 未 bundle qemu 依赖"修复用; 之后 make build 重签
+case "${1:-}" in
+    --relocate-dylibs)
+        [[ -d "$STAGING_DIR/bin" ]] || err "stage 不存在: $STAGING_DIR (先跑完整 make qemu)"
+        bundle_qemu_dylibs
+        strip_xattrs
+        echo
+        ok "relocate-dylibs 完成; 下一步: make build (重签 + 嵌入 .app)"
+        ;;
+    *)
+        main "$@"
+        ;;
+esac
