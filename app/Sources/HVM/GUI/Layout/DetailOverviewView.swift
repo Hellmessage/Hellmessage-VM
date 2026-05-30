@@ -13,6 +13,13 @@ struct DetailOverviewView: View {
     @Environment(NewGUIStore.self) private var store
     @EnvironmentObject private var dialog: HVMUI.DialogPresenter
 
+    // 资源 section 编辑 draft (字符串, 校验时转 Int). 切换 VM 时 reset.
+    @State private var draftCPU = ""
+    @State private var draftMemGiB = ""
+    // 已加载 draft 的 VM id — 防 1Hz 刷新触发 detail 重新 onAppear 时误清用户未保存编辑.
+    // 只在选中 VM 真变化时 reset, 而非每次 appear/render.
+    @State private var draftLoadedID: UUID? = nil
+
     var body: some View {
         ZStack {
             HVMTheme.color.bgBase
@@ -42,25 +49,104 @@ struct DetailOverviewView: View {
                     runningNote
                 }
                 overviewSection(vm)
-                actionsSection(vm)
+                if vm.config != nil {
+                    resourceSection(vm)
+                    if isDirty(vm) {
+                        saveFooter(vm)
+                    }
+                }
             }
             .padding(HVMTheme.space.xl)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // 仅在选中 VM 真变化时同步 draft (丢弃上一个 VM 未保存编辑); 1Hz 刷新不清
+        .onChange(of: store.selectedID) { _, _ in syncDraftIfNeeded() }
+        .onAppear { syncDraftIfNeeded() }
+    }
+
+    // MARK: - 资源编辑 (V3)
+
+    /// 选中 VM 变化才 reset draft (用 draftLoadedID 守卫, 防刷新误清未保存编辑)
+    private func syncDraftIfNeeded() {
+        guard draftLoadedID != store.selectedID else { return }
+        draftLoadedID = store.selectedID
+        resetDraft()
+    }
+
+    private func resetDraft() {
+        guard let cfg = store.selected?.config else {
+            draftCPU = ""; draftMemGiB = ""; return
+        }
+        draftCPU = "\(cfg.cpuCount)"
+        draftMemGiB = "\(cfg.memoryMiB / 1024)"
+    }
+
+    private func isDirty(_ vm: VMSummary) -> Bool {
+        guard let cfg = vm.config else { return false }
+        return draftCPU != "\(cfg.cpuCount)" || draftMemGiB != "\(cfg.memoryMiB / 1024)"
+    }
+
+    private var cpuValid: Bool { (Int(draftCPU) ?? 0) >= 1 }
+    private var memValid: Bool { (Int(draftMemGiB) ?? 0) >= 1 }
+
+    @ViewBuilder
+    private func resourceSection(_ vm: VMSummary) -> some View {
+        let editable = vm.runState == .stopped
+        HVMUI.Section("资源", description: editable ? nil : "停止 VM 后可编辑") {
+            HStack(alignment: .top, spacing: HVMTheme.space.lg) {
+                HVMUI.TextField("CPU", text: $draftCPU, placeholder: "4",
+                                suffix: "核",
+                                errorMessage: (editable && !cpuValid) ? "至少 1 核" : nil,
+                                disabled: !editable,
+                                probeID: "detail.field.cpu")
+                    .frame(maxWidth: 160)
+                HVMUI.TextField("内存", text: $draftMemGiB, placeholder: "4",
+                                suffix: "GiB",
+                                errorMessage: (editable && !memValid) ? "至少 1 GiB" : nil,
+                                disabled: !editable,
+                                probeID: "detail.field.memory")
+                    .frame(maxWidth: 160)
+                Spacer()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func saveFooter(_ vm: VMSummary) -> some View {
+        HStack(spacing: HVMTheme.space.sm) {
+            Spacer()
+            HVMUI.Button("放弃", variant: .secondary,
+                         probeID: "detail.button.discard") {
+                resetDraft()
+            }
+            HVMUI.Button("保存", variant: .primary, icon: "checkmark",
+                         disabled: !(cpuValid && memValid),
+                         probeID: "detail.button.save") {
+                guard let cpu = Int(draftCPU), let mem = UInt64(draftMemGiB) else { return }
+                store.saveConfig(vm) { config in
+                    config.cpuCount = cpu
+                    config.memoryMiB = mem * 1024
+                }
+            }
+        }
     }
 
     private func headerBlock(_ vm: VMSummary) -> some View {
-        VStack(alignment: .leading, spacing: HVMTheme.space.sm) {
-            Text(vm.displayName)
-                .font(HVMTheme.font.xl)
-                .foregroundStyle(HVMTheme.color.textPrimary)
-            HStack(spacing: HVMTheme.space.sm) {
-                HVMUI.Badge(vm.guestOS.badgeLabel, variant: vm.guestOS.badgeVariant, size: .sm)
-                if vm.isEncrypted {
-                    HVMUI.Badge("Encrypted", variant: .accent, icon: "lock.fill", size: .sm)
+        HStack(alignment: .center, spacing: HVMTheme.space.lg) {
+            VStack(alignment: .leading, spacing: HVMTheme.space.sm) {
+                Text(vm.displayName)
+                    .font(HVMTheme.font.xl)
+                    .foregroundStyle(HVMTheme.color.textPrimary)
+                HStack(spacing: HVMTheme.space.sm) {
+                    HVMUI.Badge(vm.guestOS.badgeLabel, variant: vm.guestOS.badgeVariant, size: .sm)
+                    if vm.isEncrypted {
+                        HVMUI.Badge("Encrypted", variant: .accent, icon: "lock.fill", size: .sm)
+                    }
+                    HVMUI.Badge(vm.runState.badgeLabel, variant: vm.runState.badgeVariant, size: .sm)
                 }
-                HVMUI.Badge(vm.runState.badgeLabel, variant: vm.runState.badgeVariant, size: .sm)
             }
+            Spacer()
+            actionButtons(vm)
         }
     }
 
@@ -99,38 +185,34 @@ struct DetailOverviewView: View {
         }
     }
 
+    /// 操作按钮组 — 放在标题右侧 (header trailing). 按 vm.runState 决定显示哪些; 但动作
+    /// 一律读 store.selected 再执行, 防 hvm-dbg gui probe 闭包 stale 作用到旧 vm
+    /// (probe onAppear 只注册一次, view 复用不重注册; 真人点击无此问题, 自动化会撞).
     @ViewBuilder
-    private func actionsSection(_ vm: VMSummary) -> some View {
-        // 按钮"显示哪些"按传入 vm (= 渲染时的 store.selected) 决定; 但动作一律读
-        // store.selected (当前选中) 再执行 — 防 hvm-dbg gui probe 闭包 stale 时作用到
-        // 旧 vm (probe onAppear 只注册一次, view 复用不重注册; 真人点击无此问题, 但
-        // 自动化会撞). 读 store.selected 让动作始终命中当前选中项.
-        HVMUI.Section("操作") {
-            HStack(spacing: HVMTheme.space.sm) {
-                if vm.runState == .running {
-                    HVMUI.Button("停止", variant: .secondary, icon: "stop.circle",
-                                 probeID: "detail.button.stop") {
-                        if let cur = store.selected { store.stop(cur) }
-                    }
-                    HVMUI.Button("强制停止", variant: .destructive, icon: "bolt.slash",
-                                 probeID: "detail.button.kill") {
-                        if let cur = store.selected { store.kill(cur) }
-                    }
-                } else {
-                    HVMUI.Button("启动", variant: .primary, icon: "play.fill",
-                                 probeID: "detail.button.start") {
-                        if let cur = store.selected {
-                            VMActions.start(cur, store: store, dialog: dialog)
-                        }
-                    }
-                    HVMUI.Button("删除", variant: .destructive, icon: "trash",
-                                 probeID: "detail.button.delete") {
-                        if let cur = store.selected {
-                            VMActions.confirmDelete(cur, store: store, dialog: dialog)
-                        }
+    private func actionButtons(_ vm: VMSummary) -> some View {
+        HStack(spacing: HVMTheme.space.sm) {
+            if vm.runState == .running {
+                HVMUI.Button("停止", variant: .secondary, icon: "stop.circle",
+                             probeID: "detail.button.stop") {
+                    if let cur = store.selected { store.stop(cur) }
+                }
+                HVMUI.Button("强制停止", variant: .destructive, icon: "bolt.slash",
+                             probeID: "detail.button.kill") {
+                    if let cur = store.selected { store.kill(cur) }
+                }
+            } else {
+                HVMUI.Button("启动", variant: .primary, icon: "play.fill",
+                             probeID: "detail.button.start") {
+                    if let cur = store.selected {
+                        VMActions.start(cur, store: store, dialog: dialog)
                     }
                 }
-                Spacer()
+                HVMUI.Button("删除", variant: .destructive, icon: "trash",
+                             probeID: "detail.button.delete") {
+                    if let cur = store.selected {
+                        VMActions.confirmDelete(cur, store: store, dialog: dialog)
+                    }
+                }
             }
         }
     }

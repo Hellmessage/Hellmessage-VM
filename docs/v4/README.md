@@ -16,7 +16,7 @@
 |---|---|---|
 | [NEW_GUI_MAIN_LAYOUT.md](NEW_GUI_MAIN_LAYOUT.md) | sidebar + detail 两栏主窗口骨架 + VM 列表 + 精简新 store + HVMControl 共享控制层 (折叠原 VM_LIST 子稿) | **代码已合入** 2026-05-30, M1-M6 全合 |
 | ~~`NEW_GUI_VM_LIST.md`~~ | (已折叠进 NEW_GUI_MAIN_LAYOUT.md — sidebar 即 VM 列表, 不拆两份) | 折叠 |
-| `NEW_GUI_VM_DETAIL.md` | 详情页 (overview / sharing / network / disk / 加密 等 section) |
+| [NEW_GUI_VM_DETAIL.md](NEW_GUI_VM_DETAIL.md) | 详情页完整配置编辑 (资源/磁盘/网络/ISO/共享/选项 + **加密 VM 解锁编辑** + **vmnet daemon 安装**) | **评审中** 2026-05-30, 用户定全量, V1-V9 |
 | `NEW_GUI_CREATE_VM.md` | 创建 VM Wizard (复用 HVMUI.WizardDialog) |
 | `NEW_GUI_ENCRYPTION.md` | 加密 / 解密 / rekey dialog (复用 HVMUI.InputDialog) |
 | `NEW_GUI_FILE_TRANSFER.md` | 文件传输 dialog |

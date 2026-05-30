@@ -114,6 +114,26 @@ public final class NewGUIStore {
         // 删的若是选中项, refresh 会自动退选到第一个
     }
 
+    // MARK: - 配置编辑 (业务页 #2, V1/V3)
+
+    /// 改配置 (CPU/内存/网络/选项/ISO 等表单字段). 明文走 VMControl.saveConfig;
+    /// 加密 VM 需先解锁 (V2 接入 configKey), 当前未解锁 → 提示.
+    /// requireStopped 默认 true (多数字段需停机); 剪贴板等热改字段传 false.
+    public func saveConfig(_ s: VMSummary,
+                           requireStopped: Bool = true,
+                           mutate: (inout VMConfig) throws -> Void) {
+        guard !s.isEncrypted else {
+            lastError = StoreError(title: "需先解锁",
+                                   message: "加密 VM 的配置编辑需先解锁 (后续 PR 接入).")
+            return
+        }
+        run("保存失败") {
+            try VMControl.saveConfig(bundleURL: s.bundleURL,
+                                     requireStopped: requireStopped,
+                                     mutate: mutate)
+        }
+    }
+
     /// 动作包装: try → 失败映射 HVMError.userFacing 写 lastError → 总 refresh
     private func run(_ failTitle: String, _ body: () throws -> Void) {
         do {

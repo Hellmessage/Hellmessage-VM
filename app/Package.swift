@@ -62,7 +62,7 @@ let package = Package(
         // 控制层只 fork host 子进程, 不链接后端实现.
         .target(
             name: "HVMControl",
-            dependencies: ["HVMCore", "HVMBundle", "HVMEncryption", "HVMIPC"]
+            dependencies: ["HVMCore", "HVMBundle", "HVMEncryption", "HVMIPC", "HVMStorage", "HVMQemu"]
         ),
 
         // 整 VM 加密. 设计稿 docs/v3/ENCRYPTION.md v2.2.
