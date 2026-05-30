@@ -180,8 +180,8 @@ public extension VMControl {
 
     // MARK: - 内部
 
-    /// requireStopped 时检查 running, 占用抛 .busy
-    private static func assertStoppedIfNeeded(bundleURL: URL, requireStopped: Bool) throws {
+    /// requireStopped 时检查 running, 占用抛 .busy. (internal: VMControl+Encryption 等同模块文件复用)
+    static func assertStoppedIfNeeded(bundleURL: URL, requireStopped: Bool) throws {
         if requireStopped, BundleLock.isBusy(bundleURL: bundleURL) {
             let holder = BundleLock.inspect(bundleURL: bundleURL)
             throw HVMError.bundle(.busy(pid: holder?.pid ?? 0, holderMode: holder?.mode ?? "runtime"))

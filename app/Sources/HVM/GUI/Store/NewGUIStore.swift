@@ -332,6 +332,72 @@ public final class NewGUIStore {
         refresh()
     }
 
+    // MARK: - 加密事务 (业务页 #3, docs/v4/NEW_GUI_ENCRYPTION.md E1)
+
+    /// 加密/解密/改密 进度行 (dialog 订阅, @Observable 自动驱动 UI). 每次事务开始清空.
+    public private(set) var encProgress: [String] = []
+
+    /// 加密明文 VM (后台 detached, 分钟级). progress 回 main append encProgress.
+    /// 完成 clearUnlock (config 明→密变) + refresh. 失败返 error 文本 (dialog 内联显, 不走全局 alert).
+    public func encrypt(_ s: VMSummary, password: String) async -> (ok: Bool, tpmReset: Bool, error: String?) {
+        encProgress = []
+        let url = s.bundleURL
+        do {
+            let tpmReset = try await Task.detached(priority: .userInitiated) {
+                try VMControl.encryptVM(bundleURL: url, password: password) { line in
+                    Task { @MainActor in self.encProgress.append(line) }
+                }
+            }.value
+            clearUnlock(s.id)
+            refresh()
+            return (true, tpmReset, nil)
+        } catch { return (false, false, encErrorMessage(error)) }
+    }
+
+    /// 解密加密 VM → 明文 (后台 detached, 分钟级). 完成 clearUnlock + refresh. 失败返 error 文本.
+    public func decrypt(_ s: VMSummary, password: String) async -> (ok: Bool, error: String?) {
+        encProgress = []
+        let url = s.bundleURL
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try VMControl.decryptVM(bundleURL: url, password: password) { line in
+                    Task { @MainActor in self.encProgress.append(line) }
+                }
+            }.value
+            clearUnlock(s.id)
+            refresh()
+            return (true, nil)
+        } catch { return (false, encErrorMessage(error)) }
+    }
+
+    /// 改密 (后台, keyslot 毫秒级 + config 原子写). 完成 clearUnlock (强制重解锁) + refresh.
+    /// 失败返 error 文本 (dialog 内联显).
+    public func rekey(_ s: VMSummary, oldPassword: String, newPassword: String) async -> (ok: Bool, tpmReset: Bool, error: String?) {
+        encProgress = []
+        let url = s.bundleURL
+        do {
+            let tpmReset = try await Task.detached(priority: .userInitiated) {
+                try VMControl.rekeyVM(bundleURL: url, oldPassword: oldPassword,
+                                      newPassword: newPassword) { line in
+                    Task { @MainActor in self.encProgress.append(line) }
+                }
+            }.value
+            clearUnlock(s.id)
+            refresh()
+            return (true, tpmReset, nil)
+        } catch { return (false, false, encErrorMessage(error)) }
+    }
+
+    /// 加密事务错误 → 文本 (HVMError.userFacing message + hint). dialog 内联显, 不设全局 lastError.
+    private func encErrorMessage(_ error: Error) -> String {
+        if let e = error as? HVMError {
+            let uf = e.userFacing
+            if let hint = uf.hint, !hint.isEmpty { return "\(uf.message) (\(hint))" }
+            return uf.message
+        }
+        return error.localizedDescription
+    }
+
     /// 清解锁缓存 (不 refresh; auto-lock 在 refresh 内调, 防递归)
     private func clearUnlock(_ id: UUID) {
         unlockedConfigs[id] = nil
