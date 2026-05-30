@@ -72,6 +72,9 @@ struct DetailOverviewView: View {
                         DetailSharingSection(vm: vm).zIndex(4)
                         DetailOptionsSection(vm: vm).zIndex(3)
                     }
+                    // 加密 section: 入口不依赖 config (加密 VM 锁定态 config=nil 也要显
+                    // 解密/改密入口; 明文 / 不支持态也各有内容), 放最底沉底 (破坏性重操作)
+                    DetailEncryptionSection(vm: vm).zIndex(2)
                 }
                 .padding(.horizontal, HVMTheme.space.xl)
                 .padding(.bottom, HVMTheme.space.xl)

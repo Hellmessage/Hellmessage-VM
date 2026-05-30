@@ -18,9 +18,9 @@
 | ~~`NEW_GUI_VM_LIST.md`~~ | (已折叠进 NEW_GUI_MAIN_LAYOUT.md — sidebar 即 VM 列表, 不拆两份) | 折叠 |
 | [NEW_GUI_VM_DETAIL.md](NEW_GUI_VM_DETAIL.md) | 详情页完整配置编辑 (资源/磁盘/网络/ISO/共享/选项 + **加密 VM 解锁编辑** + **vmnet daemon 安装**) | **代码已合入** 2026-05-30, V1-V9 全合 |
 | `NEW_GUI_CREATE_VM.md` | 创建 VM Wizard (复用 HVMUI.WizardDialog) |
-| [NEW_GUI_ENCRYPTION.md](NEW_GUI_ENCRYPTION.md) | 加密 / 解密 / rekey dialog (三态自定义 dialog + NewGUIStore async) | **设计稿** 2026-05-30 |
+| [NEW_GUI_ENCRYPTION.md](NEW_GUI_ENCRYPTION.md) | 加密 / 解密 / rekey dialog (三态自定义 dialog + NewGUIStore async) | **代码已合入** 2026-05-30, E1-E3 全合 |
 | `NEW_GUI_FILE_TRANSFER.md` | 文件传输 dialog |
-| `NEW_GUI_NETWORK.md` | 网络配置 + vmnet daemon 控制 |
+| ~~`NEW_GUI_NETWORK.md`~~ | (核心已覆盖: NIC 字段编辑走 VM_DETAIL **V5** `DetailNetworkSection` + vmnet daemon 安装/重启/卸载走 **V6** `DetailVmnetDaemonView`. 剩 per-iface live 状态 / guest IP 显示 / daemon 健康探测细节 → TODO 低优, 不单拆业务页) | 覆盖 (V5+V6) |
 | `NEW_GUI_FRAMEBUFFER.md` | VM 窗口 framebuffer 嵌入 (HDP 接入) |
 
 ## 跟 v3 / v1 / CHANGELOG 的关系

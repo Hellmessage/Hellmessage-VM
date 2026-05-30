@@ -179,6 +179,21 @@
 - **破坏性操作二次确认**: 删除磁盘 / 删除网卡 / 删除共享目录 / 强制停止 全走 `dialog.confirm(destructive:true)` (CLAUDE.md 破坏性约束)
 - probeID 命名: `detail.field.{cpu,memory}` / `detail.button.{discard,save,unlock,lock}` / `detail.network.<i>.{item,mode,device,mac,mac.random,bridged,enabled,delete}` / `detail.disk.{add,resize-<path>,delete-<path>}` / `detail.boot.{selectISO,ejectISO,installed,driversInstalled}` / `detail.sharing.{add,writable-<name>,delete-<name>}` / `detail.options.{clipboard,macStyle}` / `detail.vmnet.{install,restart,uninstall}`
 
+### 新 GUI 加密 / 解密 / rekey dialog (业务页 #3, docs/v4/NEW_GUI_ENCRYPTION.md)
+
+整 VM 加密事务接进新 GUI. 入口 `DetailEncryptionSection` (详情页最底沉底), 事务走单参数化三态 dialog `NewGUIEncryptionDialog` (mode: encrypt/decrypt/rekey). 底层 `EncryptVMOperation/DecryptVMOperation/RekeyVMOperation` (CLI 同源) 已全有, 本层只接 dialog + 入口 + store async.
+
+- **事务收口走 `VMControl.{encryptVM,decryptVM,rekeyVM}` + `NewGUIStore.{encrypt,decrypt,rekey}` async, 禁止 dialog 直调 Operation**: VMControl 包装内部解析 `QemuPaths.qemuImgBinary()` + Win OVMF VARS 模板 (`share/qemu/edk2-aarch64-vars.fd`), dialog/store 不碰后端路径 (同第三方二进制约束). store 方法 `Task.detached` 跑 (加密/解密分钟级) + progress 回 main append `encProgress` (dialog 订阅滚动展示)
+- **三态 `form → running → done`**: form 收密码 + 校验 + 警告; running 显 spinner + `encProgress` 日志 + "请勿关闭"; done 显 ✔ + (tpmReset 时) TPM 红字. 提交 `phase=.running` → `await store.<op>` → 成功 `.done(tpmReset)` / 失败回 `.form` + 内联 error
+- **running 态 `closeAction=nil` (X 不显) + 无任何按钮**: 加密事务不可中断 (CLAUDE.md X-only-close). hvm-dbg gui 验证手段: running 态 probe 列表为空 = closeAction 生效
+- **加密/解密后必 `clearUnlock(id)` + `refresh()`**: 加密把明文 config.yaml 变 config.yaml.enc / 解密反之 / 改密换 subkeys — 旧解锁缓存全失效, 不 clear 会指向不存在的明文/密文 (P0-1)
+- **失败走 dialog 内联 error, store 加密方法不设全局 `lastError`**: 避免 dialog inline + 全局 alert 双弹. store `encrypt/decrypt/rekey` 返 `(ok, [tpmReset,] error: String?)`, 错误文本 = `HVMError.userFacing` message + hint, dialog 显在 form 态红字
+- **解密 / 改密不要求先解锁**: dialog 自收密码 (跟 CLI 一致), 不依赖 V2 解锁缓存. 入口在加密 VM 锁定态 (config=nil) 也可点
+- **Win guest 加密/改密重置 TPM**: tpmReset 来自 Operation Result (不猜), form + done 态红字预警 (BitLocker recovery key 失效). 解密无 TPM 重置
+- **入口 gating**: 明文 + QEMU + 非 macOS → [加密 VM]; 加密 qemuPerfile → [改密]+[解密]; vzSparsebundle → 灰显 "GUI 暂未接入走 hvm-cli"; macOS/VZ 明文 → 灰显 "不支持整盘加密". 入口仅 stopped 可点, 动作读 `store.selected` 防 stale probe 闭包
+- **store 显式传入 dialog (非 @Environment)**: `.hvmDialogHost()` 在 `.environment(store)` 外层, dialog overlay 拿不到 store 环境 → `present { handle in NewGUIEncryptionDialog(..., store: store) }` 显式传; @Observable 仍按 body 内访问 `store.encProgress` 建立 observation
+- probeID 命名: `detail.encryption.{encrypt,rekey,decrypt}` / `dialog.{encrypt,decrypt,rekey}.{close,cancel,confirm,done}` / `dialog.{encrypt,decrypt,rekey}.field.{password,confirm,old,new}`
+
 ## VZ 能力边界约束 **必须遵守**
 
 以下能力 **VZ 不支持**, 即使用户要求也不得尝试实现, 直接提示用户能力边界:

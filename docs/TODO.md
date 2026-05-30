@@ -5,7 +5,7 @@
 > 跟 [docs/v1/ROADMAP.md](v1/ROADMAP.md) 不同 — ROADMAP 是历史 v2 残余清单, 已基本归档.
 > 本文件聚焦**当前进行中**的工作 + **新发现的待办**.
 >
-> **最后更新**: 2026-05-30 (业务页 #2 详情完整配置编辑 V1-V9 全合: 资源/网络/磁盘/ISO&启动/共享目录/选项 inline section + 加密 VM 解锁→编辑→重密 + vmnet daemon 入口; 加密 throwaway VM GUI 自动化 e2e 全绿 + 无明文泄漏; 修 滚动条 overlay 预留 + stale probe binding. 业务页 #1 M1-M6 此前已合. Phase D 全合 7/7; 剩 Phase L 防漂移 lint)
+> **最后更新**: 2026-05-30 (业务页 #3 加密/解密/rekey dialog E1-E3 全合: VMControl 包装 + NewGUIStore async + 三态 NewGUIEncryptionDialog + DetailEncryptionSection 入口; throwaway 明文 QEMU VM 加密→改密→解密 GUI 自动化 e2e 全绿 + P0-4 错密码回 form. 业务页 #2 详情完整配置编辑 V1-V9 此前已合: 资源/网络/磁盘/ISO&启动/共享目录/选项 inline section + 加密 VM 解锁→编辑→重密 + vmnet daemon 入口; 加密 throwaway VM GUI 自动化 e2e 全绿 + 无明文泄漏; 修 滚动条 overlay 预留 + stale probe binding. 业务页 #1 M1-M6 此前已合. Phase D 全合 7/7; 剩 Phase L 防漂移 lint)
 
 ---
 
@@ -104,9 +104,9 @@
 - [x] `docs/v4/NEW_GUI_VM_LIST.md` — VM 列表项 (running/stopped/encrypted 状态 / 加密锁图标) — 随 MAIN_LAYOUT M4 合
 - [x] `docs/v4/NEW_GUI_VM_DETAIL.md` — 详情页配置编辑 (资源/网络/磁盘/ISO&启动/共享/选项 section + 加密解锁编辑 + vmnet daemon) — V1-V9 全合; 加密 throwaway VM 解锁→改 CPU→重密→重解锁 e2e 全绿; 滚动条 overlay + stale probe binding 修复
 - [ ] `docs/v4/NEW_GUI_CREATE_VM.md` — 创建 VM Wizard (复用 HVMUI.WizardDialog)
-- [ ] `docs/v4/NEW_GUI_ENCRYPTION.md` — 加密 / 解密 / rekey dialog
+- [x] `docs/v4/NEW_GUI_ENCRYPTION.md` — 加密 / 解密 / rekey dialog (E1-E3 全合: VMControl 包装 + store async + 三态 NewGUIEncryptionDialog + DetailEncryptionSection; throwaway 明文 VM 加密→改密→解密 GUI e2e 全绿)
 - [ ] `docs/v4/NEW_GUI_FILE_TRANSFER.md` — 文件传输 dialog
-- [ ] `docs/v4/NEW_GUI_NETWORK.md` — 网络配置 + vmnet daemon 控制
+- [x] `docs/v4/NEW_GUI_NETWORK.md` — 网络配置 + vmnet daemon 控制 — **核心已覆盖** (NIC 字段编辑 VM_DETAIL V5 + vmnet daemon 安装/重启/卸载 V6); 不单拆业务页. 剩 live 状态/IP/健康探测见下方低优
 - [ ] `docs/v4/NEW_GUI_FRAMEBUFFER.md` — VM 窗口 framebuffer 嵌入 (HDP 接入)
 
 ---
@@ -132,6 +132,7 @@
 
 ## 跨主题低优 (单独提案才动手)
 
+- [ ] **新 GUI 网络面板增强** (NEW_GUI_NETWORK.md 余量, 核心 V5/V6 已覆盖): per-iface live 状态 (link up/down) / guest IP 显示 / daemon 健康探测细节 (silent-bridge-死探测 UI). 需要 running VM + IPC 拉 guest 网络态, 单独提案再做.
 - [ ] **PR-D1 OverlayContainer 之后**: VM detail 页 popover (例如"添加共享目录"小卡片) 也走全局 OverlayContainer
 - [ ] **i18n** — 设计稿明确 NEW_GUI.md 不引 LocalizedStringKey, 硬中文. 未来真要 i18n 时单独立项
 - [ ] **VoiceOver / a11y 全覆盖** — R5 规范要求 accessibilityLabel/Hint/Value, 已落 C1-C4 字段类组件. 业务页接入时统一审计一遍.

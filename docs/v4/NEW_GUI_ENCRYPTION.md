@@ -1,6 +1,6 @@
 # 新 GUI 业务页 — 加密 / 解密 / rekey dialog
 
-> 状态: **设计稿** 2026-05-30 — 待用户评审. 业务页 #3.
+> 状态: **代码已合入** 2026-05-30 — E1-E3 全合. 控制层 `VMControl.{encrypt,decrypt,rekey}VM` + `NewGUIStore` async + 三态 `NewGUIEncryptionDialog` + `DetailEncryptionSection` 入口. throwaway 明文 QEMU Linux VM GUI 自动化全链 e2e: 加密(config.yaml→.enc)→改密(flow1234→flow5678, progress log)→解密(新密码生效→明文, 证 rekey)→P0-4 错密码回 form+红字内联错误; running 态 closeAction=nil (probe 空). Win TPM 预警因无 throwaway Win VM 未实测. 约束回写 CLAUDE.md "新 GUI 加密 / 解密 / rekey dialog" 节.
 >
 > 前置依赖: [NEW_GUI.md](NEW_GUI.md) 基础设施 (Dialog 框架 + HVMUI 组件) + [NEW_GUI_MAIN_LAYOUT.md](NEW_GUI_MAIN_LAYOUT.md) (`NewGUIStore` + `HVMControl`) + [NEW_GUI_VM_DETAIL.md](NEW_GUI_VM_DETAIL.md) (详情页 section 框架 + V2 解锁流程已落 `unlock/lock/unlockedSubKeys`).
 >
@@ -195,9 +195,9 @@ struct NewGUIEncryptDialog: View {
 
 | PR | 标题 | 验收 |
 |---|---|---|
-| **E1** | feat(control): VMControl.encryptVM/decryptVM/rekeyVM 包装 (内部解析 qemuImg + Win OVMF 模板) + NewGUIStore.encrypt/decrypt/rekey async + encProgress | `make build`; throwaway 明文 VM: store 方法单独跑 (临时入口或 hvm-dbg) 加密→解密往返 config 正确 (P0-1) |
-| **E2** | feat(gui): NewGUIEncryptDialog / NewGUIDecryptDialog / NewGUIRekeyDialog 三态 (form/running/done) + DetailEncryptionSection 入口 | hvm-dbg gui: 明文 VM [加密 VM…]→双密码→进度→done→详情显"已加密"; [改密…] 老密码失效新密码解; [解密…] 转明文; 输错密码回 form (P0-1/P0-3/P0-4) |
-| **E3** | docs + 回写 (CLAUDE.md 新 GUI 加密 dialog 约束 / 设计稿状态 / README 索引 / TODO) + e2e 全路径 | 加密→改密→解密 throwaway e2e 全绿; VZ/macOS 灰显 |
+| **E1** ✅ | feat(control): VMControl.encryptVM/decryptVM/rekeyVM 包装 (内部解析 qemuImg + Win OVMF 模板) + NewGUIStore.encrypt/decrypt/rekey async + encProgress | `make build`; throwaway 明文 VM: store 方法单独跑 (临时入口或 hvm-dbg) 加密→解密往返 config 正确 (P0-1) |
+| **E2** ✅ | feat(gui): NewGUIEncryptionDialog (单参数化三态, 折叠 3 文件) / NewGUIDecryptDialog / NewGUIRekeyDialog 三态 (form/running/done) + DetailEncryptionSection 入口 | hvm-dbg gui: 明文 VM [加密 VM…]→双密码→进度→done→详情显"已加密"; [改密…] 老密码失效新密码解; [解密…] 转明文; 输错密码回 form (P0-1/P0-3/P0-4) |
+| **E3** ✅ | docs + 回写 (CLAUDE.md 新 GUI 加密 dialog 约束 / 设计稿状态 / README 索引 / TODO) + e2e 全路径 | 加密→改密→解密 throwaway e2e 全绿; VZ/macOS 灰显 |
 
 > **规模**: 比 VM_DETAIL 小很多 (底层全有, 只接 dialog + 入口)。3 PR。
 
