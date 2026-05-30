@@ -141,7 +141,7 @@ struct NewGUIEncryptionDialog: View {
         HVMUI.SecureField(label, text: text, placeholder: placeholder,
                           autoFocus: autoFocus,
                           probeID: "\(probeBase).field.\(id)",
-                          onSubmit: onEnter ? { if canSubmit { submit() } } : nil)
+                          onSubmit: onEnter ? ({ @MainActor @Sendable in if canSubmit { submit() } }) : nil)
     }
 
     // MARK: - running 态

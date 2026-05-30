@@ -42,29 +42,32 @@ private struct ScrollerHider: NSViewRepresentable {
 
         func attach(to v: NSView) {
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                guard let sv = self.findScrollView(from: v) else {
-                    // ScrollView 可能还没建好 NSScrollView, 短延迟重试
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { self.attach(to: v) }
-                    return
+                // DispatchQueue.main 上即主线程, assumeIsolated 让下方访问 main-actor NSView 属性合法
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    guard let sv = self.findScrollView(from: v) else {
+                        // ScrollView 可能还没建好 NSScrollView, 短延迟重试
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { self.attach(to: v) }
+                        return
+                    }
+                    if self.scrollView !== sv {
+                        self.scrollView = sv
+                        sv.postsFrameChangedNotifications = true
+                        NotificationCenter.default.addObserver(
+                            self, selector: #selector(self.reapply),
+                            name: NSView.frameDidChangeNotification, object: sv)
+                    }
+                    self.apply(sv)
                 }
-                if self.scrollView !== sv {
-                    self.scrollView = sv
-                    sv.postsFrameChangedNotifications = true
-                    NotificationCenter.default.addObserver(
-                        self, selector: #selector(self.reapply),
-                        name: NSView.frameDidChangeNotification, object: sv)
-                }
-                self.apply(sv)
             }
         }
 
-        @objc private func reapply() {
+        @MainActor @objc private func reapply() {
             if let sv = scrollView { apply(sv) }
         }
 
         /// overlay 是关键: 浮动滚动条永不在内容区预留空间; hasVerticalScroller=false 进一步不显.
-        private func apply(_ sv: NSScrollView) {
+        @MainActor private func apply(_ sv: NSScrollView) {
             sv.scrollerStyle = .overlay
             sv.autohidesScrollers = true
             sv.hasVerticalScroller = false
@@ -73,7 +76,7 @@ private struct ScrollerHider: NSViewRepresentable {
             sv.horizontalScroller?.alphaValue = 0
         }
 
-        private func findScrollView(from v: NSView) -> NSScrollView? {
+        @MainActor private func findScrollView(from v: NSView) -> NSScrollView? {
             var cur: NSView? = v.superview
             while let c = cur {
                 if let sv = c as? NSScrollView { return sv }

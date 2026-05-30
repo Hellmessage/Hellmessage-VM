@@ -20,7 +20,7 @@ struct DetailOptionsSection: View {
     private var supported: Bool { vm.engine == .qemu }
 
     var body: some View {
-        if let cfg {
+        if cfg != nil {
             HVMUI.Section("选项",
                           description: supported ? nil : "以下选项仅 QEMU 后端生效") {
                 VStack(alignment: .leading, spacing: HVMTheme.space.md) {
