@@ -68,6 +68,7 @@ struct DetailOverviewView: View {
                                              editable: vm.runState == .stopped)
                             .zIndex(30)
                         diskSection(vm).zIndex(10)
+                        DetailBootSection(vm: vm).zIndex(5)
                     }
                 }
                 .padding(.horizontal, HVMTheme.space.xl)

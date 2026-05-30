@@ -203,7 +203,7 @@ DetailOverviewView (改名 / 扩展)
 | **V4** | feat(gui): 磁盘 section (主盘扩容 + 数据盘增删; 明文 raw/qcow2 + 加密 LUKS) | hvm-dbg gui: 加盘/扩盘/删盘 → guest lsblk; 加密 VM 走 QcowLuksFactory (P0-2) |
 | **V5** | feat(gui): 网络 section (NIC mode/device/MAC/bridged/enabled 编辑 + 校验) | hvm-dbg gui: 改 NIC mode/MAC → 保存 → 重启验证; 校验拦截 (P0-4) |
 | **V6** | feat(net,gui): VMnetSupervisor 核心视图无关化 (osascript admin + plist) + 网络 section [安装/重启/卸载 daemon] 按钮 | 真机: 装 daemon (Touch ID) → bridged VM 起; 重启 daemon. (需用户密码, 部分手动) |
-| **V7** | feat(gui): ISO & 启动 section (选/弹 ISO + bootFromDiskOnly + Windows 装机推进按钮) | hvm-dbg gui: 切 ISO + boot 模式; Win 装机推进 |
+| **V7** ✅ | feat(gui): ISO & 启动 section (选/弹 ISO + bootFromDiskOnly + Windows 装机推进按钮) | ✅ hvm-dbg gui: ejectISO e2e config 翻转验证; Windows stage2 / Linux bootFromDisk 按钮可见性对照 config 实测; macOS guest 不显示. NSOpenPanel 选 ISO 无法自动化 (同 saveConfig 通路已 V3/V4 验证) |
 | **V8** | feat(gui): 共享目录 section (增删 + readOnly, QEMU) + 选项 section (剪贴板热改 + 快捷键) | hvm-dbg gui: 加共享 → 重启验证; 剪贴板 running 热改 IPC 生效 (P0-3) |
 | **V9** | docs + 回写 (CLAUDE.md 新 GUI detail/解锁/daemon 约束 / v1 / TODO / 设计稿状态) + e2e 全路径走查 | 全 section + 解锁 e2e |
 
