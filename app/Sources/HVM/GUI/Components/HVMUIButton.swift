@@ -103,6 +103,7 @@ struct Button: View {
     private let iconPosition: IconPosition
     private let isDisabled: Bool
     private let isLoading: Bool
+    private let fillWidth: Bool
     private let probeID: String
     private let probeLabel: String?
     // action @MainActor @Sendable, 跟 ProbeAction.button 签名对齐.
@@ -119,6 +120,7 @@ struct Button: View {
          size: ButtonSize = .md,
          disabled: Bool = false,
          isLoading: Bool = false,
+         fillWidth: Bool = false,
          probeID: String,
          probeLabel: String? = nil,
          action: @escaping @MainActor @Sendable () -> Void) {
@@ -129,6 +131,7 @@ struct Button: View {
         self.size = size
         self.isDisabled = disabled
         self.isLoading = isLoading
+        self.fillWidth = fillWidth
         self.probeID = probeID
         self.probeLabel = probeLabel
         self.action = action
@@ -150,6 +153,7 @@ struct Button: View {
         self.size = size
         self.isDisabled = disabled
         self.isLoading = isLoading
+        self.fillWidth = false   // 纯 icon 按钮不支持 fillWidth
         self.probeID = probeID
         self.probeLabel = probeLabel
         self.action = action
@@ -173,6 +177,7 @@ struct Button: View {
             }
             .padding(.horizontal, variant == .icon ? 0 : size.horizontalPadding)
             .frame(minWidth: variant == .icon ? size.height : 0,
+                   maxWidth: fillWidth ? .infinity : nil,
                    minHeight: size.height)
             .foregroundStyle(textColor)
             .background(bgColor)

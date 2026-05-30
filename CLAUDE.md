@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+**所有回答必须使用中文**
+
 本项目走 Apple Virtualization.framework 路线。
 
 ## 文档约束
@@ -151,6 +153,18 @@
 
 **为什么强制**: 业务侧偷懒不传 probeID 会让 hvm-dbg gui 自动化覆盖率漏斗, 业务页接入 dialog / wizard 后再补麻烦. 必传让 "每个可点 / 可输 / 可切控件都能被自动化测" 成为编译期保证 (而不是 lint 后置). 详细规范见 [docs/v4/NEW_GUI.md "R6" 节](docs/v4/NEW_GUI.md) + [docs/v3/HVM_DBG_GUI_PROTOCOL.md "Dialog probe id 规范" 节](docs/v3/HVM_DBG_GUI_PROTOCOL.md).
 
+### 新 GUI 主界面 + 数据 store (业务页 #1, docs/v4/NEW_GUI_MAIN_LAYOUT.md)
+
+新 GUI (`GUI=new`, 默认) 主界面是 `app/Sources/HVM/GUI/Layout/MainLayoutView.swift` 两栏骨架 (toolbar / sidebar 240 + detail / statusbar). `HVM_GUI_SHOWCASE=1` 退回组件 Showcase (`NewGUIRootView`).
+
+- **VM 控制走 `HVMControl` library, 单一来源**: 枚举 / 启停 / 删除 一律走 `VMCatalog.list` / `VMControl.{start,stop,kill,status,delete}` (target `HVMControl`, hvm-cli + 新 GUI store 共用). **禁止**业务侧 / store 再抄一份 `BundleDiscovery` + `BundleLock` + `HostLauncher` 拼装逻辑 (历史教训: 同模式逻辑抄多份必漂移). 新增控制能力先加到 `VMControl`, 两端自动同步
+- **数据 store `NewGUIStore`** (`@Observable @MainActor`, `GUI/Store/`): 不依赖老 `AppModel`, 不背 embeddedID / detached 窗口等老 GUI 耦合. 1Hz `refresh()` 内 `if fresh != vms` 守卫 (VMSummary Equatable) 防无谓重绘. 动作失败走 `lastError` (HVMError.userFacing) 冒泡, `MainLayoutView` `.onChange` 弹 `dialog.alert(level:.error)`. 注入走 `.environment(store)` + 子 view `@Environment(NewGUIStore.self)`; dialog 仍走 `@EnvironmentObject HVMUI.DialogPresenter` (两套注入并存)
+- **detail 按钮动作读 `store.selected` (不捕获渲染时 vm)**: `hvmProbe` onAppear 只注册一次, view 复用不重注册 → probe 闭包会 stale. 真人点击无此问题 (SwiftUI 闭包是当前的), 但 hvm-dbg gui 自动化会撞旧 vm. 动作读 `store.selected` 让它始终命中当前选中项. **新业务页凡 "静态 probeID + 随选中变化的闭包" 都照此处理**
+- **文件 / 类型名不得与老 GUI `UI/**` 撞** (SwiftPM 用文件名出 .o, 同模块两同名 struct 也重定义): 撞名时新 GUI 侧加 `NewGUI` 前缀 (例 `NewGUISidebarView` 避开老 `UI/Content/SidebarView.swift`). 老 UI/ 未 `#if` 门控, `GUI=new` 时仍编译
+- **后端启停验证用 throwaway / 用户授权的 VM**: 启停 e2e 走 `hvm-cli` (稳定脱离 shell 会话) 或 `make run-app` (`open` 启 GUI 脱离会话); **不要**手动 `./HVM.app/Contents/MacOS/HVM &` 后台启 GUI 再启 VM (孙子 QEMU 进程随 shell 会话清理被 `signal 9` 杀, 误判启动失败)
+- **无顶部 toolbar**: 窗口顶部仅原生标题栏. 新建 VM = sidebar 列表底部全宽主按钮 (`sidebar.button.create`); 刷新 = statusbar 右侧工具图标 (`statusbar.button.refresh`, 列表 1Hz 自动刷新, 手动为兜底)
+- probeID 命名: `sidebar.button.create` / `statusbar.button.refresh` / `vmlist.row.item-<vmID>` / `vmlist.confirm.delete-<vmID>` / `vmlist.input.password-<vmID>` / `detail.button.{start,stop,kill,delete}` / `main.alert.error`
+
 ## VZ 能力边界约束 **必须遵守**
 
 以下能力 **VZ 不支持**, 即使用户要求也不得尝试实现, 直接提示用户能力边界:
@@ -188,6 +202,8 @@ QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场�
 - **依赖配套**:
   - EDK2 aarch64 firmware: 双 firmware 策略 — Linux 用 QEMU 自带 kraxel firmware (`edk2-aarch64-code.fd`, 跟 brew QEMU 同源); Windows 用 `scripts/edk2-build.sh` 自家 build (clone edk2-stable202408 + apply patches/edk2/0001-armvirt-extra-ram-region-for-win11.patch + cross compile RELEASE_GCC AARCH64 via brew aarch64-elf-gcc), 落 `share/qemu/edk2-aarch64-code-win11.fd`; vars 模板用 QEMU 自带 `edk2-arm-vars.fd` (空 vars 通用)
   - `swtpm` + `libtpms` 由 brew 锁版本 (Win11 TPM 2.0 必需), 由 `qemu-build.sh` 打包入 `Resources/QEMU/bin/swtpm` + dylib 重定向
+  - **主 qemu 二进制依赖 dylib 必须 bundle (零依赖硬约束)**: `qemu-system-aarch64` / `qemu-img` / `qemu-storage-daemon` / `qemu-nbd` / `qemu-io` / `qemu-edid` 都链 brew 的 `libcapstone` / `libgnutls` / `libpixman` / `libglib` / `libslirp` / `libzstd` 等. `qemu-build.sh` 的 `bundle_qemu_dylibs()` (复用 `bundle_dylib_deps`, 跟 swtpm 同款) 把这些全拷进 `Resources/QEMU/lib/` + `install_name_tool` 重定向到 `@executable_path/../lib/`. **不这么做的后果**: qemu 偷偷依赖 host homebrew (违反零依赖), 且加固运行时 (`flags=runtime`) 库校验拒绝加载非同 team 的 adhoc dylib — homebrew 升级重签 dylib 后 QEMU 一起来就 `signal 9` 崩. 历史教训 2026-05-30: brew 升级 capstone 后整个 VM 启动链断. 改 brew 依赖版本 / 新增 qemu link 库后必须重跑打包让新 dylib 入 lib/
+  - **`make qemu-build.sh --relocate-dylibs`**: 只对现有 `third_party/qemu-stage` 重做 dylib 嵌入 (不全量重编 qemu), 给"homebrew 升级后 dylib 失效"快速修复; 之后 `make build` 重签. Makefile `BUNDLE_STAMP` 依赖 `$(QEMU_BIN)`, re-stage 后 `make build` 自动重 bundle
   - `socket_vmnet` **不入包**: 用户机器自行 `brew install socket_vmnet`, `scripts/install-vmnet-daemons.sh` 从 brew 路径拉 binary 写 launchd plist. 见下条网络约束
   - **virtio-win 驱动 ISO 不入包** (体积约 700MB), 首次创建 Win VM 时按需下载到 `~/Library/Application Support/HVM/cache/virtio-win/`
 - **签名闭环**: `Resources/QEMU/bin/*` 与 `Resources/QEMU/lib/*.dylib` 必须逐文件 codesign; QEMU 二进制使用单独的 `app/Resources/QEMU.entitlements` (含 `com.apple.security.hypervisor`, HVF 必需), **不**与 HVM 主进程共用 entitlement; 整包再 `codesign --deep` 包裹
@@ -224,7 +240,7 @@ QEMU 后端用于覆盖 VZ 不承接的 Windows arm64 与可选 Linux arm64 场�
     - dev: open build/HVM.app → Bundle.main = build/HVM.app
     - prod: open /Applications/HVM.app → Bundle.main = /Applications/HVM.app
   - 外部脚本 (`scripts/install-vmnet-daemons.sh` 写 launchd plist): GUI VMnetSupervisor 严格只查 `Bundle.main/Resources/scripts/install-vmnet-daemons.sh`. dev 期 Bundle.main = `build/HVM.app`, prod 期 = `/Applications/HVM.app`. plist 内 `ProgramArguments[0]` 是 `socket_vmnet` 的 brew 绝对路径, 与 .app 位置无关
-  - hvm-cli (`HostLauncher.locateHVMBinary`): 只查 `/Applications/HVM.app` 与 `~/Applications/HVM.app`, 不再 fallback 到 build/HVM.app — dev 期 `hvm-cli start` 前需先 `make install`
+  - `HostLauncher.locateHVMBinary` (hvm-cli + GUI store 共用, 在 `HVMControl` target): 探测顺序 (1) `HVM_APP_PATH` env → (2) **跟随调用方自身位置** (`Bundle.main.executableURL` 的兄弟 `HVM` 或兄弟 `HVM.app/Contents/MacOS/HVM`) → (3) `/Applications/HVM.app` / `~/Applications/HVM.app` 兜底. 跟随自身位置 = "我从哪个 build 出来就用哪个 build 的 HVM + 包内 QEMU": 装进 .app 时 hvm-cli 兄弟即 `Contents/MacOS/HVM`; dev 期 `build/hvm-cli` 兄弟即 `build/HVM.app` (**dev 不必先 `make install`**, 也不会误用 `/Applications` 旧版). GUI (build/HVM.app 自身) 启 host 子进程时 `Bundle.main` 即自己, 同样自洽
   - **严禁 fallback** 到 `/opt/homebrew/*` / `/usr/local/*` / 仓库 `third_party/qemu-stage/*` (`socket_vmnet` 例外, 它本来就由 brew 提供, 不在 .app 内)
   - 仅允许 env override: `HVM_QEMU_ROOT` / `HVM_SWTPM_PATH` / `HVM_APP_PATH` 显式覆盖, 给 CI 与调试用 (老的 `HVM_SOCKET_VMNET_PATH` 已废弃, 走 brew)
 - **packager 工具例外**: `scripts/qemu-build.sh` 是源 → 包内分发桥梁, 它从 brew 复制 swtpm 进 `third_party/qemu-stage/`, 不属于"运行时引用". socket_vmnet 不再走打包 (brew 直接装)

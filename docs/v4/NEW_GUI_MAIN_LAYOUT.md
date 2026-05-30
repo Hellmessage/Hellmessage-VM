@@ -1,6 +1,6 @@
 # 新 GUI 业务页 — 主窗口骨架 + VM 列表 (sidebar/detail 两栏)
 
-> 状态: **设计稿** 2026-05-30
+> 状态: **代码已合入** 2026-05-30 (M1-M6 全合; hvm-dbg gui e2e 全绿. 实现历史见文末"实现记录"节)
 >
 > 第一个业务页提案. 前置依赖: [NEW_GUI.md](NEW_GUI.md) 基础设施层 (Theme token / HVMUI 组件库 / Dialog 框架) 已全合 (Phase T/C/D ✅). 本稿把新 GUI 从「Theme/组件 Showcase」推进到「真正能管 VM 的两栏主界面」, 是后续所有业务页 (详情 / 创建向导 / 网络 / framebuffer) 挂载的脊梁.
 >
@@ -344,4 +344,18 @@ public final class NewGUIStore {
 
 ---
 
-**待用户敲定**: 整体方向 (尤其 D1 抽 HVMControl library 这个 refactor 是否接受 — 它会动 hvm-cli) + PR 拆解粒度. 用户点头后开 M1.
+## 实现记录 (2026-05-30 合入后回写)
+
+M1-M6 全合, hvm-dbg gui e2e 全绿. 实现中相对设计稿的增补 / 踩坑:
+
+- **D8 落定**: VMSummary Equatable 含 config (VMConfig Equatable), 8 VM 列表 1Hz refresh 实测无卡顿, 不改轻量 ==.
+- **HVMControl 依赖**: 最终 `["HVMCore","HVMBundle","HVMEncryption","HVMIPC"]` — 未引 HVMStorage (VMSummary 不算磁盘实际占用, ListCommand 自己按 summary.config 算 actualBytes).
+- **CLI 搜索逻辑改进 (超出原范围, 用户 2026-05-30 要求)**: `HostLauncher.locateHVMBinary` 从"只查 /Applications" 改为**优先跟随调用方自身位置** (`Bundle.main.executableURL` 的兄弟 HVM / 兄弟 HVM.app). dev 不必先 make install, 不撞 /Applications 旧版. 回写 CLAUDE.md "第三方二进制" 节. 老约束"dev 期 hvm-cli start 前需先 make install" 已废.
+- **QEMU dylib bundling 修复 (M1 期发现的独立 bug)**: 主 qemu 二进制历史只 bundle 了 swtpm 的 dylib, capstone/gnutls/pixman/slirp/zstd 等仍引 homebrew 绝对路径. brew 升级 capstone 重签 adhoc 后加固运行时库校验崩 signal 9, 挡住所有 VM 启动. 修: `qemu-build.sh` 加 `bundle_qemu_dylibs()` + `--relocate-dylibs` 模式 + Makefile BUNDLE_STAMP 依赖 QEMU_BIN. 详见 CLAUDE.md QEMU 节 + git `fix(qemu)`.
+- **probe 闭包 stale + store.selected**: `hvmProbe` onAppear 只注册一次, detail 静态 probeID (`detail.button.start`) 的闭包随选中变化但 probe 不重注册 → hvm-dbg gui 自动化点到旧 vm. 真人点击无此问题. 修法: detail 按钮动作读 `store.selected` (当前选中) 而非捕获渲染时 vm. 已升 CLAUDE.md 约束.
+- **文件/类型撞名**: 新 `SidebarView` 跟老 `UI/Content/SidebarView.swift` 撞 (SwiftPM .o 文件名 + 同模块 struct 重定义) → 改名 `NewGUISidebarView`. 老 UI/ 未 #if 门控, GUI=new 时仍编译.
+- **布局微调 (用户 2026-05-30, 多轮)**: 去掉原顶部 toolbar (含 HVM brand) + sidebar 顶部 "虚拟机 N" 头部, 窗口顶部仅原生标题栏, 列表/详情直接顶到顶. 主操作 = sidebar 底部**全宽** "+ 新建 VM" 主按钮 (`sidebar.button.create`); 刷新 = statusbar 右侧工具图标 (`statusbar.button.refresh`). `MainToolbarView.swift` 已删. 为全宽按钮给 `HVMUI.Button` 加了 `fillWidth: Bool` 参数 (true 时内层 `.frame(maxWidth: .infinity)` 让 bg 撑满, 纯 icon 按钮不支持).
+- **GUI 启 VM 的会话陷阱**: 手动 `./HVM.app/.../HVM &` 后台启 GUI, 其孙子 QEMU 随启动 shell 会话清理被 signal 9 杀. `make run-app` 用 `open` 无此问题. e2e 测启停用 hvm-cli 启 VM + GUI 轮询显示.
+
+### 本稿未做 (后续子稿)
+detail 完整配置编辑 / 创建向导 / framebuffer 真画面 / 加密管理 / 网络面板 — 各自独立子稿 (见 v4 README 表). toolbar [新建] 当前弹占位 alert.

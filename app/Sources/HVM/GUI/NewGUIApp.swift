@@ -27,10 +27,15 @@ final class NewGUIAppDelegate: NSObject, NSApplicationDelegate {
         //      minWidth/minHeight 自动同步到 window.contentMinSize
         //   3. win.contentMinSize = ... — 直接锁 content 区下限 (不含标题栏); 双保险
         // 不用 win.minSize: 它含 28px 标题栏, 设 1080×720 时 content 仍能压到 1080×692.
-        // PR-D1: .hvmDialogHost() 套在 NSHostingController root view 外层 —
-        // 作为 NewGUIRootView 的真正祖先, 让 NewGUIRootView 内部 @EnvironmentObject
-        // 能拿到 DialogPresenter.
-        let host = NSHostingController(rootView: NewGUIRootView().hvmDialogHost())
+        // 默认走业务页 MainLayoutView (sidebar + detail 两栏, docs/v4/NEW_GUI_MAIN_LAYOUT.md);
+        // HVM_GUI_SHOWCASE=1 时退回 NewGUIRootView 组件 Showcase (组件 living doc / 视觉回归).
+        // .hvmDialogHost() 套在 NSHostingController root view 外层 — 作为根 view 的真正祖先,
+        // 让内部 @EnvironmentObject 能拿到 DialogPresenter.
+        let showcase = ProcessInfo.processInfo.environment["HVM_GUI_SHOWCASE"] == "1"
+        let rootView: AnyView = showcase
+            ? AnyView(NewGUIRootView())
+            : AnyView(MainLayoutView())
+        let host = NSHostingController(rootView: rootView.hvmDialogHost())
         host.sizingOptions = .minSize
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1080, height: 720),

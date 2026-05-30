@@ -14,7 +14,7 @@
 
 | 子稿 | 主题 | 状态 |
 |---|---|---|
-| [NEW_GUI_MAIN_LAYOUT.md](NEW_GUI_MAIN_LAYOUT.md) | sidebar + detail 两栏主窗口骨架 + VM 列表 + 精简新 store + HVMControl 共享控制层 (折叠原 VM_LIST 子稿) | **实现中** 2026-05-30, M1 已合 (HVMControl + hvm-cli 改调) |
+| [NEW_GUI_MAIN_LAYOUT.md](NEW_GUI_MAIN_LAYOUT.md) | sidebar + detail 两栏主窗口骨架 + VM 列表 + 精简新 store + HVMControl 共享控制层 (折叠原 VM_LIST 子稿) | **代码已合入** 2026-05-30, M1-M6 全合 |
 | ~~`NEW_GUI_VM_LIST.md`~~ | (已折叠进 NEW_GUI_MAIN_LAYOUT.md — sidebar 即 VM 列表, 不拆两份) | 折叠 |
 | `NEW_GUI_VM_DETAIL.md` | 详情页 (overview / sharing / network / disk / 加密 等 section) |
 | `NEW_GUI_CREATE_VM.md` | 创建 VM Wizard (复用 HVMUI.WizardDialog) |

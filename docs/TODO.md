@@ -5,7 +5,7 @@
 > 跟 [docs/v1/ROADMAP.md](v1/ROADMAP.md) 不同 — ROADMAP 是历史 v2 残余清单, 已基本归档.
 > 本文件聚焦**当前进行中**的工作 + **新发现的待办**.
 >
-> **最后更新**: 2026-05-30 (业务页 #1 主骨架+VM列表 启动: M1 HVMControl 共享控制层已合 + capstone dylib bundling 修复; 剩 M2-M6. Phase D 全合 7/7; 剩 Phase L 防漂移 lint)
+> **最后更新**: 2026-05-30 (业务页 #1 主骨架+VM列表 M1-M6 全合: HVMControl 控制层 + NewGUIStore + 两栏 MainLayoutView + sidebar/detail + 启停/删除/密码 dialog, hvm-dbg gui e2e 全绿; + capstone dylib bundling 修复. Phase D 全合 7/7; 剩 Phase L 防漂移 lint)
 
 ---
 
@@ -46,11 +46,14 @@
 第一个业务页. 用户 2026-05-30 拍板: store 策略 = 精简新 store (不复用老 AppModel).
 
 - [x] **M1** 抽 HVMControl library (VMSummary + VMCatalog.list + VMControl.{start,stop,kill,status,delete}) + HostLauncher 迁入 + hvm-cli 5 命令改调 + CLI 搜索逻辑改为跟随自身位置 (dev 自动用 build/HVM.app). e2e: list/start/status/stop/kill/delete 全绿
-- [ ] **M2** NewGUIStore (@Observable + 1Hz poll + start/stop/kill/delete 转发 + lastError 冒泡)
-- [ ] **M3** MainLayoutView 两栏骨架 + toolbar + StatusBar 占位, 替换 NewGUIRootView 成默认 (Showcase 退 HVM_GUI_SHOWCASE=1)
-- [ ] **M4** SidebarView VM 列表行 (运行态圆点 + guestOS badge + 加密锁 + 选中高亮 + context menu) + probeID 全覆盖
-- [ ] **M5** DetailOverviewView (overview + 启停 + 加密未解锁兜底) + 启停接 store + 删除/密码 dialog
-- [ ] **M6** toolbar 占位 + lastError alert + e2e 走查 + 回写 v1/CLAUDE.md/README/TODO
+- [x] **M2** NewGUIStore (@Observable + 1Hz poll + diff 守卫 + start/stop/kill/delete 转发 + lastError(HVMError.userFacing) 冒泡)
+- [x] **M3** MainLayoutView 两栏骨架 + MainToolbarView + StatusBar, 替换 NewGUIRootView 成默认 (Showcase 退 HVM_GUI_SHOWCASE=1). `NewGUISidebarView` 避开老 GUI 同名
+- [x] **M4** SidebarView VM 列表行 (运行态圆点 + guestOS/加密 badge + 选中竖条 + context menu) + probeID `vmlist.row.item-<id>` 全覆盖
+- [x] **M5** DetailOverviewView (overview + 启停 + 加密 config=nil 兜底) + 启停接 store + 删除 confirm/启动密码 dialog (VMActions). 按钮动作读 store.selected 防 probe 闭包 stale
+- [x] **M6** toolbar 新建占位 alert + lastError→dialog.alert 冒泡 + hvm-dbg gui e2e 全路径走查 (render/选中/1Hz running/启停闭环/各 dialog) + 回写 CLAUDE.md/README/TODO/设计稿
+
+**M3-M5 e2e (hvm-dbg gui 自动化, 截图肉眼验)**: 渲染两栏 ✓ / 选中明文+加密 detail ✓ / 1Hz running 显示 (绿点+badge+statusbar+按钮切) ✓ / GUI 停止闭环 ✓ / GUI 启动 wiring (host boot) ✓ / 创建占位 alert ✓ / 错误→alert 桥 (busy) ✓ / 加密启动密码 dialog ✓ / 删除确认 dialog (取消未删) ✓
+**已知**: GUI 内启 VM 时若 GUI 自身是手动 `&` 后台启动 (非 `open`), 孙子 QEMU 随 shell 会话清理被 signal 9 杀 — `make run-app` 用 `open` 无此问题, 测试时用 hvm-cli 启 VM 让 GUI 轮询显示
 
 ### 关联修复 (M1 期发现)
 - [x] **QEMU dylib bundling** — qemu-build.sh 主 qemu 二进制 (qemu-system-aarch64 等) 历史只 bundle 了 swtpm 的 dylib, 主 qemu 一直引 homebrew 绝对路径 (capstone/gnutls/pixman/slirp/zstd...). brew 升级 capstone 重签后库校验崩 signal 6. 修: 加 bundle_qemu_dylibs() 复用 bundle_dylib_deps + `--relocate-dylibs` 一次性模式 (免全量重编) + Makefile BUNDLE_STAMP 加 $(wildcard $(QEMU_BIN)) 依赖. 验: qemu --version OK + 测试 VM boot 到 running. **QEMU 现真正零依赖**
