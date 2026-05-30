@@ -13,8 +13,13 @@ import SwiftUI
 import HVMGuiProbe
 
 @MainActor
-final class NewGUIAppDelegate: NSObject, NSApplicationDelegate {
+final class NewGUIAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var window: NSWindow?
+
+    // 状态栏 tray 图标 (强引用保活, nil 时 AppKit 立即回收 statusItem).
+    private var statusItem: NSStatusItem?
+    // 用户从 tray 菜单"退出 HVM"主动退出 → 放行真退出; 否则 Cmd+Q / 点 X 只隐藏到 tray.
+    private var userRequestedQuit = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = NSAppearance(named: .darkAqua)
@@ -48,7 +53,17 @@ final class NewGUIAppDelegate: NSObject, NSApplicationDelegate {
         win.contentMinSize = NSSize(width: 1080, height: 720)
         win.center()
         win.isReleasedWhenClosed = false
+        // 拦截红色 X: windowShouldClose 隐藏到 tray 而非关闭/退出.
+        win.delegate = self
         self.window = win
+
+        // 状态栏 tray 图标 — 隐藏窗口后 app 进 .accessory (Dock 图标消失), tray 是唯一恢复/退出入口.
+        installStatusItem()
+
+        // 菜单栏 — 纯 AppKit NSApplication 必须显式设 mainMenu, 否则:
+        //   1. Cmd+Q 无 terminate: 菜单项响应 → 系统 beep 且不触发 applicationShouldTerminate
+        //   2. 输入框 Cmd+C/V/X/A/Z 标准编辑快捷键也无 key equivalent → 不工作
+        installMainMenu()
 
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -63,8 +78,124 @@ final class NewGUIAppDelegate: NSObject, NSApplicationDelegate {
         ProbeServer.start()
     }
 
+    // 窗口不真关 (隐藏到 tray), 此回调实际不触发; 保守返 false 防"无窗口即退出".
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        false
+    }
+
+    // MARK: - tray 隐藏 / 退出闭环
+
+    /// Cmd+Q (以及菜单"退出 HVM" / NSApp.terminate) 统一走这里:
+    /// 仅 tray 菜单主动退出时放行真退出, 否则隐藏到 tray.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if userRequestedQuit { return .terminateNow }
+        hideToTray()
+        return .terminateCancel
+    }
+
+    /// 点 Dock 图标 / Finder 重新打开 → 恢复主窗口 (accessory 态无 Dock 图标, 兜底仍保留).
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showMainWindow()
+        return true
+    }
+
+    /// 点红色 X → 隐藏到 tray, 不真关窗口.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        hideToTray()
+        return false
+    }
+
+    /// 隐藏主窗口并切 .accessory (Dock 图标消失, 纯后台只剩 tray 图标).
+    private func hideToTray() {
+        window?.orderOut(nil)
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    /// 从 tray / Dock 恢复: 切回 .regular + 前置激活主窗口.
+    private func showMainWindow() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// 装状态栏 tray 图标 + 菜单 ("显示 HVM 主窗口" / "退出 HVM").
+    private func installStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = item.button {
+            if let img = NSImage(systemSymbolName: "shippingbox.fill",
+                                 accessibilityDescription: "HVM") {
+                img.isTemplate = true
+                button.image = img
+            } else {
+                button.title = "HVM"
+            }
+        }
+        let menu = NSMenu()
+        let show = NSMenuItem(title: "显示 HVM 主窗口",
+                              action: #selector(showWindowAction), keyEquivalent: "")
+        show.target = self
+        menu.addItem(show)
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: "退出 HVM",
+                              action: #selector(quitAction), keyEquivalent: "q")
+        quit.target = self
+        menu.addItem(quit)
+        item.menu = menu
+        self.statusItem = item
+    }
+
+    /// 装标准菜单栏. App 菜单「退出 HVM」走 terminate: → applicationShouldTerminate 拦截隐藏;
+    /// Edit 菜单提供文本框标准编辑快捷键 (无 mainMenu 时这些 key equivalent 全失效).
+    private func installMainMenu() {
+        let mainMenu = NSMenu()
+
+        // App 菜单 (第一个 submenu, 系统自动用 app 名作标题)
+        let appItem = NSMenuItem()
+        mainMenu.addItem(appItem)
+        let appMenu = NSMenu()
+        appItem.submenu = appMenu
+        appMenu.addItem(withTitle: "关于 HVM",
+                        action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+                        keyEquivalent: "")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "隐藏 HVM",
+                        action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideOthers = appMenu.addItem(withTitle: "隐藏其他",
+                                         action: #selector(NSApplication.hideOtherApplications(_:)),
+                                         keyEquivalent: "h")
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(withTitle: "显示全部",
+                        action: #selector(NSApplication.unhideAllApplications(_:)),
+                        keyEquivalent: "")
+        appMenu.addItem(.separator())
+        // 退出: terminate: → applicationShouldTerminate → hideToTray (不真退出)
+        appMenu.addItem(withTitle: "退出 HVM",
+                        action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+
+        // Edit 菜单 — 文本框 Cmd+C/V/X/A/Z 依赖此菜单的 key equivalents
+        let editItem = NSMenuItem()
+        mainMenu.addItem(editItem)
+        let editMenu = NSMenu(title: "编辑")
+        editItem.submenu = editMenu
+        editMenu.addItem(withTitle: "撤销", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = editMenu.addItem(withTitle: "重做", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "剪切", action: Selector(("cut:")), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "拷贝", action: Selector(("copy:")), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "粘贴", action: Selector(("paste:")), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "全选", action: Selector(("selectAll:")), keyEquivalent: "a")
+
+        NSApp.mainMenu = mainMenu
+    }
+
+    @objc private func showWindowAction() {
+        showMainWindow()
+    }
+
+    @objc private func quitAction() {
+        userRequestedQuit = true
+        NSApp.terminate(nil)
     }
 }
 
