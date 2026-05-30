@@ -48,14 +48,7 @@ if args.count >= 3, args[1] == "--host-mode-bundle" {
 
     HVMHostEntry.run(bundlePath: args[2], password: password, embeddedInGUI: embeddedInGUI)
 } else {
-    // GUI 模式: AppKit NSApplication runloop.
-    // 编译期开关 NEW_GUI (Makefile `GUI=new` 透传 -Xswiftc -DNEW_GUI, 当前默认开):
-    //   - NEW_GUI 开启 (默认): 走 app/Sources/HVM/GUI/** 下的 NewGUIAppLauncher
-    //   - `make GUI=old`: 走 app/Sources/HVM/UI/** 下的老 HVMAppLauncher (回退路径)
-    // 老路径整套保留, 新 GUI 在 GUI/ 目录平行开发, 互不影响
-    #if NEW_GUI
+    // GUI 模式: AppKit NSApplication runloop. 老 GUI (UI/**) 已随 QEMU-only 转向退役删除
+    // (docs/v4/QEMU_ONLY_PIVOT.md), 唯一 GUI 走 GUI/** 下的 NewGUIAppLauncher.
     NewGUIAppLauncher.run()
-    #else
-    HVMAppLauncher.run()
-    #endif
 }

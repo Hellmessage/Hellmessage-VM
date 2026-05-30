@@ -17,19 +17,10 @@ SIGN_IDENTITY := $(MACOS_CODESIGN_IDENTITY)
 endif
 endif
 
-# GUI 开关:
-#   GUI=new (默认) — 新 GUI (app/Sources/HVM/GUI/**, NewGUIAppLauncher; 重构中)
-#   GUI=old        — 老 GUI (app/Sources/HVM/UI/**, HVMAppLauncher; 整套保留作回退)
-# 默认走新 GUI: 透传 -Xswiftc -DNEW_GUI 让 main.swift 走 #if NEW_GUI 分支.
-# 切换 GUI 时 SwiftPM 会自动按条件编译 flag 变化重链接, 不需要 make clean.
-GUI ?= new
-ifeq ($(GUI),new)
+# GUI: 老 GUI (app/Sources/HVM/UI/**) 已随 QEMU-only 转向退役删除
+# (docs/v4/QEMU_ONLY_PIVOT.md). 唯一 GUI 走 app/Sources/HVM/GUI/** (NewGUIAppLauncher),
+# 恒透传 -Xswiftc -DNEW_GUI 让 GUI/** 下 #if NEW_GUI 代码参与编译. GUI=old 选项已废弃.
 SWIFT_DEFINES := -Xswiftc -DNEW_GUI
-else ifeq ($(GUI),old)
-SWIFT_DEFINES :=
-else
-$(error 未知 GUI=$(GUI), 可选: old / new)
-endif
 # QEMU 后端产物 (由 scripts/qemu-build.sh 生成, 仓库 ignore, 详见 docs/QEMU_INTEGRATION.md)
 # stage 即裁剪 + 签名 + LICENSE/MANIFEST 后的最终成品, bundle.sh 直接拷进 .app
 # 不再有 third_party/qemu/ 中间 vendor 层
@@ -66,11 +57,6 @@ help:
 	@echo "  make dev-open   — debug 模式 dev loop, 改一行 ~3-5s; 推荐日常迭代用"
 	@echo "                    注: open / dev-open 不再同步 /Applications/HVM.app, 想测 hvm-cli start 先 make install"
 	@echo "  make clean      — 清除 build/ 和 app/.build/"
-	@echo
-	@echo "GUI 切换 (任意 make 目标都可加):"
-	@echo "  GUI=new (默认) — 新 GUI (app/Sources/HVM/GUI/**, 重构中)"
-	@echo "  GUI=old        — 老 GUI (app/Sources/HVM/UI/**, 整套保留作回退)"
-	@echo "  例: make install GUI=old / make run-app GUI=old / make dev GUI=old"
 	@echo
 	@echo "QEMU 后端 (Win arm64 / 可选 Linux arm64; 详见 docs/QEMU_INTEGRATION.md):"
 	@echo "  make edk2       — 拉 EDK2 + apply Win11 patch + 编译 (~5 分钟; 仅打包者跑; Win11 ARM64 装机必需)"
@@ -170,8 +156,8 @@ xed:
 # 安装到 /Applications/ (覆盖旧版). admin 用户对 /Applications 有写权限, 不需 sudo;
 # /Applications/HVM.app 若存在则先删 (.app 是 directory, 不能直接 cp 覆盖).
 # 安装后 lsregister 刷新 LaunchServices, 让 .hvmz 关联 + Spotlight 索引立即生效.
-install: 
-	@$(MAKE) build GUI=old
+install:
+	@$(MAKE) build
 	@if [ ! -d "$(BUILD_DIR)/HVM.app" ]; then \
 		echo "✗ $(BUILD_DIR)/HVM.app 不存在; 先 make build"; exit 1; \
 	fi
@@ -191,8 +177,8 @@ install:
 # 主 GUI 进程 cmdline 第二个 token 以 .../HVM.app/Contents/MacOS/HVM 结尾 (build/ 与
 # /Applications/ 两条路径都满足); host 子进程 cmdline 带 --host-mode-bundle 后缀 (regex
 # 不匹配, 不被误杀). regex 同时杀 build/ 与 /Applications/ 的 GUI 主进程, 避免两份并存.
-run-app: 
-	@$(MAKE) build GUI=new
+run-app:
+	@$(MAKE) build
 	@OLDPID=$$(ps -axo pid,command | awk '$$2 ~ /\/HVM\.app\/Contents\/MacOS\/HVM$$/ {print $$1}' | head -1); \
 	if [ -n "$$OLDPID" ]; then \
 		echo "ℹ 重启 GUI 主进程 pid=$$OLDPID (host 子进程不动)"; \

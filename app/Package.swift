@@ -47,12 +47,10 @@ let package = Package(
         // RoutingJSON. 不循环 (HVMEncryption 不引 HVMStorage).
         .target(name: "HVMStorage", dependencies: ["HVMCore", "HVMBundle", "HVMNet", "HVMEncryption"]),
         .target(name: "HVMNet",     dependencies: ["HVMCore", "HVMBundle"]),
-        .target(name: "HVMDisplay", dependencies: ["HVMCore", "HVMBundle", "HVMUtils"]),
-        .target(
-            name: "HVMBackend",
-            dependencies: ["HVMCore", "HVMBundle", "HVMStorage", "HVMNet", "HVMDisplay"]
-        ),
-        .target(name: "HVMInstall", dependencies: ["HVMCore", "HVMBundle", "HVMStorage", "HVMBackend", "HVMUtils"]),
+        // HVMDisplay (VZ view) + HVMBackend (VZ backend) 已随 QEMU-only 转向移除
+        // (docs/v4/QEMU_ONLY_PIVOT.md). HVMInstall 保留 (Linux/Windows ISO + UtmGuestTools
+        // + VirtioWin 下载; macOS IPSW 部分已删).
+        .target(name: "HVMInstall", dependencies: ["HVMCore", "HVMBundle", "HVMStorage", "HVMUtils"]),
         .target(name: "HVMIPC",     dependencies: ["HVMCore"]),
 
         // 视图无关的 VM 控制层 — 收口"枚举 / 启停 / 删除"逻辑 (原散落在 hvm-cli
@@ -106,13 +104,13 @@ let package = Package(
         // 可执行 target
         .executableTarget(
             name: "HVM",
-            dependencies: ["HVMBackend", "HVMInstall", "HVMIPC", "HVMDisplay", "HVMStorage", "HVMQemu", "HVMDisplayQemu", "HVMUtils", "HVMEncryption", "HVMControl", "HVMGuiProbe"]
+            dependencies: ["HVMInstall", "HVMIPC", "HVMStorage", "HVMQemu", "HVMDisplayQemu", "HVMUtils", "HVMEncryption", "HVMControl", "HVMGuiProbe"]
         ),
         .executableTarget(
             name: "hvm-cli",
             dependencies: [
                 "HVMCore", "HVMBundle", "HVMStorage", "HVMNet",
-                "HVMBackend", "HVMInstall", "HVMIPC", "HVMQemu", "HVMUtils",
+                "HVMInstall", "HVMIPC", "HVMQemu", "HVMUtils",
                 "HVMEncryption", "HVMControl",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]

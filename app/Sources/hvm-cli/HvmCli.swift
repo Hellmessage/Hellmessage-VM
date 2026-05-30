@@ -12,7 +12,6 @@ struct HvmCli: AsyncParsableCommand {
         version: HVMVersion.displayString,
         subcommands: [
             CreateCommand.self,
-            InstallCommand.self,
             OsImageCommand.self,
             ListCommand.self,
             StatusCommand.self,
