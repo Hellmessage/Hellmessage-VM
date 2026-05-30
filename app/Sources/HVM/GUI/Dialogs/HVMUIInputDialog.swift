@@ -192,6 +192,7 @@ struct InputDialog: View {
                 text: binding,
                 placeholder: field.placeholder,
                 icon: field.icon,
+                autoFocus: idx == 0,   // 首个密码字段出现即聚焦 (替代 SwiftUI 自动焦点)
                 probeID: "\(probeID).field.\(idx)",
                 onSubmit: { submitIfValid() }
             )

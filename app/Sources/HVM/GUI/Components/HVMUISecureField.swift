@@ -14,6 +14,7 @@
 
 
 import SwiftUI
+import AppKit
 import HVMGuiProbe
 
 extension HVMUI {
@@ -28,6 +29,7 @@ struct SecureField: View {
     private let errorMessage: String?
     private let isLoading: Bool
     private let isDisabled: Bool
+    private let autoFocus: Bool
     private let probeID: String
     private let onSubmit: (@MainActor @Sendable () -> Void)?
 
@@ -40,6 +42,7 @@ struct SecureField: View {
          errorMessage: String? = nil,
          isLoading: Bool = false,
          disabled: Bool = false,
+         autoFocus: Bool = false,
          probeID: String,
          onSubmit: (@MainActor @Sendable () -> Void)? = nil) {
         self.label = label
@@ -51,11 +54,14 @@ struct SecureField: View {
         self.errorMessage = errorMessage
         self.isLoading = isLoading
         self.isDisabled = disabled
+        self.autoFocus = autoFocus
         self.probeID = probeID
         self.onSubmit = onSubmit
     }
 
     @FocusState private var isFocused: Bool
+    /// 密文态走 NSSecureTextField (本质禁 IME), 它的 focus 状态由这里跟踪 (FieldChrome 焦点环用)
+    @State private var secureFocused = false
     @State private var isHovered = false
     @State private var isRevealed = false   // showToggle 切换出来的明文态
 
@@ -70,7 +76,7 @@ struct SecureField: View {
             fieldBody
                 .modifier(FieldChrome(
                     size: size,
-                    isFocused: isFocused,
+                    isFocused: isFocused || secureFocused,
                     isHovered: isHovered && !isDisabled,
                     isError: errorMessage != nil,
                     isDisabled: isDisabled
@@ -106,20 +112,26 @@ struct SecureField: View {
                     .foregroundStyle(HVMTheme.color.textSecondary)
             }
 
-            // 明文 / 密文动态切换. focus 状态由 @FocusState 共享, 切换后 focus 不丢
-            Group {
-                if isRevealed {
-                    SwiftUI.TextField(placeholder, text: $text)
-                } else {
-                    SwiftUI.SecureField(placeholder, text: $text)
-                }
+            // 明文态: SwiftUI TextField (showToggle reveal, 罕见); 密文态: NSSecureTextField
+            // (本质禁 IME — 密码不该走中文/日文输入法候选).
+            if isRevealed {
+                SwiftUI.TextField(placeholder, text: $text)
+                    .textFieldStyle(.plain)
+                    .font(size.font)
+                    .foregroundStyle(HVMTheme.color.textPrimary)
+                    .tint(HVMTheme.color.accent)
+                    .focused($isFocused)
+                    .onSubmit { onSubmit?() }
+            } else {
+                MacSecureField(text: $text,
+                               isFocused: $secureFocused,
+                               placeholder: placeholder,
+                               font: size.nsFont,
+                               textColor: NSColor(HVMTheme.color.textPrimary),
+                               autoFocus: autoFocus && !isDisabled,
+                               onSubmit: onSubmit)
+                    .frame(height: size.height - 2)
             }
-            .textFieldStyle(.plain)
-            .font(size.font)
-            .foregroundStyle(HVMTheme.color.textPrimary)
-            .tint(HVMTheme.color.accent)
-            .focused($isFocused)
-            .onSubmit { onSubmit?() }
 
             if showToggle {
                 SwiftUI.Button {
@@ -148,6 +160,80 @@ struct SecureField: View {
 }
 
 }  // extension HVMUI 结束
+
+/// 真 NSSecureTextField 包装 — SwiftUI SecureField 实测在 macOS 仍弹 IME 候选 (密码框不该走
+/// 中文/日文输入法). NSSecureTextField 本质禁 IME (安全文本输入强制 ASCII/Roman), 是可靠修法.
+private struct MacSecureField: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var isFocused: Bool
+    let placeholder: String
+    let font: NSFont
+    let textColor: NSColor
+    let autoFocus: Bool
+    let onSubmit: (@MainActor @Sendable () -> Void)?
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSSecureTextField {
+        let f = NSSecureTextField()
+        f.isBordered = false
+        f.drawsBackground = false
+        f.focusRingType = .none          // 焦点环走外层 FieldChrome
+        f.placeholderString = placeholder
+        f.font = font
+        f.textColor = textColor
+        f.delegate = context.coordinator
+        f.lineBreakMode = .byClipping
+        f.usesSingleLineMode = true
+        f.cell?.wraps = false
+        f.cell?.isScrollable = true
+        f.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        if autoFocus {
+            // 密码 dialog 首字段: 出现即聚焦 (NSSecureTextField 聚焦时 macOS 自动禁 IME)
+            DispatchQueue.main.async { [weak f] in f?.window?.makeFirstResponder(f) }
+        }
+        return f
+    }
+
+    func updateNSView(_ nsView: NSSecureTextField, context: Context) {
+        if nsView.stringValue != text { nsView.stringValue = text }
+        nsView.font = font
+        nsView.textColor = textColor
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: MacSecureField
+        init(_ p: MacSecureField) { parent = p }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let f = obj.object as? NSTextField else { return }
+            parent.text = f.stringValue
+        }
+        func controlTextDidBeginEditing(_ obj: Notification) { parent.isFocused = true }
+        func controlTextDidEndEditing(_ obj: Notification) { parent.isFocused = false }
+
+        func control(_ control: NSControl, textView: NSTextView,
+                     doCommandBy selector: Selector) -> Bool {
+            if selector == #selector(NSResponder.insertNewline(_:)) {
+                parent.onSubmit?()
+                return true
+            }
+            return false
+        }
+    }
+}
+
+private extension HVMUI.FieldSize {
+    /// NSSecureTextField 用的 NSFont (跟 SwiftUI font 档位对齐: sm=13 / md=14 medium / lg=18 semibold)
+    var nsFont: NSFont {
+        switch self {
+        case .sm: return .systemFont(ofSize: 13)
+        case .md: return .systemFont(ofSize: 14, weight: .medium)
+        case .lg: return .systemFont(ofSize: 18, weight: .semibold)
+        }
+    }
+}
 
 private struct ProbeSecureFieldModifier: ViewModifier {
     let probeID: String

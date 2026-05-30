@@ -84,12 +84,12 @@ struct NewGUIEncryptionDialog: View {
             // 字段 (按 mode)
             switch mode {
             case .encrypt:
-                secure("设置密码", $pwOld, "至少 4 字符", id: "password")
+                secure("设置密码", $pwOld, "至少 4 字符", id: "password", autoFocus: true)
                 secure("确认密码", $pwNew, "再次输入", id: "confirm", onEnter: true)
             case .decrypt:
-                secure("密码", $pwOld, "请输入密码", id: "password", onEnter: true)
+                secure("密码", $pwOld, "请输入密码", id: "password", onEnter: true, autoFocus: true)
             case .rekey:
-                secure("原密码", $pwOld, "当前密码", id: "old")
+                secure("原密码", $pwOld, "当前密码", id: "old", autoFocus: true)
                 secure("新密码", $pwNew, "至少 4 字符", id: "new")
                 secure("确认新密码", $pwConfirm, "再次输入新密码", id: "confirm", onEnter: true)
             }
@@ -137,8 +137,9 @@ struct NewGUIEncryptionDialog: View {
     }
 
     private func secure(_ label: String, _ text: Binding<String>, _ placeholder: String,
-                        id: String, onEnter: Bool = false) -> some View {
+                        id: String, onEnter: Bool = false, autoFocus: Bool = false) -> some View {
         HVMUI.SecureField(label, text: text, placeholder: placeholder,
+                          autoFocus: autoFocus,
                           probeID: "\(probeBase).field.\(id)",
                           onSubmit: onEnter ? { if canSubmit { submit() } } : nil)
     }
