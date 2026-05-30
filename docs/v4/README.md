@@ -9,6 +9,7 @@
 | 文档 | 主题 | 状态 |
 |---|---|---|
 | [NEW_GUI.md](NEW_GUI.md) | 新 GUI 基础设施 (Linear 风 Theme token + 自绘 Dialog 框架 + 基础组件库 + HVMUI namespace + 组件设计规范 R1-R9) | **实现中** 2026-05-29, PR-T1+T2 / C1+C1b / C2 / C3 / C4 已合, 剩 C5-C8 + D1-D7 + L1 |
+| [QEMU_ONLY_PIVOT.md](QEMU_ONLY_PIVOT.md) | **QEMU-only 转向** — 剥离 VZ (entitlement 未批 + QEMU 已满足) + 统一显示通路 (截图/内嵌同源 HDP IOSurface) + 内嵌优化. 项目级战略转向 | **设计稿** 2026-05-30 |
 
 后续业务页子稿登记位置 (每业务页独立提案, 引 NEW_GUI.md 作基础设施前置依赖):
 
@@ -21,7 +22,7 @@
 | [NEW_GUI_ENCRYPTION.md](NEW_GUI_ENCRYPTION.md) | 加密 / 解密 / rekey dialog (三态自定义 dialog + NewGUIStore async) | **代码已合入** 2026-05-30, E1-E3 全合 |
 | `NEW_GUI_FILE_TRANSFER.md` | 文件传输 dialog |
 | ~~`NEW_GUI_NETWORK.md`~~ | (核心已覆盖: NIC 字段编辑走 VM_DETAIL **V5** `DetailNetworkSection` + vmnet daemon 安装/重启/卸载走 **V6** `DetailVmnetDaemonView`. 剩 per-iface live 状态 / guest IP 显示 / daemon 健康探测细节 → TODO 低优, 不单拆业务页) | 覆盖 (V5+V6) |
-| `NEW_GUI_FRAMEBUFFER.md` | VM 窗口 framebuffer 嵌入 (HDP 接入) |
+| [NEW_GUI_FRAMEBUFFER.md](NEW_GUI_FRAMEBUFFER.md) | VM 画面 framebuffer 嵌入 (QEMU HDP; VZ 推迟) | **实现中** 2026-05-30, F1-F4 |
 
 ## 跟 v3 / v1 / CHANGELOG 的关系
 
