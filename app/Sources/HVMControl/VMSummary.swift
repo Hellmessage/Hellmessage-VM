@@ -1,16 +1,12 @@
 // VMSummary.swift
-// 视图无关的 VM 概览值类型 — VMCatalog 枚举的产物.
-//
-// 收口 hvm-cli ListCommand.Row / 老 AppModel.VMListItem 两份各写各的列表项.
-// CLI / 新 GUI store 共用同一个 summary, 不再各自解读 BundleIO / RoutingJSON.
-//
-// 纯 value type (Sendable + Equatable), 不引 SwiftUI / AppKit; 加密 VM 解锁前
-// config 为 nil, 字段从 RoutingMetadata 兜底 (displayName / guestOS / id / scheme).
+// 视图无关的 VM 概览值类型 (VMCatalog 产物, CLI + GUI store 共用).
+// 纯 value type (Sendable + Equatable), 不引 SwiftUI / AppKit.
+// 加密 VM 解锁前 config 为 nil, 字段从 RoutingMetadata 兜底.
 
 import Foundation
 import HVMBundle
 
-/// VM 运行态 (本稿二态; pause/suspend 推后跟 framebuffer / 详情页一起接).
+/// VM 运行态 (二态; pause/suspend 推后).
 public enum RunState: String, Sendable, Equatable {
     case stopped
     case running
@@ -30,16 +26,14 @@ public struct VMSummary: Identifiable, Sendable, Equatable {
     /// 明文 VM 持完整 config; 加密 VM 解锁前 nil. UI 详情区必须 `if let`.
     public let config: VMConfig?
 
-    // 概览展示字段 (config 缺失时 nil → UI 显 "—"). 不含磁盘实际占用 (DiskFactory.actualBytes
-    // 较慢, 列表不算; 详情页按需单独算).
+    // 概览展示字段 (config 缺失时 nil → UI 显 "—"). 不含磁盘实际占用 (较慢, 详情页按需单独算).
     public let cpuCount: Int?
     public let memoryMiB: UInt64?
     public let mainDiskLogicalGiB: UInt64?
 
     public var isEncrypted: Bool { encryptionScheme != nil }
 
-    /// 加密 VM 解锁后: 用解密出的明文 config 覆盖 (config/cpu/mem/disk 填上), 但保留
-    /// encryptionScheme (仍是加密 VM, 锁图标/badge 不变). 给 NewGUIStore overlay 用.
+    /// 加密 VM 解锁后用明文 config 覆盖 (config/cpu/mem/disk 填上), 保留 encryptionScheme (锁图标不变).
     public func withUnlockedConfig(_ cfg: VMConfig) -> VMSummary {
         VMSummary(
             id: id,

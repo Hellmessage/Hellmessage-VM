@@ -1,30 +1,10 @@
-// HVMUIToggle.swift — 新 GUI 滑块开关 (PR-C3)
+// HVMUIToggle.swift — 新 GUI 滑块开关.
 //
-// 用法:
-//   HVMUI.Toggle("自动启动 VM", isOn: $autoStart)
-//   HVMUI.Toggle("启用网络", isOn: $networkOn, hint: "需 vmnet daemon 在跑",
-//                probeID: "settings.toggle.network")
-//   HVMUI.Toggle(isOn: $isCompact, size: .sm)   // 仅滑块 inline
+// 3 size: .sm 28×16 / .md 36×20 (default) / .lg 44×24. 可带 label / hint.
+// 视觉: off bgOverlay 圆点左 / on accent 圆点右, 切换 spring, focus ring.
+// 用法: HVMUI.Toggle("自动启动 VM", isOn: $autoStart, probeID: "...")
 //
-// size:
-//   .sm — 28×16 (toolbar 内联), .md — 36×20 (default), .lg — 44×24 (设置页)
-//
-// 视觉:
-//   - off: bg = bgRaised, 圆点 left
-//   - on : bg = accent (青), 圆点 right
-//   - 切换: 圆点位置 + bg 色 spring (HVMTheme.motion.pressSpring)
-//   - focus: 容器外 2px borderFocus ring (键盘 Tab 才显; 鼠标 click 不出)
-//   - hover: layer alpha 0 → 0.04
-//   - disabled: opacity 0.4 + 跳过 hover / focus / probe
-//
-// 键盘 + a11y:
-//   - SwiftUI.Button wrap → 自带 Space / Return 触发
-//   - accessibilityLabel = label
-//   - accessibilityValue = "已开启" / "已关闭"
-//   - accessibilityAddTraits(.isToggle)
-//
-// probe: probeID 非 nil 时挂 .hvmProbe(action: .toggle(getter, setter)).
-// hvm-dbg gui click --identifier X 走 setter 取反; gui read 取 getter.
+// probe: 挂 .toggle(getter, setter), hvm-dbg gui click 走 setter 取反; gui read 取 getter.
 
 
 import SwiftUI
@@ -131,10 +111,7 @@ struct Toggle: View {
         }
     }
 
-    /// 容器 bg.
-    /// off 用 bgOverlay (#18191B) 而不是 bgRaised — sectionCard 已经是 bgRaised,
-    /// 跟 sectionCard 同色容器会跟卡片 bg 融合, 仅靠白圆点能看出形, 整体轮廓不清晰.
-    /// bgOverlay 比 bgRaised 亮一档, 在 sectionCard 内嵌入时轮廓明显.
+    /// 容器 bg. off 用 bgOverlay (比 bgRaised 亮一档) 让 sectionCard 内嵌入时轮廓清晰.
     private var sliderBg: Color {
         if isDisabled { return HVMTheme.color.bgDisabled }
         return isOn ? HVMTheme.color.accent : HVMTheme.color.bgOverlay
@@ -152,7 +129,6 @@ struct Toggle: View {
 
     private var slider: some View {
         ZStack(alignment: isOn ? .trailing : .leading) {
-            // 容器
             RoundedRectangle(cornerRadius: size.height / 2)
                 .fill(sliderBg)
                 .frame(width: size.width, height: size.height)
@@ -163,9 +139,7 @@ struct Toggle: View {
                         .opacity(isHovered && !isOn ? 1 : 0)
                 )
                 .overlay(
-                    // 边框: off 用 borderEmphasis (强一档, 让 off 容器在 sectionCard
-                    // 内有清晰轮廓); on 态 accent 已经够亮跳过描边; disabled 保留弱
-                    // borderDefault 让"灰化"感成立
+                    // 边框: off 用 borderEmphasis 让 sectionCard 内轮廓清晰; on accent 够亮跳过; disabled 弱 borderDefault
                     RoundedRectangle(cornerRadius: size.height / 2)
                         .stroke(borderColor, lineWidth: HVMTheme.border.hairline)
                 )
@@ -193,9 +167,7 @@ struct Toggle: View {
 
 }  // extension HVMUI 结束
 
-/// Probe 集成 modifier — Toggle 用 .toggle(getter, setter).
-/// hvm-dbg gui click --identifier X 走 setter(!isOn); gui read --identifier X
-/// 走 getter 返 "true"/"false".
+/// Probe 集成 modifier — Toggle 用 .toggle(getter, setter), gui click 取反 / gui read 取值.
 private struct ProbeToggleModifier: ViewModifier {
     let probeID: String
     let label: String

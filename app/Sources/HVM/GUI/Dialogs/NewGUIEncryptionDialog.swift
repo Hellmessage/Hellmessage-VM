@@ -1,12 +1,11 @@
-// NewGUIEncryptionDialog.swift — 新 GUI 整 VM 加密/解密/改密 三态 dialog (业务页 #3, E2).
+// NewGUIEncryptionDialog.swift — 新 GUI 整 VM 加密/解密/改密 三态 dialog.
 //
-// 一个参数化 dialog (mode: encrypt/decrypt/rekey) 共享 card/header/running/done chrome, 只 form
-// 字段 + store 调用 + 文案按 mode 分. form → running → done 三态:
-//   - running 态 X 不显 (closeAction=nil 语义, CLAUDE.md X-only-close + 加密事务不可中断)
+// 一个参数化 dialog (mode: encrypt/decrypt/rekey) 共享 chrome, form 字段 + store 调用 + 文案按 mode 分.
+// form → running → done 三态:
+//   - running 态 X 不显 (加密事务不可中断, X-only-close)
 //   - 失败回 form + 内联 error (store 不设全局 lastError, 避免双弹)
 //   - Win guest 加密/改密重置 TPM → form + done 红字预警 (BitLocker recovery key 丢失)
-// store 显式传入 (不走 @Environment): .hvmDialogHost() 在 .environment(store) 外层, dialog overlay
-// 拿不到 store 环境. @Observable 仍按 body 内访问 store.encProgress 建立 observation.
+// store 显式传入 (不走 @Environment): dialog overlay 在 .environment(store) 外层拿不到 store 环境.
 //
 // 入口: DetailEncryptionSection 通过 dialog.present { handle in NewGUIEncryptionDialog(...) }.
 

@@ -1,6 +1,5 @@
 // HVMGuiProbe/ViewRegistry.swift
 // gui.list / gui.click / gui.type 走 ProbeRegistry 自家 closure 注册表.
-// HDP-GUI 协议 PR-G2 (重构).
 
 import AppKit
 import Foundation

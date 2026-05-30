@@ -1,16 +1,13 @@
 // HVMBundle/BundleLock.swift
-// 对 bundle/.lock 文件加 fcntl flock(LOCK_EX|LOCK_NB)
-// 语义: bundle 互斥锁 (flock)
+// bundle/.lock 文件 flock(LOCK_EX|LOCK_NB) 互斥锁 — 保证一 bundle 单进程打开.
 //
-// 跨主机限制: flock(2) 只在本机 inode 上互斥. bundle 若放在 NFS / SMB 共享卷上,
-// 两台主机可同时拿到锁, 触发 docs 里"一 bundle 同时只能被一个进程打开"的硬约束失效.
-// 我们在锁初始化时 statfs 探测, 非本地卷给一次 warning (不强禁), 让用户自担风险.
+// flock(2) 只在本机 inode 上互斥: bundle 放 NFS/SMB 共享卷时两台主机可同时拿锁,
+// 破坏单进程约束. 初始化时 statfs 探测, 非本地卷给一次 warning (不强禁).
 
 import Foundation
 import HVMCore
 
-/// `@unchecked Sendable`: 内部所有可变状态 (released) 都由 `releaseLock: NSLock` 串行化,
-/// 其它字段 (fd / bundleURL) 在 init 后只读. release() 100 路并发已有覆盖测试 (BundleLockTests).
+/// `@unchecked Sendable`: 可变状态 (released) 由 `releaseLock: NSLock` 串行化, 其它字段 init 后只读.
 public final class BundleLock: @unchecked Sendable {
     public enum Mode: String, Sendable {
         case runtime
@@ -29,8 +26,7 @@ public final class BundleLock: @unchecked Sendable {
     private let fd: Int32
     private let bundleURL: URL
     private var released = false
-    /// release() 线程安全保护. deinit 与显式 release 可能并发(Task 持有 + ARC 释放),
-    /// 不加锁会让 close(fd) 跑两次 — macOS close() 行为非幂等,可能 close 别的 fd.
+    /// 保护 release(): deinit 与显式 release 可能并发, 不加锁会让 close(fd) 跑两次 (非幂等, 可能误 close 别的 fd).
     private let releaseLock = NSLock()
 
     private static let log = HVMLog.logger("bundle.lock")
@@ -41,7 +37,7 @@ public final class BundleLock: @unchecked Sendable {
         self.bundleURL = bundleURL
         let lockURL = BundleLayout.lockURL(bundleURL)
 
-        // 跨主机互斥检查: bundle 落在非 apfs/hfs 卷 (NFS/SMB/exFAT/...) 上 flock 不可靠
+        // 非 apfs/hfs 卷上 flock 跨主机不可靠
         Self.warnIfNonLocalVolume(at: bundleURL)
 
         let fd = open(lockURL.path, O_RDWR | O_CREAT, 0o644)
@@ -131,13 +127,11 @@ public final class BundleLock: @unchecked Sendable {
 
     // MARK: - 卷类型探测
 
-    /// 进程级 dedup: 同一 bundleURL 只 warn 一次, 避免每次抢锁刷屏.
-    /// nonisolated(unsafe) + NSLock 手动保护 — Swift 6 不让 mutable static 默认裸跑.
+    /// 同一 bundleURL 只 warn 一次, 避免每次抢锁刷屏 (NSLock 手动保护 mutable static).
     nonisolated(unsafe) private static var warnedPaths: Set<String> = []
     private static let warnedLock = NSLock()
 
-    /// statfs 探测 bundle 所在卷的文件系统类型, 非本地 (apfs/hfs) 时 warning.
-    /// 不强禁 — 用户可能有合理理由 (例如 bundle 实际在挂载点下但不会跨主机争抢).
+    /// statfs 探测卷类型, 非本地 (apfs/hfs) 时 warning (不强禁).
     private static func warnIfNonLocalVolume(at bundleURL: URL) {
         var fs = statfs()
         guard statfs(bundleURL.path, &fs) == 0 else { return }
@@ -148,7 +142,7 @@ public final class BundleLock: @unchecked Sendable {
             return String(cString: cstr)
         }
 
-        // apfs / hfs / hfs+ 都是本地; 其他 (nfs, smbfs, exfat, msdos 等) 跨主机不可靠
+        // apfs/hfs 本地; nfs/smbfs/exfat/msdos 等跨主机不可靠
         let localTypes: Set<String> = ["apfs", "hfs"]
         guard !localTypes.contains(typeName.lowercased()) else { return }
 

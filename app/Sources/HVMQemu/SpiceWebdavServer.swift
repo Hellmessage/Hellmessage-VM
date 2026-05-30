@@ -22,11 +22,10 @@
 //   HTTP 跨多 frame 时同 client_id 关联, payload 按字节拼接还原 HTTP 流.
 //   响应同理: 大响应分多个 frame, 各 frame size <= 65535.
 //
-// 安全:
-//   1. 路径 escape: 所有 guest 路径必须落在 roots[].url 子树内, realpath + hasPrefix 双校验,
-//      symlink follow 后越界一律 403
+// 安全 (硬约束):
+//   1. 路径 escape: guest 路径必须落在 roots[].url 子树内, realpath + hasPrefix 双校验, 越界 403
 //   2. read-only: spec.readOnly=true 时 PUT/DELETE/MKCOL/MOVE/COPY 一律 403
-//   3. name 字符集: SharedFolderSpec.sanitizeName 已限制 [a-zA-Z0-9_-], 不会出 URL 注入
+//   3. name 字符集: SharedFolderSpec.sanitizeName 已限制 [a-zA-Z0-9_-]
 
 import Foundation
 import Darwin
@@ -54,8 +53,8 @@ public final class SpiceWebdavServer: @unchecked Sendable {
     private let roots: [Root]
     /// roots 索引, 加速 PROPFIND root 列出 + 按 name 查找
     private let rootsByName: [String: Root]
-    /// listen=true: HVM 作 server bind+listen+accept; 默认 false: HVM 作 client connect 现有 socket.
-    /// 生产路径 (QEMU chardev server=on) 走 false; hvm-dbg webdav-serve --listen 走 true 做端到端测.
+    /// listen=true: HVM 作 server bind+listen+accept (hvm-dbg webdav-serve 端到端测);
+    /// false (默认, 生产): HVM 作 client connect QEMU chardev server.
     private let listenMode: Bool
 
     private let writeQueue = DispatchQueue(label: "hvm.webdav.write", qos: .userInitiated)
@@ -102,15 +101,14 @@ public final class SpiceWebdavServer: @unchecked Sendable {
 
     // MARK: - 内部: socket 生命周期
 
-    /// 在 writeQueue 上跑. 跟 VdagentClient.doConnect 同款 retry 模式: 第一次失败不立即重试,
-    /// 等 read loop 出错 / 下次 ensureConnectedLocked 再 lazy 重连.
+    /// 在 writeQueue 上跑. 第一次失败不立即重试, 等下次 lazy 重连.
     private func doConnect() {
         if sockFD >= 0 { return }
         if listenMode {
             doListen()
             return
         }
-        // client 模式: 等 socket 文件出现 (QEMU 启动到 chardev listen 之间有窗口). 最多等 30s, 100ms 一探.
+        // client 模式: 等 socket 文件出现 (QEMU 启动到 chardev listen 间有窗口), 最多 30s.
         for _ in 0..<300 {
             if FileManager.default.fileExists(atPath: socketPath) { break }
             Thread.sleep(forTimeInterval: 0.1)
@@ -154,8 +152,8 @@ public final class SpiceWebdavServer: @unchecked Sendable {
         t.start()
     }
 
-    /// listen 模式: bind + listen + accept, 同样把 accept 出的 fd 赋 sockFD 给 read loop 用.
-    /// 只接受一个 client (跟 client 模式一致, 简化生命周期). client 断开 → 重新 accept.
+    /// listen 模式: bind + listen + accept, accept 出的 fd 赋 sockFD 给 read loop.
+    /// 只接受一个 client (简化生命周期); client 断开 → 重新 accept.
     private func doListen() {
         // 删 stale socket
         unlink(socketPath)
@@ -673,19 +671,15 @@ public struct WebDavHandler {
 
     // MARK: 动词实现
 
-    /// PROPPATCH 返 207 Multi-Status (RFC 4918 §9.2). Win shell IFileOperation 看到
-    /// 裸 200 会判 "事务没真 commit", PUT 完文件后还会发 DELETE 回滚 (亲测).
-    /// 解析 request body 拿用户想设的 Win32 prop 列表 (Win32CreationTime / FileAttributes
-    /// 等), 每条都返 200 OK (假设成功; host fs 实际没存这些 Win 专属时间戳, 但 Win 不验证).
+    /// PROPPATCH 返 207 Multi-Status (RFC 4918 §9.2). Win shell IFileOperation 看到裸 200 会判
+    /// "事务没真 commit", PUT 完还发 DELETE 回滚. 解析 body 的 Win32 prop, 每条返 200 OK
+    /// (host fs 没真存这些 Win 时间戳, 但 Win 不验证).
     private func handleProppatch(req: HTTPRequest, path: String) -> HTTPResponse {
-        // 简单解析 set 块里出现的所有 <D:xxx/> tag, 逐条 echo 回 prop status.
-        // 没用 XML parser, 走 regex 抠 <prop> ... </prop> 内的 tag 名 (Win 发的是标准格式).
+        // 不用 XML parser, 走字符串抠 <prop> 内的 tag 名逐条 echo (Win 发的是标准格式).
         let bodyStr = String(data: req.body, encoding: .utf8) ?? ""
-        // 抠 <D:set><D:prop>...</D:prop></D:set> 内所有 <D:tag/> / <D:tag>...</D:tag>
-        // 简化: 拉所有看似 prop 的 tag 名 (排除元素本身: prop / set / remove / propertyupdate)
         var propTags: [String] = []
         let skipTags: Set<String> = ["propertyupdate", "set", "prop", "remove"]
-        // 极简正则: 匹配 <D:name> 或 <D:name/> (D 前缀可选, 直接抠 :后字母数字)
+        // 匹配 <D:name> 或 <D:name/> (D 前缀可选)
         var idx = bodyStr.startIndex
         while idx < bodyStr.endIndex,
               let lt = bodyStr.range(of: "<", range: idx..<bodyStr.endIndex)
@@ -742,16 +736,11 @@ public struct WebDavHandler {
         return HTTPResponse.multiStatus(xml: xml)
     }
 
-    /// 假 LOCK 实现: 直接返 200 + 一个伪 lock token. **不**维护真实锁状态.
-    /// 这是 Win IFileOperation (Explorer 拖放 / Copy-Item / Set-ItemProperty) 必须的:
-    /// 它会发 LOCK 申请独占锁, 若返 501 它把整个 file copy 事务当失败, PUT 完文件
-    /// 立刻 DELETE 回滚, 然后报 "File Too Large for destination" 误导性错误.
-    /// 单用户单机 webdav 场景没真的并发竞争, 假锁完全够用. (UTM / chezdav 同款思路.)
+    /// 假 LOCK: 返 200 + 伪 lock token, **不**维护真实锁状态. Win IFileOperation 会发 LOCK 申请
+    /// 独占锁, 返 501 它把整个 copy 事务当失败回滚. 单用户单机无并发竞争, 假锁够用 (UTM/chezdav 同款).
     private func handleLock(req: HTTPRequest, path: String) -> HTTPResponse {
-        // 生成伪 opaquelocktoken (RFC 4918 §6.4): opaquelocktoken:<uuid>
+        // 伪 opaquelocktoken (RFC 4918 §6.4). client 只看 Lock-Token header + status code.
         let token = "opaquelocktoken:\(UUID().uuidString.lowercased())"
-        // 返 lockdiscovery XML body. 大部分 client (尤其 Win shell) 只看 Lock-Token header
-        // 跟 status code, body 内容只要 valid xml + 含 locktoken href 就 OK.
         let lockroot = xmlEscape(req.path)
         let body = """
         <?xml version="1.0" encoding="utf-8"?>
@@ -773,7 +762,7 @@ public struct WebDavHandler {
         var r = HTTPResponse(status: 200)
         r.headers.append(("Content-Type", "application/xml; charset=utf-8"))
         r.headers.append(("Content-Length", "\(data.count)"))
-        // RFC 4918 §10.5: Lock-Token header MUST 出现在 LOCK 响应里; <> 是 Coded-URL 语法
+        // RFC 4918 §10.5: Lock-Token header MUST 出现在 LOCK 响应里 (<> Coded-URL 语法)
         r.headers.append(("Lock-Token", "<\(token)>"))
         r.body = data
         return r
@@ -790,7 +779,7 @@ public struct WebDavHandler {
 
     private func handlePropfind(req: HTTPRequest, path: String) -> HTTPResponse {
         let depth = req.header("depth") ?? "1"
-        // depth=infinity 拒 (防递归列大目录把 server 卡死)
+        // depth=infinity 拒 (防递归列大目录卡死 server)
         if depth == "infinity" {
             return HTTPResponse.plain(status: 403, text: "Depth: infinity not allowed")
         }
@@ -831,10 +820,9 @@ public struct WebDavHandler {
     }
 
     private func propfindRoots(depth1: Bool) -> HTTPResponse {
-        // Win WebDAV mini-redirector 挂载时第一查 root /, 没 quota 会按 "free=0" 直接拒所有 PUT
-        // (报 "File Too Large for destination file system" 即便文件只有几 KB). 必须给 root
-        // 自身 + 每个子 root 都挂 quota. 用 roots 中第一个的卷作 root 自身的 quota 来源
-        // (root / 是虚拟集合, 没对应 host 路径; 取任意 root 的 fs 给 Win 知道总量).
+        // Win WebDAV mini-redirector 挂载时查 root /, 没 quota 会按 free=0 拒所有 PUT
+        // ("File Too Large for destination"). 必须给 root + 每个子 root 都挂 quota.
+        // root / 是虚拟集合无对应 host 路径, 取第一个 root 的卷作 quota 来源.
         let rootQuota: (Int64, Int64)
         if let first = roots.first {
             rootQuota = Self.quotaForFilesystem(at: first.url)
@@ -871,9 +859,7 @@ public struct WebDavHandler {
         s += "<D:displayname>\(xmlEscape(displayName))</D:displayname>"
         if isDir {
             s += "<D:resourcetype><D:collection/></D:resourcetype>"
-            // quota 信息: 让 Win WebDAV 客户端别按 quota=0 拒上传 ("File Too Large").
-            // 走 host fs 实际 free space; 拿不到就 fallback 1 TiB 兜底.
-            // RFC 4331: quota-available-bytes / quota-used-bytes 是 directory-level prop.
+            // quota (RFC 4331 directory-level prop): 防 Win 按 quota=0 拒上传. 走 host fs free space.
             let (avail, used) = Self.quotaForFilesystem(at: url)
             s += "<D:quota-available-bytes>\(avail)</D:quota-available-bytes>"
             s += "<D:quota-used-bytes>\(used)</D:quota-used-bytes>"
@@ -893,9 +879,8 @@ public struct WebDavHandler {
         return s
     }
 
-    /// 读 url 所在卷的 free / total bytes. 走 URLResourceValues 的 volumeAvailableCapacityForImportantUsage
-    /// (macOS 优先重要数据可用容量, 比 systemFreeSize 更接近"真实可写量").
-    /// 失败兜底 1 TiB available + 0 used (Win 客户端不会再按 quota=0 拒上传).
+    /// 读 url 所在卷的 free / total bytes (用 volumeAvailableCapacityForImportantUsage, 比
+    /// systemFreeSize 更接近真实可写量). 失败兜底 1 TiB available + 0 used.
     private static func quotaForFilesystem(at url: URL) -> (avail: Int64, used: Int64) {
         let fallbackAvail: Int64 = 1 << 40  // 1 TiB
         let keys: Set<URLResourceKey> = [
@@ -944,7 +929,7 @@ public struct WebDavHandler {
             return HTTPResponse.plain(status: 404, text: "no such root")
         }
         if root.readOnly { return HTTPResponse.plain(status: 403, text: "read-only") }
-        // 计算 dest URL (不能用 toHostURL — 目标可能不存在, toHostURL realpath 会 fail)
+        // dest 不能走 toHostURL (目标可能不存在, realpath 会 fail)
         guard let dest = composeDest(root: root, sub: rp.sub) else {
             return HTTPResponse.plain(status: 403, text: "path escape")
         }

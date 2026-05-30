@@ -1,18 +1,11 @@
 // HVMQemu/WindowsUnattend.swift
-// 生成 AutoUnattend.xml + 用 macOS hdiutil makehybrid 打成 ISO9660+UDF 混合 ISO,
-// 启动时作为第二个 cdrom 给 Windows Setup 自动读. 端口自 hell-vm 同名实现.
+// 生成 AutoUnattend.xml + 用 hdiutil makehybrid 打成 ISO9660+UDF 混合 ISO, 作 cdrom 给 Win Setup 自动读.
 //
 // 用途:
-//   - bypassInstallChecks: windowsPE pass 跑 reg add LabConfig\Bypass*Check=1
-//     让 Win11 Setup 跳过 TPM/SB/RAM/CPU/Storage 检查
-//   - autoInstallVirtioWin: oobeSystem pass 的 FirstLogonCommands 在首次登录时
-//     从所有盘符扫 NetKVM 目录, 找到 → certutil + pnputil /add-driver /subdirs /install,
-//     ARM64 Windows 自动装 NetKVM/viostor/viogpudo/qemu-ga 驱动.
+//   - bypassInstallChecks: windowsPE pass reg add LabConfig\Bypass*Check=1 跳硬件检查
+//   - autoInstallVirtioWin: oobeSystem FirstLogonCommands 首登扫盘符 certutil + pnputil 装 virtio 驱动
 //
-// 设计:
-//   - 纯命名空间, 无状态, 不依赖 backend 进程
-//   - 幂等: XML 内容未变则复用现有 ISO, 不重打
-//   - hdiutil makehybrid 是 macOS 自带 (/usr/bin/hdiutil), 零外部依赖
+// 纯命名空间无状态; 幂等 (XML 未变复用现有 ISO); hdiutil 是 macOS 自带零外部依赖.
 
 import Foundation
 import HVMBundle
@@ -30,12 +23,9 @@ public enum WindowsUnattend {
     ///   - bundle: VM bundle 根目录 (.hvmz)
     ///   - bypassInstallChecks: 加 windowsPE pass reg add LabConfig\Bypass*Check
     ///   - autoInstallVirtioWin: 加 oobeSystem pass FirstLogonCommands pnputil 装驱动
-    ///   - autoInstallSpiceTools: 加 oobeSystem pass FirstLogonCommands 扫所有盘符跑
-    ///     utm-guest-tools-*.exe /S 静默装 (NSIS installer). 依赖 QemuArgsBuilder 把
-    ///     utm-guest-tools.iso 当第三 cdrom 挂给 guest 看到; 缺 ISO 时 cmd 找不到 .exe
-    ///     就 noop 跳过, 不阻塞 OOBE 流程. 注意: utm-guest-tools.iso **不**拷进 unattend
-    ///     ISO (120MB 太大, 改成 cdrom 直接挂)
-    /// - Returns: unattend ISO 的 URL (可能是新写也可能复用)
+    ///   - autoInstallSpiceTools: oobeSystem FirstLogonCommands 扫盘符跑 utm-guest-tools-*.exe /S
+    ///     静默装. 依赖 QemuArgsBuilder 把 utm-guest-tools.iso 当 cdrom 挂; 缺 ISO 时 cmd noop 不阻塞.
+    /// - Returns: unattend ISO 的 URL
     public static func ensureISO(
         bundle: URL,
         bypassInstallChecks: Bool,
@@ -49,10 +39,7 @@ public enum WindowsUnattend {
             autoInstallSpiceTools: autoInstallSpiceTools
         )
         let stageDir = BundleLayout.unattendStageDir(bundle)
-        // 三份文件名都写: 不同版本 Win Setup 对大小写要求不一
-        //   - Autounattend.xml (MS docs 官方, A 大写)
-        //   - autounattend.xml (Win11 24H2 实测更可靠)
-        //   - unattend.xml (兜底)
+        // 三份文件名都写 (不同 Win Setup 版本对大小写要求不一): Autounattend / autounattend / unattend.xml
         let canonicalURL = stageDir.appendingPathComponent("Autounattend.xml")
         let lowerURL = stageDir.appendingPathComponent("autounattend.xml")
         let shortURL = stageDir.appendingPathComponent("unattend.xml")
@@ -110,11 +97,9 @@ public enum WindowsUnattend {
 
     // MARK: - XML 构造
 
-    /// AutoUnattend.xml 内容. 端口自 hell-vm WindowsUnattend.unattendXML.
-    ///
-    /// windowsPE pass: reg add LabConfig\Bypass*Check=0x1 让 Setup 跳硬件检查.
-    /// oobeSystem pass: FirstLogonCommands 跑 cmd /c for ... pnputil 装 virtio 驱动 +
-    ///                  spice-guest-tools.exe /S 静默装 (依赖 unattend ISO 上已有 .exe).
+    /// AutoUnattend.xml 内容.
+    /// windowsPE pass: reg add LabConfig\Bypass*Check=0x1 跳硬件检查.
+    /// oobeSystem pass: FirstLogonCommands pnputil 装 virtio 驱动 + utm-guest-tools /S 静默装.
     static func unattendXML(
         bypassInstallChecks: Bool,
         autoInstallVirtioWin: Bool,
@@ -122,19 +107,13 @@ public enum WindowsUnattend {
     ) -> String {
         var commands: [(cmd: String, desc: String)] = []
         if autoInstallVirtioWin {
-            // ARM64 Windows: virtio-win.iso 不带 ARM64 MSI, 走 inf 分发.
-            // 1) certutil 把 Red Hat 代码签名证书装进 TrustedPublisher (否则 inf 因证书链不受信任被拒).
-            //    **要点**: certutil -addstore 不接受 wildcard 路径 (返 ERROR_INVALID_NAME 0x8007007b),
-            //    必须 nested for 遍历 .cer 单文件 + 引号包路径防 space.
-            // 2) pnputil /add-driver 递归装. **要点**: 路径必须是 wildcard 形如 %D:\*.inf,
-            //    裸目录如 %D:\ 会让 pnputil 找不到 inf 报 "Total driver packages: 0".
-            //    实测 virtio-win-0.1.285 用 *.inf + /subdirs 能扫到 \NetKVM\w11\ARM64\netkvm.inf 等.
-            // 3) pnputil /scan-devices 强制 PnP manager 重新枚举设备. OOBE 阶段 NIC PCI 设备早就
-            //    advertise 了, 但只有装完驱动才有 PnP 绑定; scan-devices 让首登登就有网, 不必 reboot.
-            // 4) 全程把 stdout / stderr redirect 到 C:\HVM-virtio-install.log, 失败时 user 能看 log
-            //    定位是 certutil 拒签 / pnputil 拒载 / 还是别的.
-            // 探测条件保持 %D:\NetKVM (跟 hell-vm 一致, 当前 virtio-win.iso 顶层结构稳定).
-            // XML 里 & 必须 escape 成 &amp;, > 必须 escape 成 &gt; (cmd 重定向 / 多命令分隔符).
+            // ARM64 Windows: virtio-win.iso 不带 ARM64 MSI, 走 inf 分发. 扫所有盘符找 %D:\NetKVM:
+            // 1) certutil 装 Red Hat 代码签名证书进 TrustedPublisher (否则 inf 证书链不受信被拒).
+            //    **要点**: -addstore 不接受 wildcard, 必须 nested for 遍历 .cer 单文件 + 引号包路径.
+            // 2) pnputil /add-driver. **要点**: 路径必须 wildcard %D:\*.inf + /subdirs, 裸目录报 0 packages.
+            // 3) pnputil /scan-devices 重新枚举设备, 让首登就有网不必 reboot.
+            // 4) stdout/stderr 全 redirect 到 C:\HVM-virtio-install.log 便于排错.
+            // XML 里 & → &amp;, > → &gt; (cmd 重定向 / 多命令分隔符).
             let log = "C:\\HVM-virtio-install.log"
             let cmd = """
             cmd /c \
@@ -150,17 +129,9 @@ public enum WindowsUnattend {
             commands.append((cmd, "HVM auto-install virtio-win drivers (ARM64)"))
         }
         if autoInstallSpiceTools {
-            // utm-guest-tools-X.Y.ZZZ.exe 是 NSIS installer (UTM 自家打包, 含 ARM64 native
-            // spice-vdagent.exe 服务 + utmapp/virtio-gpu-wddm-dod 自家 viogpudo.sys driver).
-            // 实测 stock spice-guest-tools.exe (spice-space.org) 只有 x86, ARM Win 跑 x86 emu
-            // vdagent + stock viogpudo 走不通 dynamic resize 链路; UTM 这套 ARM64 native 实现
-            // (含 QXL escape SET_CUSTOM_DISPLAY 等) 才能让 host MONITORS_CONFIG 真改分辨率.
-            //
-            // 装包来源: getutm.app/downloads/utm-guest-tools-latest.iso (~120MB),
-            // 通过 UtmGuestToolsCache 全局缓存; QemuArgsBuilder 把 .iso 当第三 cdrom 挂给 guest.
-            // 探测条件: 扫所有盘符找 utm-guest-tools-*.exe (含版本号, 用 wildcard).
-            // 走 start /wait 让 SynchronousCommand 等到装完才进下一条命令.
-            // 探测失败 (没挂 ISO / 缓存缺) 时整条 cmd noop, 不阻塞 OOBE.
+            // utm-guest-tools-*.exe 是 NSIS installer (UTM 自家打包, 含 ARM64 native vdagent +
+            // viogpudo.sys). stock spice-guest-tools.exe 只 x86, ARM Win 走不通 dynamic resize.
+            // 扫所有盘符找 .exe + start /wait (装完才进下条命令); 缺 ISO 时 noop 不阻塞 OOBE.
             let cmd = "cmd /c for %D in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do @for %F in (%D:\\utm-guest-tools-*.exe) do @if exist %F start /wait %F /S"
             commands.append((cmd, "HVM auto-install UTM Guest Tools (ARM64 vdagent + viogpudo for dynamic resize)"))
         }

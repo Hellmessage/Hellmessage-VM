@@ -1,17 +1,11 @@
 // DisplayChannel.swift
 //
-// HVM-QEMU 显示协议 (HDP) 的 host-side 客户端.
+// HVM-QEMU 显示协议 (HDP) 的 host-side 客户端: 连 QEMU `-display iosurface,socket=...`
+// 端点, 双向 HELLO 协商 (capability 交集; major 不一致断连), 后台 read thread 收消息
+// 经 AsyncStream<Event> 推上层. SURFACE_NEW 的 SCM_RIGHTS shm fd 经 Event 交给消费者
+// (消费者负责 mmap + close, 见 SurfaceArrival).
 //
-// 职责:
-//   1. AF_UNIX SOCK_STREAM 连接到 QEMU `-display iosurface,socket=...` 暴露的端点
-//   2. 双向 HELLO 协商 (取双方 capability 交集; major 不一致直接断连)
-//   3. 后台 read thread 不断收消息, 通过 AsyncStream<Event> 推给上层
-//   4. SURFACE_NEW 携带的 SCM_RIGHTS shm fd 在 Event 里直接交给消费者,
-//      消费者必须 mmap + close fd 副本 (生命周期约定见 SurfaceArrival 注释)
-//   5. 主动 disconnect 发 GOODBYE 后再 close
-//
-// 协议规范: HDP v1.0.0.
-// 三处文件 (本 .swift / hvm_display_proto.h / 协议规范) 必须同步改.
+// 协议规范: HDP v1.0.0. 三处文件 (本 .swift / hvm_display_proto.h / 协议规范) 必须同步改.
 
 import Foundation
 import Darwin
@@ -115,11 +109,9 @@ public final class DisplayChannel: @unchecked Sendable {
         continuation.finish()
     }
 
-    /// 请求 guest 调分辨率. 不检查 negotiatedCaps (跟 hell-vm 一致):
-    /// QEMU patch 0002 的 iosurface backend 不一定 advertise vdagentResize cap,
-    /// 但仍能处理 RESIZE_REQUEST → dpy_set_ui_info → vdagent 通道. cap check 静默
-    /// 丢请求会让 user 拖 HVM 主窗口 guest 不改分辨率, 即使 vdagent 已装好.
-    /// 只检查 sockFD 是否就绪 (channel 已 connect 才发).
+    /// 请求 guest 调分辨率. 不检查 negotiatedCaps: iosurface backend 不一定 advertise
+    /// vdagentResize cap, 但仍能处理 RESIZE_REQUEST → dpy_set_ui_info → vdagent 通道,
+    /// cap check 会误丢请求让拖窗口不改分辨率. 只检查 sockFD 就绪.
     public func requestResize(width: UInt32, height: UInt32) {
         guard sockFD >= 0 else {
             log.warning("requestResize dropped: not connected (\(width)x\(height))")
@@ -268,10 +260,8 @@ public final class DisplayChannel: @unchecked Sendable {
     }
 
     /// 收 8 字节 header, **顺带可能附的单个 SCM_RIGHTS fd**.
-    /// QEMU 端用 `sendmsg(iov={hdr,payload}, cmsg={fd})` 一次 syscall 把 hdr+payload+fd
-    /// 一起发, 所以 fd 跟 header 的字节一同到达接收方 (cmsg 跟 sendmsg 调用绑定,
-    /// 第一次 recv 拿到部分字节时一并收 cmsg, 之后再 recv 后续字节不再有 cmsg).
-    /// 因此**必须**在 recvHeader 阶段接收 fd, 不能延到 recvPayload.
+    /// QEMU 端用一次 `sendmsg(iov={hdr,payload}, cmsg={fd})` 发, cmsg 跟 sendmsg 绑定,
+    /// 随 header 字节一同到达 — 因此**必须**在 recvHeader 阶段收 fd, 不能延到 recvPayload.
     private func recvHeader() throws -> (HDP.Header, Int32) {
         var buf = Data(count: HDP.Header.byteSize)
         var fd: Int32 = -1
@@ -363,7 +353,7 @@ public final class DisplayChannel: @unchecked Sendable {
                 return
             }
 
-            // sanity guard, 跟 ui/iosurface.m 里的 16MB 上限一致
+            // payloadLen sanity guard, 跟 ui/iosurface.m 的 16MB 上限一致
             if hdr.payloadLen > 16 * 1024 * 1024 {
                 if fd >= 0 { Darwin.close(fd) }
                 return

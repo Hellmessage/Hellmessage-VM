@@ -1,7 +1,5 @@
 // IsoCommand.swift
-// hvm-cli iso — 管理 VM 的安装 ISO. 必须 VM stopped (VZ 不支持热挂载 storage).
-//
-// macOS guest 走 IPSW + VZMacOSInstaller, 不挂 ISO. iso 子命令仅对 Linux guest 有效.
+// hvm-cli iso — 管理 VM 安装 ISO (仅 Linux guest). 必须 VM stopped (不支持热挂载).
 
 import ArgumentParser
 import Foundation

@@ -1,18 +1,8 @@
-// hvm-dbg/Commands/DisplayInfoCommand.swift
-// hvm-dbg display-info — 拿 guest 真实当前 framebuffer 尺寸 (通过 QMP screendump → PPM header).
+// hvm-dbg display-info — 拿 guest 真实当前 framebuffer 尺寸 (QMP screendump → PPM header).
 //
-// 用途: 验证 spice-vdagent dynamic resize 是否真生效.
-//   resize 触发前后两次 display-info 对比 widthPx/heightPx 是否变化:
-//     1. hvm-dbg display-info Win   → 比如 1920x1080
-//     2. hvm-dbg display-resize Win --width 1280 --height 720
-//     3. sleep 3
-//     4. hvm-dbg display-info Win   → 期望 1280x720 (说明 vdagent → viogpudo SetDisplayConfig 真生效)
-//
-// 跟 hvm-dbg status 不同: status 返回的 guestResolution 是写死的 defaultFramebufferSize
-// 估算值, 不反映 guest 实际状态; display-info 走 QMP screendump 读 PPM header,
-// 拿的是 guest 当前 framebuffer 真实尺寸.
-//
-// 走 host 子进程 IPC socket (跟 status / screenshot 同), 不依赖 GUI 在跑.
+// 用途: 验证 dynamic resize 是否生效, 配合 display-resize 前后对比 widthPx/heightPx.
+// 跟 status 不同: status 的 guestResolution 是 defaultFramebufferSize 估算值, 不反映 guest
+// 实际状态; 本命令读 PPM header 拿真实尺寸. 走 host 子进程 IPC socket, 不依赖 GUI 在跑.
 
 import ArgumentParser
 import Foundation

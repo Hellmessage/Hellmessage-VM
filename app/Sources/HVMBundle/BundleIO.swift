@@ -1,6 +1,5 @@
 // HVMBundle/BundleIO.swift
 // .hvmz bundle 的创建 / 加载 / 原子写入. config 落盘格式 = YAML (Yams).
-// VM bundle 布局规范.
 
 import Foundation
 import HVMCore
@@ -28,7 +27,6 @@ public enum BundleIO {
                                    attributes: [.posixPermissions: 0o755])
             try fm.createDirectory(at: BundleLayout.metaDir(bundleURL), withIntermediateDirectories: true,
                                    attributes: [.posixPermissions: 0o755])
-            // QEMU-only: linux/windows 都建 nvram 目录 (macOS auxiliary 路径已随 VZ 移除)
             try fm.createDirectory(at: BundleLayout.nvramDir(bundleURL), withIntermediateDirectories: true,
                                    attributes: [.posixPermissions: 0o755])
         } catch {
@@ -45,7 +43,7 @@ public enum BundleIO {
         let fm = FileManager.default
         let configURL = BundleLayout.configURL(bundleURL)
 
-        // B3 断老兼容: 没有 config.yaml 但有 config.json → 老 v1 bundle, 直接报错
+        // 断老兼容: 无 config.yaml 但有 config.json → 老 v1 bundle, 直接报错
         if !fm.fileExists(atPath: configURL.path) {
             let legacyURL = BundleLayout.legacyConfigURL(bundleURL)
             if fm.fileExists(atPath: legacyURL.path) {
@@ -64,7 +62,7 @@ public enum BundleIO {
             throw HVMError.bundle(.parseFailed(reason: error.localizedDescription, path: configURL.path))
         }
 
-        // Step 1: 只解析 schemaVersion (YAML), 决定后续走 migrate 还是直接 decode current
+        // 先只解析 schemaVersion, 决定走 migrate 还是直接 decode current
         let envelope: _SchemaEnvelope
         do {
             envelope = try YAMLDecoder().decode(_SchemaEnvelope.self, from: data)
@@ -79,7 +77,7 @@ public enum BundleIO {
             ))
         }
 
-        // Step 2: 老 schema → 走升级链拿到当前版本的 yaml data, 再 decode.
+        // 老 schema → 走升级链拿到当前版本的 yaml data, 再 decode
         let upgradedData: Data
         if envelope.schemaVersion < VMConfig.currentSchemaVersion {
             Self.log.info("bundle 走 schema 迁移: \(bundleURL.lastPathComponent, privacy: .public) v\(envelope.schemaVersion) → v\(VMConfig.currentSchemaVersion)")
@@ -105,9 +103,7 @@ public enum BundleIO {
             throw HVMError.bundle(.parseFailed(reason: "\(error)", path: configURL.path))
         }
 
-        // **sandbox 校验先于一切路径解析** — 防 main.path = "../../../etc/passwd"
-        // 之前先 appendingPathComponent + fileExists, 再 isDiskPathInSandbox, 顺序反了:
-        // 攻击者控制的 path 会先触发对任意路径的 stat(2) (信息泄漏面), 再被拦.
+        // sandbox 校验必须先于任何路径解析 (防 main.path = "../../../etc/passwd" 触发任意路径 stat).
         // 所有 disk (含主盘) 路径必须落在 disks/ 下, 不许 ".." 回跳
         for d in config.disks where !BundleLayout.isDiskPathInSandbox(d.path) {
             throw HVMError.bundle(.outsideSandbox(requestedPath: d.path))

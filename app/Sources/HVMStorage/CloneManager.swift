@@ -1,42 +1,19 @@
 // HVMStorage/CloneManager.swift
 // 整 VM 克隆: APFS clonefile(2) 复制磁盘 + nvram/tpm/auxiliary/meta + 重生身份字段.
 //
-// 重生策略:
-//   - config.id            → UUID()
-//   - config.displayName   → options.newDisplayName
-//   - config.createdAt     → Date()
-//   - 数据盘 data-<uuid8>.* → uuid8 重生 + 同步改 DiskSpec.path
-//   - networks[].mac       → MACAddressGenerator.random() (默认; keepMACAddresses=true 保留)
-//   - auxiliary/machine-identifier (macOS guest) → 新 VZMacMachineIdentifier()
+// 重生: config.id / displayName / createdAt / 数据盘 uuid8(+DiskSpec.path) / networks[].mac
+//       (keepMACAddresses=true 时保留 mac).
+// 保留: 主盘文件名 (按 engine 固定) / nvram efi-vars (重置 = guest 进 EFI Shell) /
+//       tpm (重置 = BitLocker 永久失效).
+// 不带: .lock / logs/ 内容 / Windows 装机产物 (unattend.iso 等) / snapshots/.
 //
-// 保留:
-//   - 主盘 os.{img,qcow2} 文件名 (主盘命名按 engine 是固定值, 不带 uuid)
-//   - 磁盘内容 (APFS clonefile, COW 直到首次写)
-//   - auxiliary/aux-storage + auxiliary/hardware-model (macOS, 与 IPSW 装机配对, 不可改)
-//   - nvram/efi-vars.{fd,qcow2} (EFI BootOrder; 重置 = guest 进 EFI Shell)
-//   - tpm/* (Win11 swtpm state; 重置 = BitLocker 永久失效)
+// 加密 VM (D9 = 等价复制 + 同密码): clonefile 字节级 COW 复制 LUKS qcow2 / swtpm state 不解密;
+//   salt + 密码不变 → 同 master KEK → 同 keyslot 可解; config.yaml.enc 解密改字段后用源 sub.config
+//   重新加密; routing JSON 仅改 vmId/displayName. 想换密码用户自跑 hvm-cli rekey.
 //
-// 加密 VM 分支 (D9 = 等价复制 + 同密码):
-//   - APFS clonefile 字节级 COW 复制 LUKS qcow2 / config.yaml.enc / swtpm state, 不解密
-//   - master KEK 由 PBKDF2(password, salt) 派生; clone 后 salt + 密码不变 → 同 KEK
-//     → 同 LUKS keyslot 能解 / 同 swtpm-key 能开 tpm/permall
-//   - config.yaml.enc 必须解密 → 改 vmId/displayName/disks paths → 用源 sub.config 重新加密
-//     (master KEK 不变, 目标用源密码可解)
-//   - meta/encryption.json (routing JSON): 仅改 vmId, 其他 (salt/iter/scheme) 不动
-//   - clone 出来 = 跟源同密码. 想换密码用户自跑 hvm-cli rekey
-//
-// 不带:
-//   - .lock (目标首次启动自然创建)
-//   - logs/ (新 VM 一身轻; logs/ 子目录预创建空目录, ConsoleBridge 启动时直接写)
-//   - .unattend-stage/, unattend.iso (Windows 装机产物, 启动时按需重新生成)
-//   - **snapshots/** (D15 永不带 — 加密 / 明文 一致, 移除 --include-snapshots flag)
-//
-// 前置约束:
-//   - 源 VM 必须 stopped — 函数内部抢 .edit lock 排他, 已被 .runtime 持有时抛 .busy
-//   - 源 + 目标父目录必须同 APFS 卷 — clonefile(2) 跨卷 EXDEV. 提前 stat st_dev 探测
-//   - 目标 bundle 路径不能存在
-//   - 加密源 VM 调用方必须传 options.password (CLI 层 prompt)
-//   - 失败时清理目标残留 (CloneManager 不留 partial bundle)
+// 前置约束: 源必须 stopped (内部抢 .edit lock, 被 .runtime 占抛 .busy); 源 + 目标父目录必须同
+//   APFS 卷 (clonefile 跨卷 EXDEV, 提前 stat st_dev 探测); 目标不能预存在; 加密源必须传 password;
+//   失败时清理目标残留 (不留 partial bundle).
 
 import Foundation
 import Darwin
@@ -163,8 +140,6 @@ public enum CloneManager {
             try cloneIfExists(name: BundleLayout.auxiliaryDirName, from: sourceBundle, to: targetBundle)
             try cloneIfExists(name: BundleLayout.metaDirName, from: sourceBundle, to: targetBundle)
 
-            // (macOS guest machine-identifier 重生已随 VZ 移除; QEMU guest 无此字段)
-
             // logs/ 空目录: QemuConsoleBridge 启动时写
             try fm.createDirectory(at: BundleLayout.logsDir(targetBundle),
                                    withIntermediateDirectories: true,
@@ -242,8 +217,7 @@ public enum CloneManager {
         try cloneFile(from: s, to: d)
     }
 
-    /// SnapshotManager.cloneFile 的本模块别名. 复用同一份 clonefile(2) 包装,
-    /// 不在 HVMStorage 内重复实现. flags=0 = owner copy, 等价 cp -c.
+    /// SnapshotManager.cloneFile 的本模块别名 (复用同一份 clonefile(2) 包装). flags=0 = 等价 cp -c.
     private static func cloneFile(from src: URL, to dst: URL) throws {
         try SnapshotManager.cloneFile(from: src, to: dst)
     }
@@ -261,15 +235,9 @@ public enum CloneManager {
 
     // MARK: - 加密 QEMU clone (D9 = 等价复制 + 同密码)
 
-    /// 加密 QEMU VM clone.
-    ///
-    /// 关键不变量:
-    ///   - 源密码 → 目标密码 (一字不差; clone 不改密码)
-    ///   - master KEK / sub keys 全程不变 (salt + 密码不变 → 同 PBKDF2 结果)
-    ///   - LUKS qcow2 字节复制 (header + ciphertext): 字节级 COW, header 仍是源 keyslot
-    ///   - swtpm tpm/permall 字节复制: 用源 swtpm-key 仍能开 (key 由 master HKDF 派生不变)
-    ///   - config.yaml.enc: 解密 → 改 vmId/displayName/disks paths → 用源 sub.config 重新加密
-    ///   - meta/encryption.json (routing JSON): vmId 改, salt/iter/scheme 不变
+    /// 加密 QEMU VM clone. 不变量: master KEK / sub keys 不变 (salt + 密码不变 → 同 PBKDF2);
+    /// LUKS qcow2 + swtpm state 字节复制仍可解; config.yaml.enc 解密改字段后用源 sub.config 重加密;
+    /// routing JSON 仅改 vmId.
     private static func cloneEncryptedQEMU(sourceBundle: URL,
                                             targetBundle: URL,
                                             options: Options,
@@ -347,8 +315,7 @@ public enum CloneManager {
                                         to: targetBundle,
                                         key: subKeys.config)
 
-            // 9. routing JSON: 读源 → 改 vmId + displayName → 写目标. salt/iter/scheme 不动
-            //    (跨机器派生 master KEK 仍正确, 因为 salt 不变)
+            // 9. routing JSON: 读源 → 改 vmId + displayName → 写目标. salt/iter/scheme 不动.
             let srcRouting = RoutingJSON.locationForQemuBundle(sourceBundle)
             var routing = try RoutingJSON.read(from: srcRouting)
             routing.vmId = newID

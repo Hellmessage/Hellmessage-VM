@@ -1,12 +1,6 @@
 // HVMUtils/Format.swift
-// 跨模块共用的数字 → 人类可读字符串格式化.
-// 收纳前散点: hvm-cli IpswCommand / UI IpswFetchDialog / UI VirtioWinFetchDialog /
-// UI UtmGuestToolsFetchDialog (同一份 formatBytes / formatRate / formatETA 复制粘贴 4 份).
-//
-// 单位: 二进制 (KiB / MiB / GiB), 与 IPSW / ISO / virtio-win 等下载场景的 disk image
-// 大小语义一致.
-//
-// padded 参数: true 时返回固定宽度字符串 (CLI \r 刷新时对齐用); false 时紧凑输出 (UI 用).
+// 跨模块共用的数字 → 人类可读字符串格式化. 单位走二进制 (KiB / MiB / GiB).
+// padded 参数: true 返固定宽度 (CLI \r 刷新对齐用), false 紧凑输出 (UI 用).
 
 import Foundation
 

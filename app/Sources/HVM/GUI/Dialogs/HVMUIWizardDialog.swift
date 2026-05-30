@@ -1,66 +1,18 @@
-// HVMUIWizardDialog.swift — 新 GUI 多步骤向导 dialog (PR-D6)
+// HVMUIWizardDialog.swift — 新 GUI 多步骤向导 dialog. 顶部步骤指示器 + 上一步/下一步/完成导航.
 //
-// 用法:
+// 关闭路径 → 结果: 完成按钮 → .completed; 取消 / X / Esc / dismissAll → .cancelled.
+// 步骤指示器: 已完成 (checkmark, 可点回退) / 当前 (accent highlight) / 未到 (tertiary, 不可点).
+// 跨步骤共享数据走 @EnvironmentObject 注入或 closure 内捕获 class-based model.
 //
-//   1. 简单 3 步向导 (例 创建 VM):
-//      let result = await dialog.wizard(
-//          title: "创建 VM",
-//          steps: [
-//              .init(title: "选 OS") { WizardChooseOSView() },
-//              .init(title: "配置") { WizardConfigView() },
-//              .init(title: "确认") { WizardReviewView() }
-//          ],
-//          probeID: "dialog.createVM"
-//      )
-//      if result == .completed { actuallyCreateVM() }
-//
-//   2. 每步用 inline closure 写小内容 (showcase 风格):
-//      let result = await dialog.wizard(
-//          title: "演示",
-//          steps: [
-//              .init(title: "第一步") { Text("hello") },
-//              .init(title: "第二步") { Text("world") }
-//          ],
-//          probeID: "dialog.demo"
-//      )
-//
-// 关闭路径 → 结果映射:
-//   - 完成按钮 (最后一步) → .completed
-//   - 取消 / X / Esc / dismissAll → .cancelled
-//
-// 状态机:
-//   - currentIndex (0..<steps.count)
-//   - 第一步: 隐藏「上一步」, 显示「下一步」
-//   - 中间步: 显示「上一步」+「下一步」
-//   - 最后一步: 显示「上一步」+「完成」(替换「下一步」)
-//
-// 步骤指示器 (顶部水平):
-//   - 已完成步骤: accentMuted 填充 + checkmark + 主文字色, **可点回退**
-//   - 当前步骤:   accent 填充 + 数字 + 主文字色 (highlight)
-//   - 未到步骤:   bgRaised 填充 + 数字 + tertiary 文字色, **不可点**
-//   - 步骤之间用细线分隔 (borderDefault)
-//
-// 业务侧状态管理:
-//   - WizardStep.content 是 @ViewBuilder closure, 每步是独立 View
-//   - 每步内部用自家 @State / @StateObject / @EnvironmentObject 持状态
-//   - 跨步骤共享数据走 @EnvironmentObject (ObservableObject) 注入到 wizard,
-//     或业务侧用 class-based model 捕获在 closure 内
-//
-// Probe id 派生:
-//   <probeID>.cancel    — 左下「取消」按钮
-//   <probeID>.prev      — 「上一步」(只在 idx > 0 显示)
-//   <probeID>.next      — 「下一步」(只在非最后一步显示)
-//   <probeID>.complete  — 「完成」(只在最后一步显示)
-//   <probeID>.close     — 右上 X
-//   <probeID>.step.<i>  — 步骤指示器第 i 个 chip (只在已完成步骤可点)
+// 业务侧首选 async API: dialog.wizard(title:steps:probeID:).
+// Probe id 派生: <probeID>.cancel / .prev / .next / .complete / .close / .step.<i> (仅已完成步可点).
 
 
 import SwiftUI
 
 extension HVMUI {
 
-/// 单步配置 — title + content closure. content 是独立 View, 每步内部
-/// 自家持状态 (跨步骤共享走 @EnvironmentObject).
+/// 单步配置 — title + content closure (独立 View, 跨步骤共享走 @EnvironmentObject).
 struct WizardStep {
     let title: String
     let content: () -> AnyView
@@ -105,8 +57,7 @@ struct WizardDialog: View {
 
             HVMUI.Divider()
 
-            // 当前步骤内容. 用 .id(currentIndex) 强制 SwiftUI 在切步时 rebuild,
-            // 让每步 @State 干净 — 业务侧需要跨步骤持久化的数据走外部 model.
+            // .id(currentIndex) 强制切步时 rebuild, 让每步 @State 干净 (跨步持久化走外部 model)
             steps[currentIndex].content()
                 .id(currentIndex)
                 .frame(minHeight: 120, alignment: .topLeading)
@@ -264,9 +215,7 @@ struct WizardDialog: View {
 
 // MARK: - DialogPresenter async API
 
-/// Resume 协调器 — onResult (完成 / 取消按钮) 与 onDismiss (Esc / X / dismissAll)
-/// 最终只 resume continuation 一次. 跟 Confirm / Input 同套思路, 单独泛型避免
-/// 跨 dialog 文件实例化复杂度.
+/// Resume 协调器 — 跟 Confirm / Input 同套思路, 单独一份避免跨 dialog 文件实例化.
 @MainActor
 private final class WizardResumeCoordinator {
     private var resumed = false
@@ -284,14 +233,8 @@ private final class WizardResumeCoordinator {
 }
 
 extension HVMUI.DialogPresenter {
-    /// 便利 async API — 弹 wizard dialog + await 用户完成或取消.
-    ///
-    /// 关闭路径 → 返回值:
-    ///   - 「完成」(最后一步主按钮) → .completed
-    ///   - 取消 / X / Esc / dismissAll → .cancelled
-    ///
-    /// 业务侧跨步骤共享数据走 @EnvironmentObject (ObservableObject) 注入
-    /// 到外层, 或在 step.content closure 内捕获 class-based model.
+    /// 便利 async API — present wizard dialog + await 用户完成或取消.
+    /// 完成 → .completed; 取消 / X / Esc / dismissAll → .cancelled.
     func wizard(title: String,
                 steps: [HVMUI.WizardStep],
                 probeID: String) async -> HVMUI.WizardResult {
@@ -310,8 +253,7 @@ extension HVMUI.DialogPresenter {
                     )
                 },
                 onDismiss: {
-                    // Esc / dismissAll 直接关 dialog 没经过 onResult,
-                    // onDismiss 兜底 resume .cancelled.
+                    // Esc / dismissAll 不经过 onResult, 这里兜底 resume .cancelled
                     coordinator.resumeIfNeeded(.cancelled)
                 }
             )

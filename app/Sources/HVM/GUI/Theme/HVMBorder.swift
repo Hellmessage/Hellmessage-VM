@@ -1,7 +1,4 @@
-// HVMBorder.swift — 新 GUI 边框宽度 token
-//
-// 业务侧禁止 .border(width: 1, ...) 硬数字, 一律走 HVMTheme.border.<name>
-// + HVMTheme.color.borderDefault / borderFocus / borderError.
+// HVMBorder.swift — 新 GUI 边框宽度 token. 业务侧禁硬数字, 走 HVMTheme.border.<name>.
 
 
 import CoreGraphics

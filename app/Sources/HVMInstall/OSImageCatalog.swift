@@ -1,13 +1,7 @@
 // HVMInstall/OSImageCatalog.swift
-// Linux / Windows guest ISO 镜像目录 (内置 catalog).
+// Linux guest ISO 镜像目录 (内置 catalog): hardcoded arm64 发行版 + 用户自定义 URL 兜底 (custom).
 //
-// V1: hardcoded 7 个常用 arm64 发行版 ISO (Ubuntu LTS x2 / Debian / Fedora / Alpine / Rocky / openSUSE)
-// 加用户自定义 URL 兜底 (custom). 后续可加运行时 fetch 动态解析 SHA256SUMS 自动刷新版本.
-//
-// 数据升级时同步到本文件; 升级时:
-//   1. webfetch 各发行版 SHA256SUMS / CHECKSUM 拿新 ISO 文件名 + hash
-//   2. 更新本文件 entries 数组 (URL + sha256 + version)
-//   3. make build 跑通 + 实测下载 1 个验证
+// 升级条目: webfetch 各发行版 SHA256SUMS 拿新 ISO 文件名 + hash → 更新 entries 数组 → make build + 实测下载验证.
 
 import Foundation
 
@@ -88,9 +82,8 @@ public struct OSImageEntry: Sendable, Equatable, Codable, Identifiable {
 
 public enum OSImageCatalog {
 
-    /// 内置 catalog. 数据采集自 2026-05-03, 升级流程见文件头部注释.
-    /// **Windows 不在此 catalog**: Win11 ARM64 官方仅 Insider 注册 (法律灰色), Win10 ARM64
-    /// 官方已无 ISO 来源. Windows 走 customDownload(url:) 兜底.
+    /// 内置 catalog. 升级流程见文件头部注释.
+    /// Windows 不在此 catalog (官方 ARM64 ISO 无稳定来源), 走 downloadCustom(url:) 兜底.
     public static let entries: [OSImageEntry] = [
         // === Ubuntu ===
         OSImageEntry(

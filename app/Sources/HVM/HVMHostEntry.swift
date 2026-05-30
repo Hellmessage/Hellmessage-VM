@@ -1,9 +1,6 @@
 // HVMHostEntry.swift — VMHost 子进程入口 (`--host-mode-bundle`).
-//
-// QEMU-only 转向后: VZ 后端整条移除. 本入口只做
-// 加密检测 + 解锁 + 抢锁 等共用前置, 然后一律分派 QemuHostEntry (QEMU 子进程跑
-// qemu-system-aarch64 + HDP IOSurface 显示). 老的 VZ 离屏 window / HVMView / HostState
-// 已删. 明文/加密 (qemuPerfile) 都走 QEMU; vz / vz-sparsebundle 报错下线.
+// 做加密检测 + 解锁 + 抢锁 等共用前置, 然后分派 QemuHostEntry.
+// 明文/加密 (qemuPerfile) 都走 QEMU; vz / vz-sparsebundle 报错下线.
 
 import Foundation
 import HVMBundle
@@ -83,8 +80,7 @@ public enum HVMHostEntry {
 
         let startedAt = Date()
 
-        // 3. 按 engine 分派. QEMU-only: 仅 .qemu 有实现, .vz 下线报错.
-        // QEMU-only: Engine 单 case, 直接分派 QemuHostEntry
+        // 3. 分派 QemuHostEntry (Engine 单 case)
         QemuHostEntry.run(
             config: config, bundleURL: bundleURL,
             lock: lock, socketURL: socketURL, startedAt: startedAt,
@@ -94,7 +90,7 @@ public enum HVMHostEntry {
     }
 }
 
-/// 跨线程传递 IPCResponse 的可变容器 (Swift 6 sending 检查绕过). QemuHostEntry IPC 循环复用.
+/// 跨线程传递 IPCResponse 的可变容器 (绕过 Swift 6 sending 检查). QemuHostEntry IPC 循环复用.
 final class ResponseBox: @unchecked Sendable {
     var value: IPCResponse
     init(_ v: IPCResponse) { self.value = v }

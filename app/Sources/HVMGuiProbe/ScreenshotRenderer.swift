@@ -1,14 +1,9 @@
 // HVMGuiProbe/ScreenshotRenderer.swift
 // 截 HVM 主进程主窗口 (含弹层 dialog) → PNG.
-// HDP-GUI 协议 D-G3.
 //
-// 实现:
-//   1. 用 NSView.bitmapImageRepForCachingDisplay 渲染主 contentView (SwiftUI 普通绘制)
-//      → 不要 CGWindowListCreateImage (要 screen recording 权限, UX 差).
-//   2. **bitmapImageRepForCachingDisplay 不能抓 Metal-backed view 的 IOSurface 内容**
-//      (MTKView / FramebufferHostView 在主截图里是黑块). 必须遍历 subview tree 找
-//      FramebufferHostView, 调它 renderer.snapshotCGImage 拿 BGRA framebuffer CGImage,
-//      用 CGContext 合成到对应 rect 上, 再 PNG encode.
+// 用 bitmapImageRepForCachingDisplay (避开 CGWindowListCreateImage 的 screen recording 权限).
+// 但它抓不到 Metal-backed view 的 IOSurface (FramebufferHostView 是黑块): 遍历 subview tree
+// 找 FramebufferHostView, 调 renderer.snapshotCGImage 拿 BGRA framebuffer, CGContext 合成后 PNG encode.
 
 import AppKit
 import Foundation
@@ -46,10 +41,8 @@ enum ScreenshotRenderer {
         }
         view.cacheDisplay(in: bounds, to: rep)
 
-        // 找所有嵌入的 FramebufferHostView (MTKView), 把它们当前帧合成上去.
-        // bitmapImageRepForCachingDisplay 走 NSView CALayer cache 通路, 不抓 Metal
-        // drawable → 这些 view 截出来是 clearColor 黑块. 必须自己用 renderer.snapshotCGImage
-        // 拿 BGRA framebuffer 后用 CGContext draw 进去.
+        // 找所有嵌入的 FramebufferHostView (MTKView) 把当前帧合成上去:
+        // cacheDisplay 不抓 Metal drawable, 这些 view 截出来是黑块, 需用 renderer.snapshotCGImage 补绘.
         let fbViews = collectFramebufferViews(in: view)
         let finalRep: NSBitmapImageRep
         if !fbViews.isEmpty, let composited = composite(rep: rep, root: view, framebufferViews: fbViews) {
@@ -91,8 +84,7 @@ enum ScreenshotRenderer {
         let scaleX = CGFloat(pixelW) / root.bounds.width
         let scaleY = CGFloat(pixelH) / root.bounds.height
 
-        // 把 rep 转 CGImage 拿基底 — 复用现有截图 (含 SwiftUI chrome / 文字 / 按钮 etc),
-        // 然后 在新 CGContext 上铺这张基底 + 覆盖 framebuffer.
+        // rep 转 CGImage 作基底 (含 SwiftUI chrome), 新 CGContext 上铺基底 + 覆盖 framebuffer.
         guard let baseCG = rep.cgImage else { return nil }
         let cs = CGColorSpaceCreateDeviceRGB()
         let bitmapInfo = CGBitmapInfo.byteOrder32Little.rawValue |
@@ -114,23 +106,16 @@ enum ScreenshotRenderer {
         for fb in framebufferViews {
             guard let fbImage = fb.renderer.snapshotCGImage() else { continue }
             // FramebufferHostView 在 root 内的 frame (point 单位, root 坐标系).
+            // root 与 CGContext 都是默认 y 向上原点, 一致, 不需要 flip, 直接乘 scale.
             let frameInRoot = fb.convert(fb.bounds, to: root)
-            // 转成 pixel 单位 + AppKit→CoreGraphics y-flip (rep 原点左下, root.convert 是
-            // root 自家坐标系, root 是 NSView 默认左下原点 → 需要把 y 翻转成 CG context
-            // 的 "左下原点 像素" 对应位置).
-            // root 是 NSView 默认 .isFlipped == false → root 自家坐标 y 向上;
-            // 我们 CGContext 也是默认 y 向上 → 不需要 flip, 直接乘 scale.
-            // 但: AppKit subview convert 出来的 frame y=0 在 root 底部. CGImage 画进
-            // CGContext 时, 默认 y=0 也是 context 底部. 一致, 不需要 flip.
             let pixelRect = CGRect(
                 x: frameInRoot.origin.x * scaleX,
                 y: frameInRoot.origin.y * scaleY,
                 width: frameInRoot.width * scaleX,
                 height: frameInRoot.height * scaleY
             )
-            // 居中 letterbox: framebuffer 像素尺寸 vs view rect 比例不一定一样,
-            // FramebufferRenderer.draw 走 min(scale_x, scale_y) 等比 + 居中,
-            // 这里同样实现一遍, 让截图视觉跟用户实际看到的一致.
+            // 居中 letterbox: 跟 FramebufferRenderer.draw 一致 (min(scale) 等比 + 居中),
+            // 让截图视觉跟用户实际看到的一致.
             let fbW = CGFloat(fbImage.width)
             let fbH = CGFloat(fbImage.height)
             let fitScale = min(pixelRect.width / fbW, pixelRect.height / fbH)

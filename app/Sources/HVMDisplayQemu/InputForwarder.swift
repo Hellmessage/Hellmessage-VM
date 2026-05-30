@@ -1,26 +1,14 @@
 // InputForwarder.swift
 //
-// 通过 QMP `input-send-event` 命令把 host 端键鼠事件转发给 QEMU guest.
+// 通过 QMP `input-send-event` 命令把 host 键鼠事件转发给 QEMU guest.
 //
 // 设计要点:
-//   1. **独立** QMP socket 连接, 不复用 HVMQemu 的控制 QMP — 避免 accept 争抢
-//      和并发命令 stream 解析复杂度. QEMU argv 必须额外暴露一个
-//      `-qmp unix:<path>.input,server=on,wait=off` socket 给本类.
-//   2. 单连接 + serial DispatchQueue: 所有 send 串行化, sendmsg 不能并发.
-//   3. 简化握手: connect → drain greeting (单行 JSON) → 发 qmp_capabilities
-//      → drain return → ready. server 后续推送的 event 全部 drain 丢弃.
-//   4. 鼠标坐标用绝对坐标空间 (0..32767), QEMU `usb-tablet` / `virtio-tablet`
-//      的标准做法; 调用方传 NSView 内的 viewX / viewY, 由本类按 viewSize
-//      归一化, 并去重 (同一坐标重复不发).
-//
-// QMP `input-send-event` 命令 payload (上游 qapi/ui.json `InputEvent`):
-//   { "execute": "input-send-event",
-//     "arguments": { "events": [
-//        { "type": "key", "data": { "down": true,
-//                                    "key": { "type": "qcode", "data": "a" } } },
-//        { "type": "abs", "data": { "axis": "x", "value": 16383 } },
-//        { "type": "btn", "data": { "down": true, "button": "left" } }
-//     ] } }
+//   1. **独立** QMP socket (不复用控制 QMP, 避免 accept 争抢). QEMU argv 须额外暴露
+//      `-qmp unix:<path>.input,server=on,wait=off`.
+//   2. 单连接 + serial DispatchQueue: 所有 send 串行化.
+//   3. 握手: connect → drain greeting → 发 qmp_capabilities → drain return → ready.
+//      server 后续推送的 event 全部 drain 丢弃.
+//   4. 鼠标坐标归一化到绝对坐标空间 (0..32767, usb-tablet 标准), 去重 (同坐标不重发).
 
 import Foundation
 import Darwin
@@ -50,9 +38,8 @@ public final class InputForwarder: @unchecked Sendable {
                                        qos: .userInitiated)
     private var sockFD: Int32 = -1
     private var connected: Bool = false
-    /// disconnect() 设置, doConnectWithRetry 内每轮检查; 让 retry 中途
-    /// 提前退出 (否则 60s retry 会把 serial queue 卡满, 后续 disconnect 排队
-    /// 等到 retry 全跑完才能执行).
+    /// disconnect() 置位, doConnectWithRetry 每轮检查让 retry 中途提前退出
+    /// (否则 60s retry 卡满 serial queue, disconnect 等到 retry 全跑完才执行).
     private var cancelled: Bool = false
 
     private let viewSizeLock = NSLock()
@@ -68,8 +55,7 @@ public final class InputForwarder: @unchecked Sendable {
     }
 
     deinit {
-        // 调用方应在 deinit 前显式 disconnect. 这里兜底关 fd 防泄漏,
-        // 但不能 dispatch async (queue 持 self 已被释放).
+        // 调用方应在 deinit 前显式 disconnect; 这里兜底关 fd 防泄漏 (不能 dispatch async).
         if sockFD >= 0 {
             Darwin.close(sockFD)
             sockFD = -1
@@ -78,19 +64,14 @@ public final class InputForwarder: @unchecked Sendable {
 
     // MARK: - Public
 
-    /// 异步连接 + 完成 QMP 握手. QEMU 子进程 listen socket 通常晚于本类 connect()
-    /// 调用 (跟 DisplayChannel 对齐: 600 次 × 100ms 重试, 最多 60 秒). 加密 VM
-    /// 子进程因 PBKDF2 解锁 + LUKS keyslot + secret file + swtpm + unattend
-    /// regen 等步骤, QEMU 真正 bind socket 通常在 BundleLock 拿到后 5-10s,
-    /// 老 5s 窗口对加密 VM 不够 → 黑屏永远不恢复. 60s 给冷启动 + 慢盘留余量.
-    /// 全部失败后 connected 保持 false, 后续 send 静默丢弃.
+    /// 异步连接 + QMP 握手. QEMU listen socket 通常晚于本类 connect(), 600 × 100ms
+    /// 重试 (60s, 给加密 VM 解锁 + 慢盘留余量). 全失败后 connected=false, send 静默丢弃.
     public func connect() {
         queue.async { [weak self] in self?.doConnectWithRetry() }
     }
 
     public func disconnect() {
-        // cancelled 在 caller 同步置位 (queue.async 之前), retry 循环本轮就能看到
-        // → tearDown 不必等 60s retry 跑完
+        // cancelled 在 caller 同步置位 (queue.async 之前), retry 循环本轮就看到, 不必等 60s.
         cancelled = true
         queue.async { [weak self] in self?.forceDisconnect() }
     }
@@ -144,11 +125,8 @@ public final class InputForwarder: @unchecked Sendable {
         ]])
     }
 
-    /// 归一化坐标到 0..32767, 重复点返回 nil.
-    /// 必须在 queue 之外调用 (用了 viewSizeLock 但访问 lastAbs* 是非线程安全),
-    /// 因此 enqueue 在 queue 内做坐标 dedup 太复杂; 简化: lastAbs* 只读 / 写
-    /// 都在 queue 外 (UI 主线程), enqueue 之后 queue 真正发送时坐标已固定.
-    /// 实际上由于 NSView 回调都在 main thread, 主线程同一线程顺序访问无竞争.
+    /// 归一化坐标到 0..32767, 重复点返回 nil. lastAbs* 读写都在 queue 外 (UI 主线程),
+    /// NSView 回调同一线程顺序访问无竞争.
     private func absEvents(viewX: Double, viewY: Double) -> [[String: Any]]? {
         viewSizeLock.lock()
         let w = viewWidth
@@ -167,8 +145,7 @@ public final class InputForwarder: @unchecked Sendable {
 
     private func enqueue(_ events: [[String: Any]]) {
         guard !events.isEmpty else { return }
-        // 在调用线程 (主线程) 直接 encode 成 Data 后传给 send queue,
-        // 避免把 non-Sendable [[String: Any]] 传过 @Sendable closure 边界.
+        // 在调用线程 encode 成 Data 再传给 send queue, 避免 non-Sendable 跨 @Sendable closure.
         let cmd: [String: Any] = [
             "execute": "input-send-event",
             "arguments": ["events": events],
@@ -203,8 +180,8 @@ public final class InputForwarder: @unchecked Sendable {
     }
 
     private func doConnectWithRetry() {
-        // 60s 窗口 (600 × 100ms): 加密 VM 子进程解锁 + setup 时间长, 5s 不够;
-        // 明文 VM 通常 1-2s 内连上, 不受影响. cancelled 让 disconnect 中途打断.
+        // 60s 窗口 (600 × 100ms): 加密 VM 解锁 + setup 慢, 明文 VM 1-2s 内连上.
+        // cancelled 让 disconnect 中途打断.
         for attempt in 0..<600 {
             if cancelled { return }
             if doConnect() {
@@ -247,7 +224,7 @@ public final class InputForwarder: @unchecked Sendable {
         if rc != 0 { Darwin.close(fd); return false }
         sockFD = fd
 
-        // QMP greeting (单行 JSON), 直接 drain 忽略内容
+        // QMP greeting (单行 JSON), drain 忽略
         if !readJsonLine() { forceDisconnect(); return false }
 
         // 发 qmp_capabilities, drain return

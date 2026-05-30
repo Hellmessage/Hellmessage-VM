@@ -1,7 +1,6 @@
 // HVMUtils/CliExit.swift
-// 共用 CLI 退出 helper. hvm-cli / hvm-dbg 之前各有一份近 90% 重复的 OutputFormat.swift,
-// 唯一差异是 exitCode(for:) 映射. 这里抽出共用 bail / bailJSON / printJSON, 各 CLI 通过
-// exitCodeMap 闭包注入自己的退出码策略.
+// 共用 CLI 退出 helper. hvm-cli / hvm-dbg 共用 bail / bailJSON / printJSON,
+// 各自通过 exitCodeMap 闭包注入退出码策略.
 
 import Foundation
 import HVMCore

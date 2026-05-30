@@ -1,33 +1,16 @@
 // HVMUtils/ResumableDownloader.swift
-// 通用 HTTP 断点续传下载器, 从 IPSWFetcher 抽离泛化, 给 OS 镜像下载 / IPSW / 任何
-// 大文件下载场景共用. 不绑死任何业务语义.
+// 通用 HTTP 断点续传下载器, 给 OS 镜像 / IPSW / 任意大文件共用. 不绑死业务语义.
 //
-// === 设计 ===
+// 自己管文件 (不用 URLSessionDownloadTask resumeData, 跨进程不可靠): 下载到 <dest>.partial,
+// 完成后 atomic rename → <dest>; 首次响应把 ETag/Last-Modified 写 sidecar <dest>.partial.meta;
+// 续传发 Range: bytes=N- + If-Range: <validator>. 服务器响应分流:
+//   - 206 → seek-to-end append (validator 仍匹配)
+//   - 200 → 服务器忽略 Range / validator 不匹配 → truncate .partial 从头 + 刷 .meta
+//   - 416 → Content-Range total == 本地 size → promote 已下完; 否则 truncate + auto-retry 一次
+// 进程崩溃/kill 不影响, .partial+.meta 留盘下次续传, validator 不匹配安全 fallback 全新下载.
 //
-// 不用 URLSessionDownloadTask + resumeData (跨进程不可靠 / tmp 路径不可控). 自己管文件:
-//   1. 下载中文件名 <dest>.partial; 完成后原子 rename → <dest>
-//   2. 首次响应时把服务器的 ETag / Last-Modified 写到 sidecar <dest>.partial.meta
-//   3. 下次 download 检查 .partial size > 0 → 发 Range: bytes=N- + If-Range: <validator>
-//   4. 服务器响应:
-//      - 206 Partial Content → seek-to-end 后 append (validator 仍匹配)
-//      - 200 OK              → 服务器忽略 Range 或 If-Range 不匹配 (文件变了),
-//                              truncate .partial 从头开始, 同时刷新 .meta
-//      - 416 Range Not Satisfiable → 校验 Content-Range: */<total> 中的 total
-//                                    与本地 .partial size 一致 → promote (已下完);
-//                                    不一致 → truncate + auto-retry 一次 (resumeFrom=0)
-//   5. App 崩溃 / 系统重启 / kill -9 都不影响, .partial + .meta 留在原目录,
-//      下次 download 自动续传, validator 不匹配会安全 fallback 到全新下载
-//
-// 服务器要求: 静态资源 + 支持 Range + If-Range. 公共 CDN (Apple / cdimage.ubuntu.com /
-// cdimage.debian.org / fedoraproject.org / rockylinux.org / opensuse.org / Microsoft) 普遍满足.
-//
-// === 调用约定 ===
-//
-// - onProgress 在后台 URLSession delegate queue 调用, 不要直接动 UI; UI 调用方应自己
-//   调度回主线程. 频率为 100ms 节流 + 速率/ETA 用 5s 滑动窗口
-// - 抛 DownloadError; 调用方按需映射成自己的领域错误 (HVMError.install / .config 等)
-// - 自动处理 416 重试 (一次), 二次失败抛出
-// - 不做 SHA256 校验 (调用方在拿到 dest 后自验, 因为 catalog 里有 expected hash 时才有意义)
+// 调用约定: onProgress 在后台 delegate queue (100ms 节流 + 5s 滑窗速率/ETA), UI 自行 hop 主线程;
+// 抛 DownloadError 由调用方映射; 416 自动重试一次; 不做 SHA256 校验 (调用方拿到 dest 后自验).
 
 import Foundation
 import HVMCore
@@ -87,18 +70,11 @@ extension DownloadError: CustomStringConvertible {
 public enum ResumableDownloader {
     private static let log = HVMLog.logger("utils.download")
 
-    /// 通用断点续传下载.
-    ///
-    /// 行为:
-    /// - 检查 `dest` 是否已存在 + size > 0: **不**自动跳过 (调用方决定缓存策略); 这里只下载.
-    /// - 派生 `<dest>.partial` 与 `<dest>.partial.meta`, 按 If-Range 续传.
-    /// - 完成后 atomic rename `<dest>.partial` → `<dest>`, 删 `.meta` sidecar.
-    ///
+    /// 通用断点续传下载. 不检查 dest 缓存 (调用方决定缓存策略), 完成后 atomic rename → dest.
     /// - Parameters:
-    ///   - url: 远程下载地址 (https/http)
     ///   - dest: 目标本地路径 (调用方保证父目录存在)
-    ///   - timeoutForResource: 单次下载总超时 (秒), 默认 6 小时 (适用大 IPSW / ISO)
-    ///   - onProgress: 进度回调 (后台线程, 100ms 节流). 失败 / 完成时也会有 final tick (completed=true 则 receivedBytes==totalBytes)
+    ///   - timeoutForResource: 单次下载总超时 (秒), 默认 6 小时
+    ///   - onProgress: 进度回调 (后台线程, 100ms 节流), 完成时有 final tick
     /// - Returns: 完成后的 dest URL (与入参相同)
     @discardableResult
     public static func download(

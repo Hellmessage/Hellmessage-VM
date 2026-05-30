@@ -1,49 +1,11 @@
-// HVMUIConfirmDialog.swift — 新 GUI 二选一确认 dialog (PR-D4)
+// HVMUIConfirmDialog.swift — 新 GUI 二选一确认 dialog.
 //
-// 用法:
+// 关闭路径 → 结果: 主按钮 → .confirmed; 取消 / X / Esc / dismissAll → .cancelled.
+// destructive=true 时主按钮用 .destructive variant (红边红字), 给删除 / 重置等不可逆操作.
+// 视觉跟 AlertDialog 同体系, 不带 level icon.
 //
-//   1. 直接构造 + present (高级用法):
-//      dialog.present { handle in
-//          HVMUI.ConfirmDialog(
-//              title: "删除 VM?",
-//              message: "VM 'ubuntu-24' 的所有数据将被删除. 不可恢复.",
-//              confirmLabel: "删除",
-//              destructive: true,
-//              probeID: "dialog.deleteVM",
-//              onResult: { result in
-//                  handle.close()
-//                  if result == .confirmed { deleteVM() }
-//              }
-//          )
-//      }
-//
-//   2. async API (推荐):
-//      let result = await dialog.confirm(
-//          title: "删除 VM?",
-//          message: "VM 'ubuntu-24' 的所有数据将被删除. 不可恢复.",
-//          confirmLabel: "删除",
-//          destructive: true,
-//          probeID: "dialog.deleteVM"
-//      )
-//      if result == .confirmed { deleteVM() }
-//
-// 关闭路径 → 结果映射:
-//   - 主按钮 ("删除" / "确定") → .confirmed
-//   - 副按钮 ("取消") → .cancelled
-//   - X 关闭 → .cancelled
-//   - Esc → .cancelled
-//   - presenter.dismissAll() → .cancelled
-//
-// destructive=true 时主按钮用 .destructive variant (红边红字),
-// 业务场景: 删除 / 重置 / 加密 reset / 清除数据 等不可逆操作.
-//
-// 视觉: 跟 AlertDialog 同体系 (bgOverlay + borderEmphasis + 双层 shadow),
-// 但不带 level icon (Linear / macOS confirm 一般不带 icon, 文案表达足够).
-//
-// Probe id 派生:
-//   <probeID>.confirm — 主按钮
-//   <probeID>.cancel  — 副按钮
-//   <probeID>.close   — X 关闭
+// 业务侧首选 async API: let r = await dialog.confirm(...); if r == .confirmed { ... }.
+// Probe id 派生: <probeID>.confirm / .cancel / .close.
 
 
 import SwiftUI
@@ -159,14 +121,8 @@ private final class ResumeCoordinator {
 }
 
 extension HVMUI.DialogPresenter {
-    /// 便利 async API — 弹 confirm dialog + await 用户响应. 业务侧首选.
-    ///
-    /// 关闭路径 → 返回值:
-    ///   - 主按钮 → .confirmed
-    ///   - 取消 / X / Esc / dismissAll → .cancelled
-    ///
-    /// destructive=true 时主按钮 .destructive variant (红边红字),
-    /// 业务场景: 删除 / 重置 / 不可逆操作.
+    /// 便利 async API — present confirm dialog + await 用户响应.
+    /// 主按钮 → .confirmed; 取消 / X / Esc / dismissAll → .cancelled.
     func confirm(title: String,
                  message: String,
                  confirmLabel: String = "确定",
@@ -191,9 +147,7 @@ extension HVMUI.DialogPresenter {
                     )
                 },
                 onDismiss: {
-                    // Esc / dismissAll 直接关 dialog 没经过 onResult,
-                    // onDismiss 兜底 resume .cancelled. resumeIfNeeded 保证
-                    // 即使 onResult 已 resume 也不重复.
+                    // Esc / dismissAll 不经过 onResult, 这里兜底 resume .cancelled (resumeIfNeeded 防重复)
                     coordinator.resumeIfNeeded(.cancelled)
                 }
             )

@@ -1,10 +1,7 @@
-// VMControl+Encryption.swift — 整 VM 加密事务包装 (业务页 #3).
-//
-// 视图无关的加密/解密/rekey 收口, 给新 GUI dialog + (未来) CLI 复用. 内部解析 qemuImg +
-// Win OVMF VARS 模板路径 (跟 addDiskEncrypted 同款走 QemuPaths), 业务侧不碰后端路径.
-// 底层调 HVMEncryption 的三个 Operation; 仅 qemuPerfile scheme (VZ-sparsebundle 推后).
-//
-// progress 回调在**调用线程** (Operation 同步执行), 调用方 (store) 负责 hop 到 main.
+// VMControl+Encryption.swift — 视图无关的整 VM 加密/解密/rekey 收口 (GUI dialog + CLI 复用).
+// 内部解析 qemuImg + Win OVMF VARS 模板路径 (走 QemuPaths), 业务侧不碰后端路径.
+// 底层调 HVMEncryption 三个 Operation; 仅 qemuPerfile scheme.
+// progress 回调在调用线程同步触发, 调用方负责 hop 到 main.
 
 import Foundation
 import HVMBundle

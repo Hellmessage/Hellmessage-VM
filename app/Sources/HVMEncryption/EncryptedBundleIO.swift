@@ -1,19 +1,16 @@
 // HVMEncryption/EncryptedBundleIO.swift
-// 加密 VM 路由层 — 把 PR-1~7 全部底层模块缝合成一个干净接口.
-// 整 VM 加密设计 v2.3.
+// 加密 VM 路由层 — 缝合底层模块成一个干净接口.
 //
-// scheme (QEMU-only):
-//   qemu-perfile: .hvmz 真实路径, 文件 in-place 加密 (config.yaml.enc / qcow2 LUKS / OVMF LUKS / swtpm key)
+// scheme (QEMU-only) qemu-perfile: .hvmz 文件 in-place 加密
+// (config.yaml.enc / qcow2 LUKS / OVMF LUKS / swtpm key).
 //
-// API 简化原则:
-//   - create() 只建"加密外壳" (.hvmz 骨架 + config.yaml.enc + routing JSON)
-//     磁盘 / nvram / tpm 创建由调用方 (CreateVMDialog / VMHost) 用 sub keys 自己做
-//     EncryptedBundleIO 不管 disk 内容
-//   - unlock() 解锁后返回 handle, 调用方读 handle.bundleURL / handle.qemuSubKeys
-//   - close() 必调; QEMU 擦除内存中子 keys
+// API:
+//   - create() 只建"加密外壳" (.hvmz 骨架 + config.yaml.enc + routing JSON); 磁盘 / nvram /
+//     tpm 内容由调用方用 sub keys 自己做
+//   - unlock() 解锁后返 handle (读 bundleURL / qemuSubKeys); close() 必调
 //
-// 跨机器 portable: routing JSON 在加密外, 含 KDF 参数. 目标机读 JSON + 输密码 → 派生
-// 同 master KEK → 解锁. 不依赖 Keychain / iCloud / 任何本机状态.
+// 跨机器 portable: routing JSON 在加密外含 KDF 参数, 目标机读 JSON + 输密码 → 派生同
+// master KEK → 解锁. 不依赖 Keychain / iCloud / 任何本机状态.
 
 import Foundation
 import CryptoKit
@@ -28,9 +25,7 @@ public enum EncryptedBundleIO {
     /// create() 返回的句柄. 调用方完成磁盘 / config 创建后必须 close.
     public final class CreateHandle: @unchecked Sendable {
         public let scheme: EncryptionSpec.EncryptionScheme
-        /// 调用方读写 bundle 的实际路径:
-        ///   VZ:   <mountpoint>/<displayName>.hvmz (sparsebundle 已 attach)
-        ///   QEMU: <parent>/<displayName>.hvmz (真实地址)
+        /// 调用方读写 bundle 的实际路径 (<parent>/<displayName>.hvmz).
         public let bundleURL: URL
         /// QEMU 路径才有 (调用方注入 qemu-img / swtpm).
         public let qemuSubKeys: EncryptionKDF.SubKeySet?
@@ -87,8 +82,7 @@ public enum EncryptedBundleIO {
 
     // MARK: - 公开 API
 
-    /// 检测 bundle 路径是否走加密路径. 不解密.
-    /// 用于 hvm-cli list / GUI 列表显示 "[加密]" 标记.
+    /// 检测 bundle 是否走加密路径 (不解密). 用于 list / GUI 显示 "[加密]" 标记.
     public static func detectScheme(at bundleOrParentURL: URL,
                                      displayName: String? = nil) -> EncryptionSpec.EncryptionScheme? {
         let fm = FileManager.default
@@ -204,8 +198,8 @@ public enum EncryptedBundleIO {
             throw error
         }
 
-        // 4. 写 routing JSON (bundle 内 meta/encryption.json, 明文). guestOS 进 routing v3
-        // 让 GUI 解锁前正确显示 Win/Linux 不再 placeholder=.linux.
+        // 4. 写 routing JSON (bundle 内 meta/encryption.json, 明文). guestOS 让 GUI 解锁前
+        // 正确显示 Win/Linux.
         let routing = RoutingMetadata(vmId: vmId,
                                        scheme: .qemuPerfile,
                                        displayName: displayName,

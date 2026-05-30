@@ -43,8 +43,7 @@ public enum StorageError: Error, Sendable {
     case volumeSpaceInsufficient(requiredBytes: UInt64, availableBytes: UInt64)
     /// 导入磁盘镜像时的所有防呆错误 (格式不支持 / qemu-img 解析失败 / 越界缩容 / 文件不可读)
     case importInvalid(reason: String, path: String)
-    /// CloneManager: 源 bundle 与目标父目录分别在不同 APFS 卷, clonefile(2) 跨卷会被
-    /// 内核拒 (EXDEV); 提前 statfs 探测到差异时直接抛, 而非让底层报模糊错
+    /// CloneManager: 源与目标在不同 APFS 卷, clonefile(2) 跨卷会被内核拒 (EXDEV); 提前 statfs 探测到差异时抛
     case crossVolumeNotAllowed(source: String, target: String)
 }
 
@@ -59,7 +58,7 @@ public enum BackendError: Error, Sendable {
     case unsupportedGuestOS(raw: String)
     case invalidTransition(from: String, to: String)
     case vzInternal(description: String)
-    /// GUI 已拉起 `--host-mode-bundle` 子进程, 在时限内未观测到其持有 BundleLock (通常表示子进程已退出或极慢)
+    /// `--host-mode-bundle` 子进程在时限内未持有 BundleLock (通常已退出或极慢)
     case qemuHostStartupTimeout(waitedSeconds: Int, logPath: String)
 }
 
@@ -93,7 +92,7 @@ public enum IPCError: Error, Sendable {
     case serverBindFailed(path: String, errno: Int32)
 }
 
-// MARK: - Encryption (整 VM 加密, sparsebundle + Keychain)
+// MARK: - Encryption
 
 public enum EncryptionError: Error, Sendable {
     /// hdiutil 子命令以非 0 退出. verb 指 create/attach/detach/chpass/info 等
@@ -102,22 +101,21 @@ public enum EncryptionError: Error, Sendable {
     case wrongPassword
     /// 挂载点已有挂载或不可用
     case mountpointInUse(path: String)
-    /// hdiutil 输出 plist 解析失败 (理论上 hdiutil 有变动才会触发)
+    /// hdiutil 输出 plist 解析失败
     case parseFailed(reason: String)
     /// master KEK 长度不对 (固定 32 字节 = 256 bit)
     case invalidKeyLength(got: Int, expected: Int)
-    /// SecRandomCopyBytes 等系统 crypto 调用失败 (用户级几乎不会触发)
+    /// SecRandomCopyBytes 等系统 crypto 调用失败
     case randomGenerationFailed(status: Int32)
     /// PBKDF2 派生失败 (CommonCrypto / CryptoKit 报错)
     case kdfFailed(reason: String)
     /// qemu-img 子命令失败 (create / amend / resize / info 等)
     case qemuImgFailed(verb: String, exitCode: Int32, stderr: String)
-    /// LUKS 改密 step 1 (add new keyslot) 成功但 step 2 (remove old) 失败 — 此时 qcow2 处于"老 + 新都激活"中间态
-    /// 用户可重跑 rekey 或手工销毁老 keyslot. 数据不丢, 但需修复.
+    /// LUKS 改密: 加新 keyslot 成功但删老 keyslot 失败, qcow2 处于"老+新都激活"中间态. 重跑 rekey 即可修复, 数据不丢
     case luksRekeyHalfDone(reason: String)
 }
 
-// MARK: - Config (手动编辑 config.json 产生的语义错)
+// MARK: - Config (手动编辑 config.yaml 产生的语义错)
 
 public enum ConfigError: Error, Sendable {
     case missingField(name: String)
@@ -128,7 +126,7 @@ public enum ConfigError: Error, Sendable {
 
 // MARK: - UserFacing 映射
 
-/// 面向用户的错误呈现, GUI ErrorDialog / CLI json / hvm-dbg 共用
+/// 面向用户的错误呈现, GUI ErrorDialog / CLI / hvm-dbg 共用
 public struct UserFacingError: Sendable, Equatable, Codable {
     public let code: String
     public let message: String

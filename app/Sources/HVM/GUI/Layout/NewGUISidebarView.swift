@@ -1,7 +1,7 @@
-// SidebarView.swift — 左栏 VM 列表 (业务页 #1, M4).
+// NewGUISidebarView.swift — 左栏 VM 列表.
 //
-// 行: 运行态圆点 + displayName + guestOS badge + 加密锁图标; 选中行 bgHover + 左侧
-// accent 竖条. 点击选中, 右键 context menu (启停/删除). probeID `vmlist.row.item-<id>`.
+// 行: 运行态圆点 + displayName + guestOS badge + 加密锁图标; 选中行 bgHover + 左侧 accent 竖条.
+// 点击选中, 右键 context menu (启停/删除), 拖拽重排. probeID `vmlist.row.item-<id>`.
 
 
 import SwiftUI
@@ -48,12 +48,12 @@ struct NewGUISidebarView: View {
                 await dialog.alert(
                     level: .info,
                     title: "创建向导即将接入",
-                    message: "VM 创建向导是后续子稿 (NEW_GUI_CREATE_VM.md). 当前请用 hvm-cli create 或老 GUI 创建.",
+                    message: "VM 创建向导是后续子稿. 当前请用 hvm-cli create 或老 GUI 创建.",
                     probeID: "sidebar.create.placeholder"
                 )
             }
         }
-        // 跟 VM 列表行同样的横向内缩 (LazyVStack .padding(.horizontal, .sm)), 让按钮左右边与 item 对齐
+        // 跟 VM 列表行同样的横向内缩, 让按钮左右边与 item 对齐
         .padding(.horizontal, HVMTheme.space.sm)
         .padding(.vertical, HVMTheme.space.sm)
     }

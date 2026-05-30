@@ -1,10 +1,7 @@
 // HVMStorage/DiskFactory.swift
-// 磁盘文件创建 / 扩容 / 删除. 入口接收 DiskFormat 参数显式分流, 不再推断扩展名.
-//   - .raw   → ftruncate sparse (依赖 APFS sparse, VZ 后端必走)
-//   - .qcow2 → qemu-img create / resize (QEMU 后端走, 必传 qemuImg URL)
-// VZ 后端: VZDiskImageStorageDeviceAttachment 只接受 raw, 强约束.
-// QEMU 后端: 新建走 qcow2; 老 VM 已是 raw 仍可继续运行 (DiskSpec.format 持久化在 config).
-//
+// 磁盘文件创建 / 扩容 / 删除. 入口接收 DiskFormat 参数显式分流, 不推断扩展名.
+//   - .raw   → ftruncate sparse (仅导入的 raw 镜像)
+//   - .qcow2 → qemu-img create / resize (新建走此路, 必传 qemuImg URL)
 // 详见 CLAUDE.md "磁盘与存储约束".
 
 import Foundation

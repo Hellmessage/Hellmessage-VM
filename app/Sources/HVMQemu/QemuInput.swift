@@ -1,6 +1,5 @@
 // HVMQemu/QemuInput.swift
-// 高层输入注入: 把 hvm-dbg 的 args.text / args.press / mouse op 翻译成 QmpClient 调用.
-// 与 VZ 端 KeyboardEmulator + MouseEmulator 形态对齐.
+// 高层输入注入: 把 hvm-dbg 的 text / press / mouse op 翻译成 QmpClient 调用.
 
 import Foundation
 import CoreGraphics
@@ -27,17 +26,11 @@ public enum QemuInput {
         }
     }
 
-    /// 按组合键: "ctrl+c" / "cmd+space" / "meta+r" 等. 显式 modifier-then-key sequence:
-    ///   modifier 1 down → ... → modifier N down → 25ms → key down → 60ms → key up
-    ///   → modifier N up → ... → modifier 1 up
+    /// 按组合键: "ctrl+c" / "cmd+space" 等. 显式分帧:
+    ///   modifier down → 25ms → key down → 60ms → key up → modifier up (反序).
     ///
-    /// **关键**: USB HID 模式下 modifier byte 必须**先**置位再发 key code, 不能跟 key
-    /// 同 frame 一起发 (QEMU send-key 在 USB-kbd 模式下偶尔合成单一 HID report,
-    /// modifier+key 同帧 Windows HID stack 接不全, system shortcut 如 Win+R / Ctrl+Shift+Esc
-    /// 直接失效). 实测 25ms modifier-key 间隔 + 60ms hold + 显式分帧 release 后
-    /// Win+R / Ctrl+Shift+Esc / Ctrl+Alt+Delete 等系统快捷键稳定 trigger.
-    ///
-    /// 兜底: 单 key (无 modifier) 走旧 send-key 路径 (简单字符 / 功能键 send-key 已稳定).
+    /// **关键**: USB HID 模式下 modifier byte 必须先置位再发 key code, 不能同帧 (否则 Windows
+    /// HID stack 接不全, Win+R / Ctrl+Shift+Esc 等系统快捷键失效). 单 key 走 send-key 兜底.
     public static func pressCombo(_ combo: String, via client: QmpClient) async throws {
         let qkeys: [String]
         do {
@@ -86,11 +79,8 @@ public enum QemuInput {
     }
 
     /// 鼠标点击: 移动 → 按下 → 等 80ms → 释放. button: "left"/"right"/"middle".
-    /// **关键**: button down 跟 up 必须**分开 input-send-event 发**, 中间 sleep, 否则
-    /// QEMU USB-tablet 把 down/up 合成一次 USB HID report (modifier byte 不变), Windows
-    /// HID stack 没 trigger 完整 click event, 接成 "hover/short tap" UI 状态 → app
-    /// 收不到 click. 实测 80ms 间隔 Win 11 + ARM viogpudo 稳定 register, 50ms 偶尔
-    /// 仍接成 hover (DWM 跨 frame 取样). 高于 100ms 会有视觉延迟感, 取 80ms 折中.
+    /// **关键**: down 跟 up 必须分开 input-send-event 发 + 中间 sleep, 否则 Windows HID stack
+    /// 接成 "hover/short tap" 收不到 click. 80ms 是实测 Win11 + ARM viogpudo 稳定值 (50ms 偶尔失败).
     public static func mouseClick(
         x: Int, y: Int,
         button: String = "left",
@@ -100,13 +90,13 @@ public enum QemuInput {
         guard ["left", "right", "middle"].contains(button) else {
             throw InputError.unsupportedButton(button)
         }
-        // 1) 先 move + button down (合一帧, 减少 RTT)
+        // 1) move + button down 合一帧 (减少 RTT)
         var downEvents = absMoveEvents(x: x, y: y, guestSize: guestSize)
         downEvents.append(["type": "btn", "data": ["button": button, "down": true]])
         try await client.inputSendEvent(events: downEvents)
         // 2) 等 USB HID + Windows DWM 注册 down
         try await Task.sleep(nanoseconds: 80_000_000)
-        // 3) button up (单独一帧)
+        // 3) button up 单独一帧
         try await client.inputSendEvent(events: [
             ["type": "btn", "data": ["button": button, "down": false]]
         ])
@@ -124,9 +114,8 @@ public enum QemuInput {
         try await mouseClick(x: x, y: y, button: button, guestSize: guestSize, via: client)
     }
 
-    /// 拖拽: move 到起点 → 按下 → N 步线性插值 move → 释放.
-    /// 中间步数固定 8 (含起点 + 终点共 10 帧), 每帧间隔 20ms, 模拟人类拖拽节奏.
-    /// guest 内 GUI (Win/Linux) 一般要求"按下后有移动事件"才认 drag, 所以中间步是必须的.
+    /// 拖拽: move 到起点 → 按下 → 8 步线性插值 move → 释放, 每帧 20ms.
+    /// guest GUI 一般要求"按下后有移动事件"才认 drag, 中间步必须有.
     public static func mouseDrag(
         fromX: Int, fromY: Int,
         toX: Int, toY: Int,
@@ -138,13 +127,13 @@ public enum QemuInput {
             throw InputError.unsupportedButton(button)
         }
 
-        // 1. 先 move 到起点 + 按下 (合一帧发, 减少 RTT)
+        // 1. move 到起点 + 按下 合一帧
         var startEvents = absMoveEvents(x: fromX, y: fromY, guestSize: guestSize)
         startEvents.append(["type": "btn", "data": ["button": button, "down": true]])
         try await client.inputSendEvent(events: startEvents)
         try await Task.sleep(nanoseconds: 20_000_000)
 
-        // 2. 中间线性插值 (闭区间 [fromX,toX] 上的 8 个内部点 + 终点); 不含起点 (已在 1 发过)
+        // 2. 中间线性插值 (8 个内部点 + 终点, 不含起点)
         let steps = 8
         for i in 1...steps {
             let t = Double(i) / Double(steps)

@@ -1,9 +1,6 @@
 // HVMUtils/FSCleanup.swift
-// 文件清理 helper. 之前业务侧大量 `try? FileManager.removeItem(at:)` 静默吞错;
-// 失败时残留 socket 会让 QEMU 下次 bind 报神秘 "address already in use", 用户难定位.
-//
-// 这里给清理接口加一层: 文件不存在视为成功(常见情况, 不打日志); 其他错误 log warning,
-// 不阻塞流程 (清理本来就是尽力而为, 不应让主流程挂死).
+// 文件清理 helper. 替代 `try? FileManager.removeItem` 静默吞错 (残留 socket 会让 QEMU 下次 bind 报
+// "address already in use" 难定位). 文件不存在视为成功不打日志; 其他错误 log warning 不阻塞流程.
 
 import Foundation
 import HVMCore

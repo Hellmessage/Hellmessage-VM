@@ -1,11 +1,6 @@
-// NewGUIApp.swift — 新 GUI 主入口 + Theme token 演示页 (PR-T1 + T2)
+// NewGUIApp.swift — 新 GUI 主入口 (AppKit runloop + tray + 菜单) + 组件 Showcase 演示页.
 //
-// 编译开关: 仅 `make build GUI=new` (透传 -Xswiftc -DNEW_GUI) 时整文件参与编译.
-// 老 GUI (app/Sources/HVM/UI/**) 一行不动, 默认构建仍走 HVMAppLauncher.
-//
-// 目前页面是 Theme token 演示卡片 (色板 / 字号 / spacing / radius / accent),
-// 给 PR-T1 + T2 验收用. 后续 PR-C* 落基础组件时,
-// 这里逐步替换为业务页 (sidebar + detail) 骨架, 演示页留 Components Showcase 子稿.
+// 默认走业务页 MainLayoutView; HVM_GUI_SHOWCASE=1 退回 NewGUIRootView 组件 Showcase (living doc / 视觉回归).
 
 
 import AppKit
@@ -25,16 +20,9 @@ final class NewGUIAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         NSApp.appearance = NSAppearance(named: .darkAqua)
         NSApp.setActivationPolicy(.regular)
 
-        // 锁定最小尺寸三件套 (单写 win.minSize 不够, 三条都要):
-        //   1. root view .frame(minWidth:, minHeight:) — SwiftUI 层声明最小
-        //   2. host.sizingOptions = .minSize — macOS 13+ 让 hostingController 把 SwiftUI
-        //      minWidth/minHeight 自动同步到 window.contentMinSize
-        //   3. win.contentMinSize = ... — 直接锁 content 区下限 (不含标题栏); 双保险
-        // 不用 win.minSize: 它含 28px 标题栏, 设 1080×720 时 content 仍能压到 1080×692.
-        // 默认走业务页 MainLayoutView (sidebar + detail 两栏);
-        // HVM_GUI_SHOWCASE=1 时退回 NewGUIRootView 组件 Showcase (组件 living doc / 视觉回归).
-        // .hvmDialogHost() 套在 NSHostingController root view 外层 — 作为根 view 的真正祖先,
-        // 让内部 @EnvironmentObject 能拿到 DialogPresenter.
+        // 锁定最小尺寸三件套 (单写 win.minSize 不够): root view .frame(min) + host.sizingOptions = .minSize
+        // + win.contentMinSize. 不用 win.minSize (含 28px 标题栏, content 仍能被压).
+        // .hvmDialogHost() 套在 root view 外层作祖先, 让内部 @EnvironmentObject 拿到 DialogPresenter.
         let showcase = ProcessInfo.processInfo.environment["HVM_GUI_SHOWCASE"] == "1"
         let rootView: AnyView = showcase
             ? AnyView(NewGUIRootView())
@@ -60,21 +48,16 @@ final class NewGUIAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         // 状态栏 tray 图标 — 隐藏窗口后 app 进 .accessory (Dock 图标消失), tray 是唯一恢复/退出入口.
         installStatusItem()
 
-        // 菜单栏 — 纯 AppKit NSApplication 必须显式设 mainMenu, 否则:
-        //   1. Cmd+Q 无 terminate: 菜单项响应 → 系统 beep 且不触发 applicationShouldTerminate
-        //   2. 输入框 Cmd+C/V/X/A/Z 标准编辑快捷键也无 key equivalent → 不工作
+        // 菜单栏 — 纯 AppKit 必须显式设 mainMenu, 否则 Cmd+Q / 输入框 Cmd+C/V/X/A/Z 全失效
         installMainMenu()
 
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
-        // 窗口出现时 AppKit 默认把首个文本框 (详情页 CPU 输入框) 设为 firstResponder
-        // 并选中内容 — 不想要这个自动聚焦. async 到下一 runloop (SwiftUI 初始布局后) 清掉.
+        // 清掉 AppKit 默认把首个文本框设为 firstResponder 的自动聚焦 (async 到下一 runloop)
         DispatchQueue.main.async { [weak win] in win?.makeFirstResponder(nil) }
 
-        // HDP-GUI probe server (HVM_GUI_PROBE=1 时 unix socket 接 hvm-dbg gui).
-        // 老 GUI 在 HVMAppDelegate 启的; 新 GUI 也得启, 不然 hvm-dbg gui ping 连不上.
-        // PR-C1 起新 GUI 接入自动化测试通路.
+        // HDP-GUI probe server (HVM_GUI_PROBE=1 时 unix socket 接 hvm-dbg gui)
         ProbeServer.start()
     }
 
@@ -213,9 +196,6 @@ public enum NewGUIAppLauncher {
 // MARK: - Root + Theme 演示页
 
 private struct NewGUIRootView: View {
-    // PR-D1: @EnvironmentObject 拿 dialog presenter. .hvmDialogHost() 在
-    // NSHostingController root view 外层套 (NewGUIAppDelegate), 是 NewGUIRootView
-    // 的祖先, environment 注入有效.
     @EnvironmentObject private var dialog: HVMUI.DialogPresenter
 
     @State private var probeClickLog: String = "—"
@@ -226,14 +206,8 @@ private struct NewGUIRootView: View {
                 .ignoresSafeArea()
 
             ScrollView {
-                // 反向 zIndex (上→下递减) — 让上面 sectionCard 内的 Select popover
-                // .overlay 视觉上浮在下方 sectionCard 之上, 不被默认 VStack 后绘
-                // 顺序压住. 治标方案; PR-D1 OverlayContainer 后用 root-level
-                // ZStack 渲染浮窗, 彻底解决.
-                //
-                // 节顺序 (C8 整理): 从直接看到的视觉 (header) → 用户最常用的
-                // 交互组件 (操作类/输入类/复杂类) → 装饰类 (icon/tooltip) →
-                // Theme token 参考 (放最下面给"我想知道色板/字号" 时查).
+                // 反向 zIndex (上→下递减) 让上面 sectionCard 内的 Select popover 浮在下方之上.
+                // 节顺序: header → 交互组件 → 装饰类 → Theme token 参考.
                 VStack(alignment: .leading, spacing: HVMTheme.space.xl) {
                     headerBlock.zIndex(140)
                     dialogDemoBlock.zIndex(135)
@@ -257,9 +231,6 @@ private struct NewGUIRootView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        // PR-D1 OverlayContainer: .hvmDialogHost() 套外层在 NSHostingController
-        // 创建时 (NewGUIRootView().hvmDialogHost()), NewGUIRootView 自己可以
-        // @EnvironmentObject 拿 dialog.
         .frame(minWidth: 1080, idealWidth: 1080, minHeight: 720, idealHeight: 720)
     }
 
@@ -283,7 +254,6 @@ private struct NewGUIRootView: View {
         }
     }
 
-    // 色板 — 横排 swatch
     private var colorPaletteBlock: some View {
         sectionCard(title: "Colors",
                     description: "Theme token 色板 — 业务侧禁直写 Color(red:), 一律走 HVMTheme.color.<name>") {
@@ -333,7 +303,6 @@ private struct NewGUIRootView: View {
         }
     }
 
-    // 字号节奏
     private var typographyBlock: some View {
         sectionCard(title: "Typography",
                     description: "字号节奏严格 11/12/13/14/18/24, 不留中间值. mono 仅用于 UUID/MAC/路径") {
@@ -361,7 +330,6 @@ private struct NewGUIRootView: View {
         }
     }
 
-    // 间距 — 横向 bar 长度差
     private var spacingBlock: some View {
         sectionCard(title: "Spacing (4-pt grid)",
                     description: "Linear 同款 4-pt grid. 业务侧禁直写 .padding(8) 等硬数字, 走 HVMTheme.space") {
@@ -392,7 +360,6 @@ private struct NewGUIRootView: View {
         }
     }
 
-    // 圆角档位
     private var radiusBlock: some View {
         sectionCard(title: "Radius",
                     description: "圆角 4 档: sm (badge) / md (字段) / lg (Section) / xl (Dialog)") {
@@ -421,7 +388,6 @@ private struct NewGUIRootView: View {
         }
     }
 
-    // 动效占位 — hover 改 bg 验三档时长感
     private var motionBlock: some View {
         sectionCard(title: "Motion",
                     description: "时长三档: fast (120ms hover) / base (200ms focus) / slow (320ms 切页). Hover 试试 ↓") {
@@ -433,7 +399,6 @@ private struct NewGUIRootView: View {
         }
     }
 
-    // PR-C4 — HVMUI.Select (下拉 + 搜索 + 键盘导航 + probe)
     enum DemoEngine: Hashable { case vz, qemu }
     @State private var engineSelection: DemoEngine? = .vz
     @State private var isoSelection: String? = nil
@@ -442,8 +407,7 @@ private struct NewGUIRootView: View {
     private var selectsBlock: some View {
         sectionCard(title: "Select (PR-C4)",
                     description: "自绘下拉, 不用 SwiftUI .popover. generic value + 搜索 + 键盘 ↑↓Enter + 互斥打开 + 派生 probe id") {
-            // 反向 zIndex 让上面 fieldRow 的 Select popover 浮在下方 fieldRow 之上.
-            // 治标方案; PR-D1 OverlayContainer 彻底解决.
+            // 反向 zIndex 让上面 Select popover 浮在下方 fieldRow 之上
             VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
                 fieldRow("Basic") {
                     HVMUI.Select(
@@ -542,20 +506,18 @@ private struct NewGUIRootView: View {
         }
     }
 
-    // PR-C3 — HVMUI.Toggle + HVMUI.Checkbox (size + spring + indeterminate + probe)
     @State private var autoStart: Bool = true
     @State private var networkOn: Bool = false
     @State private var hostKeyboard: Bool = true
     @State private var hostMouse: Bool = false
     @State private var termsAccepted: Bool = false
     @State private var filterRunning: Bool = true
-    @State private var selectAllPartial: Bool = false  // indeterminate demo
+    @State private var selectAllPartial: Bool = false
 
     private var togglesBlock: some View {
         sectionCard(title: "Toggle / Checkbox (PR-C3)",
                     description: "3 档 size + spring 切换 + indeterminate 半选态 + disabled 灰化用 bgDisabled token") {
             VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
-                // Toggle 三档 size + label/hint
                 fieldRow("Toggle Sizes") {
                     HVMUI.Toggle("自动启动", isOn: $autoStart, size: .sm,
                                  probeID: "showcase.toggle.autostart.sm")
@@ -566,7 +528,6 @@ private struct NewGUIRootView: View {
                                  probeID: "showcase.toggle.autostart.lg")
                 }
 
-                // Toggle 各种 binding 状态
                 fieldRow("Toggle States") {
                     HVMUI.Toggle("启用网络", isOn: $networkOn,
                                  hint: networkOn ? "vmnet daemon 正在运行" : "未启",
@@ -579,7 +540,6 @@ private struct NewGUIRootView: View {
                                  probeID: "showcase.toggle.mouse.disabled")
                 }
 
-                // Checkbox 三档 size
                 fieldRow("Checkbox Sizes") {
                     HVMUI.Checkbox("仅显示运行中", isOn: $filterRunning, size: .sm,
                                    probeID: "showcase.checkbox.filter.sm")
@@ -589,7 +549,6 @@ private struct NewGUIRootView: View {
                                    probeID: "showcase.checkbox.filter.lg")
                 }
 
-                // Checkbox indeterminate + disabled
                 fieldRow("Checkbox States") {
                     HVMUI.Checkbox("我同意条款", isOn: $termsAccepted,
                                    probeID: "showcase.checkbox.terms")
@@ -601,7 +560,6 @@ private struct NewGUIRootView: View {
                                    probeID: "showcase.checkbox.disabled")
                 }
 
-                // probe 反馈
                 HStack(spacing: HVMTheme.space.sm) {
                     Text("hvm-dbg gui click --identifier showcase.toggle.network")
                         .font(HVMTheme.font.monoSm)
@@ -615,7 +573,6 @@ private struct NewGUIRootView: View {
         }
     }
 
-    // PR-C2 — HVMTextField + HVMSecureField (size + state 完备 + a11y + probe)
     @State private var vmName: String = ""
     @State private var cpuCount: String = "4"
     @State private var ipsw: String = ""
@@ -626,7 +583,6 @@ private struct NewGUIRootView: View {
         sectionCard(title: "TextField / SecureField (PR-C2)",
                     description: "3 档 size + 7 状态 (empty/filled/focused/hover/error/loading/disabled) + focus ring 渐现 + 共享 FieldChrome modifier") {
             VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
-                // 三档 size
                 fieldRow("Sizes (.sm / .md / .lg)") {
                     HVMUI.TextField("名称", text: $vmName, placeholder: "我的 VM",
                                  size: .sm, probeID: "showcase.field.name.sm")
@@ -639,7 +595,6 @@ private struct NewGUIRootView: View {
                         .frame(maxWidth: 280)
                 }
 
-                // icon + suffix
                 fieldRow("Icon + Suffix") {
                     HVMUI.TextField("CPU", text: $cpuCount, placeholder: "4",
                                  icon: "cpu", suffix: "核",
@@ -651,7 +606,6 @@ private struct NewGUIRootView: View {
                         .frame(maxWidth: 320)
                 }
 
-                // 错误 + loading + disabled
                 fieldRow("States") {
                     HVMUI.TextField("Error", text: $vmName, placeholder: "至少 1 字符",
                                  errorMessage: vmName.isEmpty ? "VM 名称不能为空" : nil,
@@ -667,7 +621,6 @@ private struct NewGUIRootView: View {
                         .frame(maxWidth: 200)
                 }
 
-                // SecureField 带 toggle
                 fieldRow("SecureField") {
                     HVMUI.SecureField("密码", text: $password,
                                    placeholder: "至少 8 字符",
@@ -678,7 +631,6 @@ private struct NewGUIRootView: View {
                         .frame(maxWidth: 320)
                 }
 
-                // probe 反馈
                 HStack(spacing: HVMTheme.space.sm) {
                     Text("hvm-dbg gui type --identifier showcase.field.name.md --text foo")
                         .font(HVMTheme.font.monoSm)
@@ -705,12 +657,10 @@ private struct NewGUIRootView: View {
         }
     }
 
-    // PR-D1 — OverlayContainer demo (DialogHost + DialogPresenter) + PR-D3 AlertDialog
     private var dialogDemoBlock: some View {
         sectionCard(title: "OverlayContainer + AlertDialog (PR-D1 / D3)",
                     description: "全局 dialog 渲染容器 — popover 渲染到 root-level ZStack. Alert 4 档 (info/warn/error/success) async API. Confirm/Input/Wizard 后续 D4-D6") {
             VStack(alignment: .leading, spacing: HVMTheme.space.md) {
-                // PR-D1: 基础 dialog stack (SimpleDialogCard 自定义内容)
                 fieldRow("Custom dialog (PR-D1)") {
                     HVMUI.Button("打开简单 Dialog", variant: .primary,
                                  probeID: "showcase.dialog.show") {
@@ -751,7 +701,6 @@ private struct NewGUIRootView: View {
                     }
                 }
 
-                // PR-D3: AlertDialog 4 档 (async API + 派生 probe id)
                 fieldRow("AlertDialog (PR-D3, async API)") {
                     HVMUI.Button("Info", variant: .secondary, icon: "info.circle",
                                  probeID: "showcase.alert.info") {
@@ -802,7 +751,6 @@ private struct NewGUIRootView: View {
                     }
                 }
 
-                // PR-D4: ConfirmDialog (async API + destructive 可选)
                 fieldRow("ConfirmDialog (PR-D4, async API)") {
                     HVMUI.Button("普通确认", variant: .secondary,
                                  probeID: "showcase.confirm.normal") {
@@ -832,7 +780,6 @@ private struct NewGUIRootView: View {
                     }
                 }
 
-                // PR-D5: InputDialog (单字段 / 多字段 / secure + validate)
                 fieldRow("InputDialog (PR-D5, async API)") {
                     HVMUI.Button("单字段 (重命名)", variant: .secondary, icon: "pencil",
                                  probeID: "showcase.input.rename") {
@@ -907,7 +854,6 @@ private struct NewGUIRootView: View {
                     }
                 }
 
-                // PR-D6: WizardDialog (多步骤 + 步骤指示器 + 上一步/下一步)
                 fieldRow("WizardDialog (PR-D6, async API)") {
                     HVMUI.Button("创建 VM 向导 (3 步)",
                                  variant: .primary, icon: "wand.and.stars",
@@ -969,7 +915,7 @@ private struct NewGUIRootView: View {
         }
     }
 
-    // PR-D6 — Wizard 各步 demo 内容 (静态展示, 不持业务态)
+    // Wizard 各步 demo 内容 (静态展示, 不持业务态)
 
     private var wizardStepDemoOS: some View {
         VStack(alignment: .leading, spacing: HVMTheme.space.md) {
@@ -1012,12 +958,10 @@ private struct NewGUIRootView: View {
         }
     }
 
-    // PR-C6 — HVMUI.Icon / KbdHint / Tooltip (辅助组件)
     private var iconsBlock: some View {
         sectionCard(title: "Icon / KbdHint / Tooltip (PR-C6)",
                     description: "辅助组件: Icon 包装 SF Symbol (5 size + 9 color), KbdHint 快捷键 chip (typed Key enum), Tooltip 自绘 hover 500ms delay") {
             VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
-                // Icon sizes
                 fieldRow("Icon sizes (.xs / .sm / .md / .lg / .xl)") {
                     HVMUI.Icon("gear", size: .xs)
                     HVMUI.Icon("gear", size: .sm)
@@ -1026,7 +970,6 @@ private struct NewGUIRootView: View {
                     HVMUI.Icon("gear", size: .xl)
                 }
 
-                // Icon colors
                 fieldRow("Icon colors") {
                     HVMUI.Icon("checkmark.circle.fill", size: .lg, color: .success)
                     HVMUI.Icon("exclamationmark.triangle.fill", size: .lg, color: .warn)
@@ -1036,7 +979,6 @@ private struct NewGUIRootView: View {
                     HVMUI.Icon("ellipsis", size: .lg, color: .secondary)
                 }
 
-                // KbdHint
                 fieldRow("KbdHint") {
                     HVMUI.KbdHint("⌘+S")
                     HVMUI.KbdHint(keys: [.cmd, .shift], char: "P")
@@ -1045,7 +987,6 @@ private struct NewGUIRootView: View {
                     HVMUI.KbdHint(keys: [.esc], size: .sm)
                 }
 
-                // Tooltip demo — hover 按钮 500ms 后出 tooltip
                 fieldRow("Tooltip (hover 500ms 后出)") {
                     HVMUI.Button(icon: "trash", variant: .ghost,
                                  probeID: "showcase.tooltip.button.delete") { }
@@ -1066,12 +1007,10 @@ private struct NewGUIRootView: View {
         }
     }
 
-    // PR-C5 — HVMUI.Section / Divider / Badge
     private var sectionsBlock: some View {
         sectionCard(title: "Section / Divider / Badge (PR-C5)",
                     description: "业务页骨架基石: Section (default/elevated + layered shadow + double border), Divider (h/v), Badge (6 variant × 2 size)") {
             VStack(alignment: .leading, spacing: HVMTheme.space.lg) {
-                // Section variants (default / elevated)
                 fieldRow("Section variants") {
                     HVMUI.Section("默认卡片", description: "default — bgRaised + 轻 shadow") {
                         Text("section content goes here")
@@ -1088,7 +1027,6 @@ private struct NewGUIRootView: View {
                     .frame(maxWidth: 280)
                 }
 
-                // Section with footer
                 HVMUI.Section("Section with footer", description: "footer 区会自动加 Divider 跟 content 隔开") {
                     VStack(alignment: .leading, spacing: HVMTheme.space.sm) {
                         Text("⌘ 主操作放 footer 右侧")
@@ -1110,7 +1048,6 @@ private struct NewGUIRootView: View {
                     }
                 }
 
-                // Dividers
                 fieldRow("Dividers") {
                     VStack(spacing: 0) {
                         Text("上方内容")
@@ -1143,7 +1080,6 @@ private struct NewGUIRootView: View {
                     .frame(height: 56)
                 }
 
-                // Badges
                 fieldRow("Badge variants") {
                     HVMUI.Badge("Running", variant: .success, icon: "circle.fill")
                     HVMUI.Badge("Warning", variant: .warn, icon: "exclamationmark.triangle")
@@ -1164,7 +1100,6 @@ private struct NewGUIRootView: View {
         }
     }
 
-    // PR-C1b — 5 variant + 3 size + focus ring + loading + iconPosition + probe
     @State private var simulateButtonLoading: Bool = false
 
     private var buttonsBlock: some View {
@@ -1275,8 +1210,7 @@ private struct NewGUIRootView: View {
     }
 
     @ViewBuilder
-    /// Showcase 节包装 — 改用 HVMUI.Section (C8 整理: Showcase 自己也用新组件,
-    /// 不再有独立 helper). 接受 title + 可选 description 副文案.
+    /// Showcase 节包装 — HVMUI.Section + title + 可选 description.
     private func sectionCard<Content: View>(
         title: String,
         description: String? = nil,
@@ -1288,7 +1222,7 @@ private struct NewGUIRootView: View {
     }
 }
 
-/// 简单 dialog 卡片 — D1 demo 用. D3 AlertDialog 落地后业务侧改用 dialog.alert(...)
+/// 简单 dialog 卡片 — Showcase demo 用 (业务侧改用 dialog.alert(...) 等 async API)
 private struct SimpleDialogCard: View {
     let handle: HVMUI.DialogHandle
     let title: String
@@ -1344,7 +1278,7 @@ private struct SimpleDialogCard: View {
     }
 }
 
-/// hover 触发 bg 切换 — 验动效 token 实际时长感觉.
+/// hover 触发 bg 切换 — 验动效 token 时长.
 private struct MotionDemoTile: View {
     let label: String
     let animation: Animation

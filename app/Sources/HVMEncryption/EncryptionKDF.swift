@@ -1,22 +1,15 @@
 // HVMEncryption/EncryptionKDF.swift
-// 从 master KEK 派生 4 个 32 字节子 key. HKDF-SHA256, info 字符串当版本.
-// 整 VM 加密设计 v2.2 "密钥管理 三层密钥".
+// 从 master KEK 派生 4 个 32 字节子 key. HKDF-SHA256, info 字符串区分用途.
 //
-// 流程 (启动加密 QEMU VM 时):
-//   master_KEK = PasswordKDF.deriveMasterKey(password, salt, iter)   // 32 字节
+//   master_KEK = PasswordKDF.deriveMasterKey(...)   // 32 字节
 //   sub_keys   = EncryptionKDF.deriveAll(masterKey: master_KEK)
 //        ├─ qcow2-disk-key  (32B) → -object secret 注入 qemu-img / qemu-system
 //        ├─ qcow2-nvram-key (32B) → 同上, OVMF VARS LUKS qcow2
 //        ├─ swtpm-key       (32B) → swtpm --key fd= 透传
 //        └─ config-key      (32B) → AES.GCM.SealedBox(config.yaml)
 //
-// 不用 salt:
-//   master_KEK 已经是 PBKDF2(password, 16-byte random salt) 派生 — 自带高熵.
-//   HKDF salt 留空, info 字符串区分子 key 的"用途上下文".
-//
-// info 字符串当版本:
-//   未来加新加密点 (例: backup-key) 时直接加新 SubKeyKind, info 字符串唯一不冲突.
-//   不会"破坏"老 VM (它只用 4 个老子 key, 新子 key 派生与否不影响).
+// HKDF salt 留空: master_KEK 已是 PBKDF2(password, 16B random salt) 派生, 自带高熵.
+// info 字符串当用途上下文; 加新加密点直接加 SubKeyKind, info 唯一不影响老 VM.
 
 import Foundation
 import CryptoKit
@@ -57,10 +50,7 @@ public enum EncryptionKDF {
         }
     }
 
-    /// 一次派生全部 4 子 key.
-    /// **避重复 derive**: 之前 deriveAll 内调 derive() 4 次, 每次都跑一遍 master.withBytes
-    /// + 新构造 inputKM SymmetricKey, master KEK 字节在普通堆中露面 4 次.
-    /// 现在改成单次进 mlock buffer, 4 个子 key 都在同一 closure 内算完, 暴露面收到 1 次.
+    /// 一次派生全部 4 子 key. 单次进 mlock buffer 算完 4 个, master KEK 字节暴露面只 1 次.
     public static func deriveAll(masterKey: MasterKey) -> SubKeySet {
         masterKey.withBytes { rawBuf -> SubKeySet in
             SubKeySet(
@@ -72,9 +62,9 @@ public enum EncryptionKDF {
         }
     }
 
-    /// 内部 helper: 直接从 mlock raw bytes 出发跑 HKDF. 复用 inputKM 构造一次.
-    /// 注: SymmetricKey(data:) 会拷一次到 CryptoKit 的内部 storage, 但 CryptoKit 自带 secure 内存
-    /// (kCFAllocatorPrivate 走 mach_vm_allocate + free 前 zero), 跟 mlock 等价不破坏防护.
+    /// 内部 helper: 直接从 mlock raw bytes 跑 HKDF.
+    /// SymmetricKey(data:) 拷一次到 CryptoKit 内部 storage, 但其自带 secure 内存 (mach_vm_allocate
+    /// + free 前 zero), 跟 mlock 等价不破坏防护.
     private static func deriveFromRaw(rawBuf: UnsafeRawBufferPointer, kind: SubKeyKind) -> SymmetricKey {
         let inputKM = SymmetricKey(data: Data(rawBuf))
         return HKDF<SHA256>.deriveKey(

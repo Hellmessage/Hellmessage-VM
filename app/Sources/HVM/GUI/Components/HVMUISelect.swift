@@ -1,40 +1,11 @@
-// HVMUISelect.swift — 新 GUI 下拉选择 (PR-C4)
+// HVMUISelect.swift — 新 GUI 下拉选择.
 //
-// 自家绘制 (不用 NSPopUpButton / NSMenu / SwiftUI .popover), trigger 复用
-// HVMUI.FieldChrome, 下拉用 ZStack overlay 浮窗 — 无系统 vibrancy / arrow /
-// 阴影侵入, 完全自家绘 (bgOverlay + 边框 + 圆角 lg + 自家 shadow).
+// 自家绘制 (不用 NSPopUpButton / NSMenu / SwiftUI .popover), trigger 复用 FieldChrome,
+// 下拉用 .overlay 浮窗 (bgOverlay + 边框 + 圆角 + 自家 shadow). 支持 searchable + 键盘导航.
+// 用法: HVMUI.Select("引擎", selection: $engine, options: [...], probeID: "...")
 //
-// 用法:
-//   HVMUI.Select("引擎", selection: $engine, options: [
-//       .init(value: .vz,   label: "VZ (推荐)", hint: "Apple 原生"),
-//       .init(value: .qemu, label: "QEMU",     hint: "Windows ARM64"),
-//   ])
-//
-//   HVMUI.Select("ISO", selection: $iso, options: isoList,
-//                placeholder: "选择 ISO 镜像...",
-//                searchable: true,
-//                probeID: "dialog.createVM.select.iso")
-//
-// 视觉:
-//   - trigger: FieldChrome 外框 (跟 TextField 同) + label 主 / chevron.down 右
-//   - popover: bgOverlay 卡片, 1px borderDefault, 阴影一档, 圆角 lg
-//   - row 高 32, hover bgHover, 当前 selection 行尾 checkmark accent
-//   - keyboard 高亮: accentMuted bg + 1px borderFocus 边
-//
-// 键盘:
-//   - trigger focus + Space/Return/Down 开下拉
-//   - 下拉内 ↑↓ 切 highlight, Enter 选定, Esc 关
-//   - searchable 时 search field 抢首焦, 文字过滤选项
-//
-// a11y:
-//   - trigger accessibilityLabel = label
-//   - accessibilityValue = 当前 option.label (或 placeholder 当 nil)
-//   - 选项 row accessibilityElement 朗读 "选中" / "未选中"
-//
-// probe: 用 .textField role (ProbeAction 没 generic .select):
-//   - getter 返当前 option.label
-//   - setter 接 label 字符串, 内部 first(where: $0.label == X) 选中
-//   - hvm-dbg gui type --identifier X --text "VZ (推荐)" 选 VZ 选项
+// probe 用 .textField role (无 generic .select): getter 返当前 option.label, setter 按 label 匹配选中.
+//   hvm-dbg gui type --identifier X --text "<label>" 选对应项.
 
 
 import SwiftUI
@@ -44,9 +15,7 @@ import HVMGuiProbe
 extension HVMUI {
 
 /// 全局 select 协调器 — 保证一次最多一个下拉框打开. 每个 Select 持 UUID,
-/// openPopover() 时调 coordinator.openSelectID = self.id, 其他 Select 监听
-/// .onChange 发现不是自己的 ID 就强制关闭 isOpen.
-/// @Observable singleton 让 SwiftUI 自动追踪 mutation 触发 re-render.
+/// openPopover() 时设 openSelectID = self.id, 其他 Select 监听 .onChange 发现不是自己就关.
 @MainActor
 @Observable
 final class SelectCoordinator {
@@ -141,15 +110,11 @@ struct Select<Value: Hashable>: View {
     @State private var searchText = ""
     @State private var highlightedIndex: Int = 0
     @FocusState private var triggerFocused: Bool
-    /// 每个 Select 唯一 ID, 给 SelectCoordinator 做"当前打开的 select"识别用.
-    /// @State 让它在 view 生命周期内稳定 (普通 let 在 SwiftUI struct 重建时也稳定但
-    /// 用 @State 显示意图: "这是 view 内部状态而不是 props").
+    /// 每个 Select 唯一 ID, 给 SelectCoordinator 识别"当前打开的 select".
     @State private var instanceID = UUID()
-    /// 全局协调器 ref (singleton, MainActor isolated).
     private let coordinator = SelectCoordinator.shared
 
-    /// 触发器底边在窗口内的 Y (.global 坐标, 自测; 纯 UI/AppKit, 不依赖业务注入).
-    /// 用来按"触发器下方可用空间"动态限下拉高度, 防超出窗口被裁 (向下展开 + 内滚).
+    /// 触发器底边在窗口内的 Y (.global 坐标), 用来按"触发器下方可用空间"动态限下拉高度防被裁.
     @State private var triggerMaxYGlobal: CGFloat = 0
     private var dropdownMaxHeight: CGFloat {
         let winH = NSApp.keyWindow?.contentView?.bounds.height ?? 0
@@ -187,8 +152,7 @@ struct Select<Value: Hashable>: View {
                     options: options,
                     isDisabled: isDisabled
                 ))
-                // trigger zIndex 高于 errorMessage, 让 trigger 的 overlay popover
-                // 浮在 errorMessage 之上 (修 "error 字段下拉被红字遮挡" bug)
+                // trigger zIndex 高于 errorMessage, 让 overlay popover 浮在红字之上
                 .zIndex(10)
 
             if let errorMessage {
@@ -208,8 +172,7 @@ struct Select<Value: Hashable>: View {
         }
     }
 
-    /// 切换 popover 打开 / 关闭. trigger button 跟 trigger probe (<probeID>.trigger)
-    /// 都调它. hvm-dbg gui click <probeID>.trigger 自动化测下拉展开.
+    /// 切换 popover 打开 / 关闭. trigger button + trigger probe (<probeID>.trigger) 都调它.
     private func toggleOpen() {
         if isDisabled || isLoading { return }
         if isOpen { isOpen = false } else { openPopover() }
@@ -246,9 +209,7 @@ struct Select<Value: Hashable>: View {
                         .foregroundStyle(HVMTheme.color.textSecondary)
                 }
             }
-            // 内化 padding + frame + contentShape, 让 button hit test 覆盖整个 padding
-            // 区域 (修 "点击中间不显示下拉" bug). Spacer(minLength: 0) + frame maxWidth
-            // 让 HStack 撑满 trigger 宽度.
+            // 内化 padding + frame + contentShape, 让 button hit test 覆盖整个 padding 区
             .padding(.horizontal, size.horizontalPadding)
             .frame(maxWidth: .infinity, minHeight: size.height)
             .contentShape(Rectangle())
@@ -270,11 +231,8 @@ struct Select<Value: Hashable>: View {
             toggle: { toggleOpen() },
             isDisabled: isDisabled
         ))
-        // popover 用 .overlay(alignment:) 而不是 ZStack child — overlay 不参与
-        // 父 view frame 计算, popover 完全脱离 layout flow 浮在 trigger 下方,
-        // 不会顶下面 fieldRow / sectionCard / VStack sibling. 配合外层 zIndex
-        // 反向让 popover 视觉压在所有下方控件之上.
-        // 测触发器底边在窗口的 Y, 给 dropdownMaxHeight 算可用空间. onChange 不在 layout 期改 state.
+        // popover 用 .overlay(alignment:) 脱离 layout flow 浮在 trigger 下方, 配合 zIndex 压在下方控件之上.
+        // 测触发器底边在窗口的 Y, 给 dropdownMaxHeight 算可用空间.
         .background(
             GeometryReader { g in
                 Color.clear.onChange(of: g.frame(in: .global).maxY, initial: true) { _, ny in
@@ -295,11 +253,8 @@ struct Select<Value: Hashable>: View {
                     onClose: { isOpen = false },
                     maxHeight: dropdownMaxHeight
                 )
-                // popover 宽度 = trigger 宽度: .frame(maxWidth: .infinity) +
-                // fixedSize(horizontal: false) 让 horizontal 受 .overlay 容器
-                // (即 trigger frame) 约束, popover 自然撑满 trigger 宽度.
-                // fixedSize(vertical: true) 让 vertical 用 content ideal size
-                // (ScrollView/VStack 能正确撑高).
+                // popover 宽度 = trigger 宽度 (frame maxWidth + fixedSize horizontal:false);
+                // fixedSize vertical:true 让高度用 content ideal size.
                 .frame(maxWidth: .infinity)
                 .fixedSize(horizontal: false, vertical: true)
                 .offset(y: size.height + HVMTheme.space.xs)
@@ -361,9 +316,8 @@ private struct PopoverContent<Value: Hashable>: View {
             if options.isEmpty {
                 emptyState
             } else {
-                // VStack 替 LazyVStack: .overlay 模式下 LazyVStack ideal size 算不
-                // 出会塌成 0; VStack 走 content size 自然撑高. ScrollView 仍包裹
-                // 限 maxHeight 280 防超长选项列表撑爆.
+                // VStack 替 LazyVStack: .overlay 模式下 LazyVStack ideal size 会塌成 0;
+                // VStack 走 content size 自然撑高, ScrollView 限 maxHeight 防超长列表撑爆.
                 ScrollView {
                     VStack(spacing: 0) {
                         ForEach(Array(options.enumerated()), id: \.element.id) { idx, opt in
@@ -383,7 +337,7 @@ private struct PopoverContent<Value: Hashable>: View {
             RoundedRectangle(cornerRadius: HVMTheme.radius.lg)
                 .stroke(HVMTheme.color.borderEmphasis, lineWidth: HVMTheme.border.hairline)
         )
-        // 自家 layered shadow — 让 popover 视觉"飘起来", 不依赖系统 NSPopover
+        // 自家 layered shadow 让 popover "飘起来"
         .shadow(color: .black.opacity(0.45), radius: 16, x: 0, y: 8)
         .shadow(color: .black.opacity(0.25), radius: 4,  x: 0, y: 2)
         .onAppear {
@@ -462,8 +416,7 @@ private struct PopoverContent<Value: Hashable>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(rowBg(isHighlighted: isHighlighted))
             .clipShape(RoundedRectangle(cornerRadius: HVMTheme.radius.sm))
-            // contentShape 让 hover hit 区跟整 row frame 一致 (修 "空白区域移动
-            // 不变色" bug). 否则 hover 只在 HStack content (文字 / icon) 范围内.
+            // contentShape 让 hover hit 区跟整 row frame 一致 (否则只在文字 / icon 范围内)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -483,8 +436,7 @@ private struct PopoverContent<Value: Hashable>: View {
 
 }  // extension HVMUI 结束
 
-/// Trigger 按钮的 implicit probe — <probeID>.trigger 接 .button(toggleOpen).
-/// 让 hvm-dbg gui click <probeID>.trigger 能展开/收起下拉, 自动化测下拉内容用.
+/// Trigger 按钮的 implicit probe — <probeID>.trigger 接 .button(toggleOpen), 自动化展开/收起下拉.
 private struct ProbeSelectTriggerModifier: ViewModifier {
     let probeID: String
     let label: String
@@ -504,9 +456,8 @@ private struct ProbeSelectTriggerModifier: ViewModifier {
     }
 }
 
-/// Select 主 probe — 用 .textField role (ProbeAction 没 generic .select).
-/// 必须 @Binding selection + options 数组才能在 getter / setter closure 里动态算
-/// 最新值; 如果传 snapshot 字符串, ProbeRegistry.register 之后值不再更新.
+/// Select 主 probe — 用 .textField role (无 generic .select). 必须 @Binding selection + options
+/// 才能在 getter/setter 动态算最新值 (传 snapshot 字符串则注册后不再更新).
 private struct ProbeSelectModifier<Value: Hashable>: ViewModifier {
     let probeID: String
     let label: String

@@ -1,8 +1,5 @@
-// VMControl+Config.swift — 配置编辑 + 磁盘操作 (业务页 #2).
-//
-// 视图无关的配置保存层, 收口老 AppModel.saveConfig + DiskFactory 调用. CLI + 新 GUI 共用.
-// 明文走 BundleIO; 加密走 EncryptedConfigIO (调用方传 config subkey, 解锁流程 V2 产出).
-// 磁盘明文走 DiskFactory (raw ftruncate / qcow2 qemu-img); 加密 LUKS 盘留 V4.
+// VMControl+Config.swift — 视图无关的配置编辑 + 磁盘操作 (CLI + GUI 共用).
+// 明文走 BundleIO / DiskFactory; 加密走 EncryptedConfigIO / QcowLuksFactory (调用方传 config subkey).
 
 import Foundation
 import CryptoKit
@@ -28,8 +25,7 @@ public extension VMControl {
         try BundleIO.save(config: config, to: bundleURL)
     }
 
-    /// 改加密 VM config: 用 config subkey 解密当前 config.yaml.enc → mutate → 重密.
-    /// configKey 由解锁流程 (V2) 派生 (EncryptionKDF.SubKeySet.config). requireStopped 同上.
+    /// 改加密 VM config: 用 config subkey 解密 config.yaml.enc → mutate → 重密. requireStopped 同上.
     static func saveConfigEncrypted(bundleURL: URL,
                                     requireStopped: Bool = true,
                                     configKey: SymmetricKey,
@@ -40,7 +36,7 @@ public extension VMControl {
         try EncryptedConfigIO.save(config: config, to: bundleURL, key: configKey)
     }
 
-    // MARK: - 磁盘操作 (明文 raw/qcow2; 加密 LUKS 留 V4)
+    // MARK: - 磁盘操作 (明文 raw/qcow2)
 
     /// 加数据盘: DiskFactory.create (engine 决定 raw/qcow2) + config 追加 DiskSpec. 必 stopped.
     static func addDisk(bundleURL: URL, sizeGiB: UInt64) throws {
@@ -91,17 +87,16 @@ public extension VMControl {
         let absURL = bundleURL.appendingPathComponent(diskPath)
         config.disks.remove(at: idx)
         try BundleIO.save(config: config, to: bundleURL)
-        try? DiskFactory.delete(at: absURL)   // 文件删失败不回滚 config (盘已从配置移除)
+        try? DiskFactory.delete(at: absURL)   // 文件删失败不回滚 config
     }
 
-    // MARK: - 加密 VM 磁盘操作 (LUKS qcow2; 调用方传解锁后的 qcow2Disk + config subkey)
+    // MARK: - 加密 VM 磁盘操作 (LUKS qcow2; 调用方传 diskKey + config subkey)
 
     /// 加密 VM 加数据盘: QcowLuksFactory.create (LUKS) + EncryptedConfigIO 追加 DiskSpec.
     static func addDiskEncrypted(bundleURL: URL, sizeGiB: UInt64,
                                  diskKey: SymmetricKey, configKey: SymmetricKey) throws {
         try assertStoppedIfNeeded(bundleURL: bundleURL, requireStopped: true)
         var config = try EncryptedConfigIO.load(from: bundleURL, key: configKey)
-        // 加密 VM 必 qemu/qcow2
         let uuid8 = DiskFactory.newDataDiskUUID8()
         let fileName = BundleLayout.dataDiskFileName(uuid8: uuid8, engine: .qemu)
         let relPath = "\(BundleLayout.disksDirName)/\(fileName)"
@@ -169,7 +164,7 @@ public extension VMControl {
         sendClipboardIPC(bundleURL: bundleURL, enabled: enabled)
     }
 
-    /// running → IPC 即时切换 (vdagent). 未运行则下次启动生效. 失败 fail-soft (config 已落).
+    /// running → IPC 即时切换 (vdagent); 未运行下次启动生效; 失败 fail-soft (config 已落).
     private static func sendClipboardIPC(bundleURL: URL, enabled: Bool) {
         guard let holder = BundleLock.inspect(bundleURL: bundleURL),
               !holder.socketPath.isEmpty else { return }
@@ -180,7 +175,7 @@ public extension VMControl {
 
     // MARK: - 内部
 
-    /// requireStopped 时检查 running, 占用抛 .busy. (internal: VMControl+Encryption 等同模块文件复用)
+    /// requireStopped 时检查 running, 占用抛 .busy. (internal: 同模块文件复用)
     static func assertStoppedIfNeeded(bundleURL: URL, requireStopped: Bool) throws {
         if requireStopped, BundleLock.isBusy(bundleURL: bundleURL) {
             let holder = BundleLock.inspect(bundleURL: bundleURL)

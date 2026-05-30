@@ -1,14 +1,6 @@
 // HVMQemu/QemuKeyMap.swift
-// 字符 / hvm-dbg key 标识 → QEMU qkey 名映射. 用于 sendKey 调用.
-//
-// QEMU qkey 名取自 qapi/qkeys.json (上游); 包括 "a"-"z", "0"-"9", "shift", "alt",
-// "ctrl", "meta_l", "ret", "spc", "tab", "esc", "f1"-"f24", "backspace", 方向键
-// "up"/"down"/"left"/"right" 等. 完整列表搜 qkeys.json.
-//
-// 设计:
-//   - typeText: 一字符一字符 send. ASCII 可见字符 + 大写 + 部分符号已涵盖.
-//   - pressCombo: 解析 "ctrl+c" / "cmd+space" 形式; "cmd" / "win" 别名 → meta_l.
-//   - 不全, AI agent 用 unicode 输入需 guest 内 IME (与 VZ 路径同样限制).
+// 字符 / hvm-dbg key 标识 → QEMU qkey 名映射 (qkey 名取自上游 qapi/qkeys.json). 用于 sendKey.
+// 覆盖 ASCII 可见字符 + 大写 + 部分符号; unicode (中文等) 不支持, 需 guest 内 IME.
 
 import Foundation
 

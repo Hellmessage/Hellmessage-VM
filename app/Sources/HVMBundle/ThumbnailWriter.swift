@@ -1,8 +1,5 @@
 // HVMBundle/ThumbnailWriter.swift
-// 缩略图 atomic 落盘 helper. VZ 路径 (HVMDisplay/ThumbnailGenerator) 和
-// QEMU 路径 (HVM/QemuHostEntry) 共用, 避免重复实现 atomic replace 逻辑.
-//
-// 落盘策略: 写到 .thumbnail.png.tmp → replaceItemAt; 失败不留半成品.
+// 缩略图 atomic 落盘 helper. 写到 .thumbnail.png.tmp → replaceItemAt, 失败不留半成品.
 
 import Foundation
 

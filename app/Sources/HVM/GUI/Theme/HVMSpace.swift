@@ -1,6 +1,4 @@
-// HVMSpace.swift — 新 GUI 间距 token (Linear 风, 4-pt grid)
-//
-// 业务侧禁止 .padding(8) 硬数字, 一律走 HVMTheme.space.<name>.
+// HVMSpace.swift — 新 GUI 间距 token (4-pt grid). 业务侧禁硬数字, 走 HVMTheme.space.<name>.
 
 
 import CoreGraphics

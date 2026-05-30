@@ -1,6 +1,4 @@
-// hvm-dbg/Commands/StatusCommand.swift
-// hvm-dbg status — 偏 guest 视角的运行信息 (区别于 hvm-cli status 的 host 视角).
-// 给 AI agent 判断 "画面变了没" / "VM 还在跑没" 用.
+// hvm-dbg status — guest 视角的运行信息 (区别于 hvm-cli status 的 host 视角).
 
 import ArgumentParser
 import Foundation

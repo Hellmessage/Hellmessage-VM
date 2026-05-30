@@ -1,28 +1,15 @@
 // HVMDisplayQemu/PasteboardBridge.swift
 //
-// macOS NSPasteboard ↔ guest 剪贴板 双向同步桥. 仅 UTF-8 文本.
+// macOS NSPasteboard ↔ guest 剪贴板双向同步桥 (text / image / file URLs).
 //
 // 工作流:
-//   - host → guest:
-//       1Hz Timer 轮询 NSPasteboard.general.changeCount
-//       检测到变化 → 读 NSPasteboard.string(.string) → vdagent.sendClipboardText(text)
-//       VdagentClient 内部走 GRAB → 等 guest REQUEST → 发 CLIPBOARD 数据
+//   - host → guest: 1Hz Timer 轮询 changeCount (NSPasteboard 无事件 API), 变化 → 读内容
+//     → vdagent.sendClipboardData (text/image) + onFileURLs (file URLs 走 HVMFileClipboardBridge)
+//   - guest → host: vdagent.onClipboardTextReceived → NSPasteboard 写 string, 记
+//     lastWrittenChangeCount 比对避免 echo (host 写完 changeCount+1 不能反推回 guest)
 //
-//   - guest → host:
-//       VdagentClient.onClipboardTextReceived 回调 → NSPasteboard 写 string
-//       记录 lastWrittenChangeCount, 下次轮询比对避免 echo (host 写完导致 changeCount +1,
-//       不能再当成 host 端用户复制反推回 guest)
-//
-// 没有事件 API, NSPasteboard 只能轮询 — 跟 UTM (UTMPasteboard 1Hz Timer) 一致.
-//
-// 启停由外部控制 (Pasteboard 状态可在运行中切换):
-//   - start(): 起 Timer + 注册 vdagent 回调
-//   - stop():  停 Timer + 摘掉回调 + 通知 guest CLIPBOARD_RELEASE
-//
-// 设计要点:
-//   - 不持有 vdagent 强引用 — vdagent 是 VMHost 进程级 singleton, bridge 只是 view 层
-//   - 启动时 *不* 把当前 host 剪贴板推 guest — 那会让"用户启动 VM 时 host 上恰好有
-//     不相关内容"也被同步, 行为不直观. 用户复制一次以后才同步.
+// 启停由外部控制 (运行中可切换). 设计要点:
+//   - 启动时 *不* 把当前 host 剪贴板推 guest (避免同步无关内容), 用户复制一次后才同步.
 
 import Foundation
 import AppKit
@@ -90,11 +77,8 @@ public final class PasteboardBridge {
         if on { start() } else { stop() }
     }
 
-    /// macOS Cmd+C 一个文件时触发. closure 由 QemuHostEntry 注入, 内部走
-    /// HVMFileClipboardBridge.publishFiles — QGA 上传 + 通知 guest helper 设 Win clipboard
-    /// (UTM 风格 paste-where-you-paste).
-    /// nil = 没接入文件剪贴板通路 (例如 Linux guest 或老 binary), file URLs 直接忽略.
-    /// 在内部 Pasteboard 轮询线程上调; 调用方负责切到目标线程.
+    /// macOS Cmd+C 文件时触发, 由 QemuHostEntry 注入 (内部走 HVMFileClipboardBridge.publishFiles).
+    /// nil = 没接入文件剪贴板通路 (Linux guest), file URLs 忽略. 在轮询线程调.
     public var onFileURLs: (([URL]) -> Void)?
 
     // MARK: - host → guest
@@ -110,13 +94,9 @@ public final class PasteboardBridge {
             return
         }
 
-        // 同时取 text + image PNG + file URLs. text/image 走 vdagent (mime 1/2),
-        // file URLs 走 onFileURLs callback (独立的 HVMFileClipboardBridge 通路, 因为
-        // UTM Guest Tools vdagent.exe 不实现 CLIPBOARD_FILE_LIST mime=6).
-        //
-        // 优先级: file URLs 跟 text/image 都试 — Cmd+C 一个 file 时 NSPasteboard 通常
-        // 同时含 file URL + 文件名文本, 我们各走各的 (guest 端 helper 设 CF_HDROP,
-        // vdagent 设 text). Telegram 等 app 优先取 CF_HDROP (因为里面是文件).
+        // text/image 走 vdagent (mime 1/2), file URLs 走 onFileURLs (独立
+        // HVMFileClipboardBridge 通路, UTM vdagent.exe 不实现 CLIPBOARD_FILE_LIST mime=6).
+        // Cmd+C 一个 file 时 NSPasteboard 通常同时含 file URL + 文件名文本, 各走各的.
         let text: String? = pb.string(forType: .string)
         let image: Data? = Self.readImagePNG(pb)
         let fileURLs: [URL]? = Self.readFileURLs(pb)

@@ -1,6 +1,5 @@
 // hvm-dbg/Support/OutputFormat.swift
-// CLI 通用输出格式 (human / json). bail/bailJSON/printJSON 共用实现在 HVMUtils,
-// 本文件保留 hvm-dbg 专属退出码映射 (含 dbg.* 系 20-23) + 调用 wrapper.
+// CLI 通用输出格式 (human / json). 共用实现在 HVMUtils, 本文件保留 hvm-dbg 专属退出码映射 + wrapper.
 
 import ArgumentParser
 import Foundation

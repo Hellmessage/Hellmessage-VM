@@ -1,25 +1,12 @@
 // HVMStorage/SnapshotManager.swift
-// 基于 APFS clonefile(2) 的 VM 整体快照: disks/* + config.yaml(.enc).
-// clonefile 是 APFS copy-on-write, 几乎零空间 + 瞬间完成 (10GB 主盘也是 ms 级).
+// 基于 APFS clonefile(2) 的 VM 整体快照: disks/* + config.yaml(.enc) + meta.json.
+// clonefile 是 COW, 几乎零空间 + 瞬间完成. 布局: <bundle>/snapshots/<name>/{disks/,config.*,meta.json}.
 //
-// 布局:
-//   <bundle>/snapshots/<name>/disks/os.{img,qcow2}            (clone of bundle/disks/os.*)
-//   <bundle>/snapshots/<name>/disks/data-*.{img,qcow2}        (clone 所有数据盘)
-//   <bundle>/snapshots/<name>/config.yaml | config.yaml.enc   (按 bundle 加密形态择一)
-//   <bundle>/snapshots/<name>/meta.json                       ({createdAt, name})
+// 加密 VM: clonefile 字节级 COW 复制 LUKS qcow2 / config.yaml.enc / swtpm state 不解密
+// (snapshot 不需密码); master KEK 不变, restore 后用源密码可解 (rekey 后 restore 须用旧密码).
 //
-// 加密 VM:
-//   APFS clonefile 是字节级 COW, 对 LUKS qcow2 / config.yaml.enc / swtpm state
-//   字节复制不解密 (snapshot 不需 prompt 密码). master KEK / sub keys 全程未变,
-//   restore 后用源密码可继续解.
-//   注: snapshot 创建后用户跑 rekey, restore 后 LUKS keyslot 是 snapshot 时点的老密码,
-//   必须用老密码启动 — 是预期行为.
-//
-// 限制:
-//   - VM 必须 stopped (running 时 disk 在写, snapshot 不一致)
-//   - clonefile 要求 src/dst 在同一 APFS volume, bundle 内的一切都满足
-//   - restore 是非原子的: 中途 crash 可能让 bundle 处于半新半旧状态; 但 snapshot 仍完整,
-//     可以再 restore 一次自愈
+// 限制: VM 必须 stopped (running 时 disk 在写则不一致); clonefile 要求 src/dst 同 APFS volume
+// (bundle 内满足); restore 非原子 (中途 crash 可能半旧半新, 但 snapshot 仍完整可重 restore).
 
 import Foundation
 import Darwin

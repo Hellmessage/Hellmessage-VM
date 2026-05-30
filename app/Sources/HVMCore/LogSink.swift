@@ -1,26 +1,10 @@
 // HVMCore/LogSink.swift
 // 把 os.Logger 的日志异步 mirror 到 ~/Library/Application Support/HVM/logs/<yyyy-MM-dd>.log,
-// 按天 rotate, 保留 14 天.
+// 按天 rotate, 保留 14 天. 周期 OSLogStore.getEntries 拉本进程 OSLogEntry, 过滤 subsystem 写当日文件.
 //
-// 实现路径: 用 OSLogStore.getEntries 周期性拉取本进程的 OSLogEntry, 过滤 subsystem,
-// 写入当日文件. 优点:
-//   - 不改 HVMLog.logger API (依然返 os.Logger), 现有 call site 全部不动
-//   - Console.app 的体验保留 (subsystem == com.hellmessage.vm)
-//   - 用户级日志落盘可被 grep / hvm-cli logs 等工具读
-//
-// 缺陷 / 取舍:
-//   - poll 间隔 5s, 极端情况下日志 latency 5s. 关进程时 flush 一次最后窗口
-//   - OSLogStore.scope: .currentProcessIdentifier — 跨进程 (例如 hvm-cli 短命进程) 不进文件
-//     这是对的: hvm-cli 自己的 stdout 已经够看, 长期落盘只需要 GUI 主进程 / VMHost 持续运行的
-//
-// 隔离: actor (非 MainActor) — getEntries 是同步阻塞 syscall (50-200ms 持 unified logging
-// 锁). 老实现 @MainActor 让 pollOnce 跑在主线程, 每 30s 撞 main → MTKView draw 被 starve →
-// framebuffer 周期卡顿 (用户实测每 30s 一次). 改 actor 后 getEntries 跑在 cooperative
-// thread pool, 主线程零阻塞, poll 可恢复 5s 不掉帧.
-//
-// 启动方式: HVMLog.logger 第一次调用时 lazy 启动 LogSink.shared (在 HVMLog 内部).
-// 进程退出时通过 atexit 拉一次最终 flush — 主流程崩溃可能丢最后 5s, 但崩溃路径下我们已经
-// 通过 os.Logger 把信息写到 OSLogStore 持久化了, 用户事后可用 `log show` 拉.
+// 必须是 actor (非 MainActor): getEntries 是同步阻塞 syscall (50-200ms 持 unified logging 锁),
+// 跑在主线程会 starve MTKView draw → framebuffer 周期卡顿. actor 化后跑 cooperative pool, 主线程零阻塞.
+// scope=.currentProcessIdentifier: 短命 hvm-cli 不落文件 (其 stdout 已够看), 只长命 GUI/VMHost 持续落盘.
 
 import Foundation
 import os
@@ -33,9 +17,7 @@ public actor LogSink {
 
     /// 日志保留天数, 超过的 .log 文件自动删
     public static let retentionDays: Int = 14
-    /// 轮询间隔. 5s 是早期默认, 之前因 LogSink @MainActor 导致每次 poll 阻塞主线程 50-200ms,
-    /// 一度被改到 30s 减卡顿. 现 actor 化后 getEntries 跑在 cooperative pool, 主线程零阻塞,
-    /// 5s 恢复给用户更小日志延迟.
+    /// 轮询间隔
     private static let pollIntervalSec: UInt64 = 5
 
     private var started = false
@@ -80,9 +62,8 @@ public actor LogSink {
 
     private init() {}
 
-    /// 启动 sink. 幂等. 由 HVMLog.logger() 触发, 用户不必直接调.
-    /// initialEnabled 由调用方 (HVMLog.logger) 从 LoggingPreferences.shared.enabled 读出
-    /// 传进来 — LogSink 是 actor, 不直接读 @MainActor 的 LoggingPreferences.
+    /// 启动 sink. 幂等. 由 HVMLog.logger() 触发.
+    /// initialEnabled 由调用方传入 — LogSink 是 actor, 不直接读 @MainActor 的 LoggingPreferences.
     public func start(initialEnabled: Bool = true) {
         if !started {
             enabled = initialEnabled
@@ -96,7 +77,7 @@ public actor LogSink {
             // 取不到 store (sandbox 限制? 旧 macOS?) — 文件 sink 静默不工作, os.Logger 仍正常
             return
         }
-        // 起点: 当下时刻 (避免回放本进程之前的所有 log, 包括 system framework 噪音)
+        // 起点取当下, 避免回放本进程之前的所有 log
         lastPosition = store?.position(date: Date())
 
         pollTask = Task.detached { [weak self] in
@@ -114,9 +95,7 @@ public actor LogSink {
         pollTask = nil
     }
 
-    /// 由 LoggingPreferences.setEnabled 调过来 — 切换全局日志开关.
-    /// 关闭: 关 fileHandle, pollOnce 仅推 lastPosition 不写文件.
-    /// 开启: 下次 pollOnce 自然回到 writeLine 路径, 文件随 entry 写入时按需 rotate 重开.
+    /// 切换全局日志开关. 关闭时关 fileHandle, pollOnce 仅推 lastPosition 不写文件.
     public func setEnabled(_ value: Bool) {
         guard value != enabled else { return }
         enabled = value
@@ -138,8 +117,7 @@ public actor LogSink {
 
     private func pollOnce() async {
         guard let store, let pos = lastPosition else { return }
-        // 全局开关关闭: 跳过 fetch + write, 仅把 lastPosition 推到 now, 防止开启后回放
-        // 关闭期间堆积的全部历史日志.
+        // 开关关闭: 仅把 lastPosition 推到 now, 防止开启后回放关闭期间堆积的历史日志
         if !enabled {
             lastPosition = store.position(date: Date())
             return

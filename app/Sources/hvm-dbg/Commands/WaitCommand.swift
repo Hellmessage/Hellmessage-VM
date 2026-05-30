@@ -1,4 +1,3 @@
-// hvm-dbg/Commands/WaitCommand.swift
 // hvm-dbg wait — 轮询等 guest 进入某状态. 客户端实现, 复用 dbgStatus / dbgFindText IPC.
 //
 // 模式:

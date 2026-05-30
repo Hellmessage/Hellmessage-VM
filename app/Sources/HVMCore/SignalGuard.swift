@@ -1,20 +1,10 @@
 // HVMCore/SignalGuard.swift
 // 加密长事务 (encrypt / decrypt / rekey) 的 SIGINT/SIGTERM 防中断 + 兜底清理.
+// 第一次 Ctrl-C 打警告不打断事务; 5s 内二次 Ctrl-C 跑 atexit cleanup 后 _exit(130).
 //
-// 用户体验:
-//   - 第一次 Ctrl-C → 打印警告 "操作进行中, 请等待结束 (再次 Ctrl-C 强制退出, 可能留残留)"
-//     不打断当前事务, 让 LUKS keyslot / qemu-img convert 跑完
-//   - 5s 内二次 Ctrl-C → 跑 atexit cleanup 后 _exit(130). 用户自负残留风险
-//
-// 实施关键:
-//   - sigaction(2) 注册 SIGINT/SIGTERM handler. handler 内只调 async-signal-safe 函数
-//     (write(2), atomic, _exit). 不打 print / 不调 Swift API
-//   - clock_gettime(CLOCK_MONOTONIC) 测两次信号间隔, 不用 Date (NSDate 不 async-signal-safe)
-//   - cleanup 队列由 atexit(3) 触发 (正常退出) + 二次硬退路径手动跑
-//
-// 限制:
-//   - SIGKILL / abort: 完全无法拦, 接受 — 文档说明用户自负
-//   - 多线程: install/uninstall 走 reentrant 计数. 不支持嵌套不同事务
+// 硬约束: signal handler 内只能调 async-signal-safe 函数 (write(2) / atomic / _exit),
+// 不打 print / 不调 Swift API; 计时用 clock_gettime(CLOCK_MONOTONIC) 不用 Date.
+// SIGKILL / abort 拦不住, 用户自负. install/uninstall 走 reentrant 计数.
 
 import Foundation
 import Darwin
@@ -46,19 +36,9 @@ public enum SignalGuard {
     // MARK: - 公开 API
 
     /// 进程级永久忽略 SIGPIPE. 所有 entry (HVM main / hvm-cli / hvm-dbg) 启动顶部都必须调.
-    ///
-    /// 为什么必须装:
-    ///   - IPC server (HVMIPC.SocketServer) 给 client 写响应时, 若 client 已 Ctrl-C 退出,
-    ///     write(2) 走 Unix socket 触发 SIGPIPE. 默认 disposition = terminate 整个 host 进程.
-    ///   - host 进程被 SIGPIPE 杀掉后, QEMU + swtpm 子进程 reparent 到 launchd 成 orphan,
-    ///     占着 tpm/.lock NVRAM 锁 + run/<id>.qmp socket, 新 host 启不来 (swtpm exit 1).
-    ///   - 实测触发场景: `hvm-dbg exec-guest --ps ...` 跑长任务时用户 Ctrl-C, host 立即猝死,
-    ///     GUI 重启 VM 报 "QEMU 宿主进程未在规定时间内就绪 (20s)".
-    ///
-    /// 装了 SIG_IGN 后, write(2) 返 -1 + errno=EPIPE, Frame.writeAll 抛 HVMError.ipc.writeFailed,
-    /// SocketServer.handleConnection 的 `catch { return }` 干净 close 连接, host 继续跑, VM 不死.
-    ///
-    /// 跟 install()/uninstall() 那套加密事务防中断逻辑独立, 不走 reentrant 计数 — 进程级永久装.
+    /// 否则 IPC server 给已退出的 client 写响应时 write(2) 触发 SIGPIPE 杀掉 host 进程,
+    /// QEMU/swtpm reparent 成 orphan 占着锁, 新 host 启不来. 装 SIG_IGN 后 write 返 EPIPE 走正常错误路径.
+    /// 跟 install()/uninstall() 的加密防中断逻辑独立, 进程级永久装.
     public static func ignoreSIGPIPE() {
         var action = sigaction()
         action.__sigaction_u.__sa_handler = SIG_IGN
@@ -137,11 +117,8 @@ public enum SignalGuard {
         let last = lastSignalSec
 
         if last != 0 && (now - last) < Int64(secondPressWindowSec) {
-            // 二次按: 立刻退. atexit 跑 cleanup
-            // _exit 不 flush stdio, 但走 atexit (atexit handlers 跑 — POSIX 行为)
+            // 二次按: 立刻退, atexit 跑 cleanup (POSIX 行为)
             let abortMsg = "\n✗ 二次 Ctrl-C, 强制退出\n"
-            // String.utf8.count 在 signal context 不一定 100% safe (Swift String API),
-            // 但已是 build-time 已知字符串, 实测 OK. 兜底用 strlen 等价.
             _ = abortMsg.withCString { ptr in
                 write(STDERR_FILENO, ptr, strlen(ptr))
             }

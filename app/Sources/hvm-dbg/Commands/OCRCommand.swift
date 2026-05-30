@@ -1,4 +1,3 @@
-// hvm-dbg/Commands/OCRCommand.swift
 // hvm-dbg ocr — 抓 frame buffer + Vision framework OCR. 全屏或裁剪 region.
 
 import ArgumentParser

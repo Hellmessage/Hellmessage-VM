@@ -1,12 +1,7 @@
-// HVMColor.swift — 新 GUI 色板 token (Linear 风, 固定深色)
+// HVMColor.swift — 新 GUI 色板 token (固定深色, accent 青 #06B6D4).
 //
-// 业务侧禁止 Color(red:..., green:..., blue:...) 或 Color(hex:...) 直写,
-// 一律走 HVMTheme.color.<name>. 防漂移 lint script (PR-L1) 会扫整个 GUI/ 拦.
-//
-// accent: 青 #06B6D4 (D1 已决 2026-05-28).
-//
-// 嵌进 HVMTheme namespace, 避免跟老 GUI 顶层 `public enum HVMColor`
-// (UI/Style/Theme.swift) 撞名.
+// 业务侧禁直写 Color(red:...) / Color(hex:...), 一律走 HVMTheme.color.<name>.
+// 嵌进 HVMTheme namespace 避开老 GUI 顶层 HVMColor 撞名.
 
 
 import SwiftUI
@@ -27,9 +22,7 @@ extension HVMTheme {
 
         // 边框
         static let borderDefault  = Color(hex: 0xFFFFFF, alpha: 0.08)
-        // borderEmphasis: 比 borderDefault 强一档, 给在 sectionCard (bgRaised) 内嵌入
-        // 的控件 (Toggle / Checkbox off 态) 用 — 普通 borderDefault 在 bgRaised 上
-        // 太弱 (0.08), 跟卡片 bg 同色容器轮廓出不来
+        // borderEmphasis: 比 borderDefault 强一档, 给 sectionCard 内嵌控件 (Toggle/Checkbox off) 撑轮廓
         static let borderEmphasis = Color(hex: 0xFFFFFF, alpha: 0.16)
         static let borderFocus    = Color(hex: 0x06B6D4, alpha: 0.6)
         static let borderError    = Color(hex: 0xEF4444, alpha: 0.6)
@@ -51,10 +44,8 @@ extension HVMTheme {
         // 透明 (按钮 / 字段 ghost 态 bg; 业务侧禁止直写 Color.clear)
         static let transparent = Color.clear
 
-        // disabled 控件 bg — 比 bgRaised 亮一档, 在 bgBase 主底上有清晰轮廓.
-        // Toggle / Checkbox / 其他控件 disabled 时改用这个 bg 而不是单纯 opacity 0.4
-        // (深色 GUI 上整体降透会让控件跟底色压成一片, 看不出形). 配合 textTertiary 文字
-        // 和圆点形成"低对比但可读"的 disabled 态.
+        // disabled 控件 bg — 比 bgRaised 亮一档. 控件 disabled 用这个 bg 而非单纯 opacity 0.4
+        // (深色 GUI 上整体降透会让控件跟底色压成一片, 看不出形).
         static let bgDisabled = Color(hex: 0x2A2B2E)
     }
 }

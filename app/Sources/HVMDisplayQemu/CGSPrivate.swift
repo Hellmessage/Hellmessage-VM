@@ -1,17 +1,12 @@
 // CGSPrivate.swift
 //
 // Skylight (CoreGraphics 私有) API 声明. 用 @_silgen_name 直接 link, 不引 header.
-//
 // 用途: captured 模式 (FramebufferHostView.captureInput) 禁用 macOS 全局热键,
-// 让 Cmd+Tab / Cmd+Space / Mission Control 等系统快捷键也能送进 guest VM,
-// 而不是被 macOS 拦走. 跟 UTM 的 VMMetalView.captureMouse / releaseMouse 同款做法.
+// 让 Cmd+Tab / Cmd+Space / Mission Control 等系统快捷键也送进 guest.
 //
-// 注意:
-//   1. 私有 API, 历史上 macOS 14+ 仍可用 (UTM 长期依赖, 至今未坏); 未来若 Apple
-//      改了 ABI 编译会断, 写明 fallback 路径 (调用方 catch nil 静默放弃).
-//   2. 不签 App Sandbox; 这函数在 sandbox 下 silently no-op.
-//   3. 释放捕获时**必须**再调一次 .enable 还原, 否则用户切到别 App 后系统级 cmd+tab
-//      也失效, 体验灾难. 走 deinit + viewWillMove(toWindow:nil) 双保险.
+// 硬约束: 释放捕获时**必须**再调一次 .enable 还原, 否则用户切到别 App 后系统级
+// cmd+tab 也失效. 走 deinit + viewWillMove(toWindow:nil) 双保险. 私有 API 在
+// sandbox / 未来 macOS 可能 no-op, 失败 silent.
 
 import Foundation
 import CoreGraphics

@@ -1,16 +1,7 @@
 // HVM/QemuHostEntry.swift
-// VMHost 进程的 QEMU 后端分支. HVMHostEntry.run() 看到 config.engine == .qemu 时分派到此.
-//
-// 与 VZ runVZ 的差异:
-//   - 不开离屏 NSWindow, 不挂 HVMView (QEMU -display cocoa 自开窗口)
-//   - 不接 DbgOps (QEMU dbg.* 一期不支持)
-//   - 用 QemuProcessRunner + QmpClient 替代 VMHandle
-//
-// 共用部分:
-//   - NSApp accessory 策略 + menu bar 状态栏图标 (复用 HostStatusMenuController 风格)
-//   - IPC SocketServer (复用 HVMIPC), CLI 端 hvm-cli status / stop / kill 兼容
-//   - BundleLock (调用方已抢)
-//   - 退出码语义与 VZ 路径一致 (3=load, 4=lock; 20+ 是 QEMU 特有)
+// VMHost 进程的 QEMU 后端分支: 启 qemu-system-aarch64 + swtpm sidecar, 连 QMP,
+// 起 IPC SocketServer (hvm-cli status/stop/kill) + 状态栏图标 + NSApp 驻留.
+// 退出码: 3=load, 4=lock, 20+ 为 QEMU 特有.
 
 import AppKit
 import CryptoKit
@@ -51,17 +42,15 @@ public enum QemuHostEntry {
         let qmpSocketURL = HVMPaths.qmpSocketPath(for: config.id)
         let qemuPidURL = HVMPaths.qemuPidPath(for: config.id)
 
-        // orphan reaper: 上次 host 异常退出 (SIGKILL / OOM / 之前的 SIGPIPE) 可能留 orphan
-        // QEMU 进程, 占着 NVRAM / 磁盘 fd / QMP socket. 读 pid file kill 老 pid.
-        // 必须在 FSCleanup 清 pid 文件之前调, 否则没 pid 可读. 详见 HVMQemu/SidecarOrphanReaper.
+        // orphan reaper: 上次 host 异常退出可能留 orphan QEMU 进程占着 NVRAM/磁盘 fd/QMP socket.
+        // 读 pid file kill 老 pid. 必须在 FSCleanup 清 pid 文件之前调, 否则没 pid 可读.
         SidecarOrphanReaper.reapByPidFile(pidFile: qemuPidURL, expectedNamePrefix: "qemu-system")
 
         // 清残留 socket / pid (上次崩溃留的会让 QEMU bind 失败 / 误以为已在跑)
         FSCleanup.removeQuietly(at: qmpSocketURL, context: "stale QMP socket")
         FSCleanup.removeQuietly(at: qemuPidURL,   context: "stale QEMU pid file")
 
-        // 2. virtio-win 路径解析 (windows guest 才用; 缓存就绪才挂第二 cdrom).
-        //    创建 Win VM 时 GUI 会前台触发 ensureCached; 这里不做下载, 缺则降级.
+        // 2. virtio-win 路径解析 (Windows guest 才用; 缓存就绪才挂第二 cdrom). 这里不下载, 缺则降级.
         var virtioWinPath: String? = nil
         if config.guestOS == .windows {
             if VirtioWinCache.isReady {
@@ -70,12 +59,9 @@ public enum QemuHostEntry {
                 fputs("HVMHost(qemu): ⚠ virtio-win.iso 未缓存, Win 装机将看不到 virtio-blk 盘\n", stderr)
                 fputs("  GUI 创建向导会自动下载; CLI 创建后请用 GUI Cache → Download virtio-win\n", stderr)
             }
-            // 2.1 NVRAM (Win 双 pflash 必需 RW vars 文件); 不存在则从 EDK2 vars 模板初始化一次.
-            // 老 bundle (本特性前创建) 没初始化 nvram, 这里兜底; 新 bundle 创建时 CreateVMDialog 也会预置.
-            // 加密 / 明文 走不同 NVRAM 路径:
-            //   加密: nvram/efi-vars.qcow2 (LUKS qcow2). 由 CreateVMDialog / CLI create
-            //         在 EncryptedBundleIO.create 后调 OVMFVarsLuksFactory.create 创建.
-            //   明文: nvram/efi-vars.fd (raw). 这里兜底从模板 copy.
+            // 2.1 NVRAM (Win 双 pflash 必需 RW vars 文件), 不存在则兜底初始化.
+            // 加密: nvram/efi-vars.qcow2 (LUKS qcow2, 创建时已生成).
+            // 明文: nvram/efi-vars.fd (raw), 这里从 EDK2 vars 模板 copy.
             if encryptedHandle != nil {
                 let luksNvramURL = BundleLayout.nvramDir(bundleURL)
                     .appendingPathComponent(BundleLayout.nvramLuksFileName)
@@ -109,11 +95,10 @@ public enum QemuHostEntry {
             }
         }
 
-        // 3. swtpm sidecar (windows + tpmEnabled). 必须在 QEMU 启动前 listen, 否则 QEMU 连不上.
-        // helper 失败路径直接 exit() (内部已 release lock); 成功返非 nil tuple.
-        // 立即注册到全局 state, 任何 early-exit 都通过 tearDown 回收 (避免孤儿 swtpm 占 NVRAM lock)
-        // 加密 VM (encryptedHandle != nil) 时, swtpm 走 SwtpmKeyHelper (Pipe 透传 fd=0,
-        // 不落盘) 给 swtpm 注入 32 字节 binary key, swtpm 用此 key AES-256-CBC 加密 NVRAM state.
+        // 3. swtpm sidecar (windows + tpmEnabled). 必须在 QEMU 启动前 listen.
+        // 立即注册到全局 state, 任何 early-exit 都经 tearDown 回收 (避免孤儿 swtpm 占 NVRAM lock).
+        // 加密 VM 时 swtpm 走 SwtpmKeyHelper Pipe 透传 fd=0 注入 32B binary key (不落盘),
+        // swtpm 用此 key AES-256-CBC 加密 NVRAM state.
         var swtpmSockPath: String? = nil
         if config.guestOS == .windows, config.windows?.tpmEnabled == true {
             let swtpmKey = encryptedHandle?.qemuSubKeys?.swtpm
@@ -127,25 +112,17 @@ public enum QemuHostEntry {
             QemuHostState.shared.swtpmSocketPath = path
             QemuHostState.shared.swtpmKeyInjector = injector
         }
-        // 加密句柄 (closed by tearDown). VZ-sparsebundle 推后, 这里只 QEMU 路径.
+        // 加密句柄 (closed by tearDown)
         QemuHostState.shared.encryptedHandle = encryptedHandle
 
-        // 3.5 socket_vmnet 桥接路径已临时下线 (重写中, 切换 hell-vm 风格新方案).
-        //     当前 QemuArgsBuilder 收到 .bridged/.shared 直接抛 configInvalid; 仅 .nat 可用.
-
-        // 3.6 console socket 路径 (与 QMP / vmnet socket 同 runDir).
-        // QemuConsoleBridge 在 QEMU 启动后 connect (见 6c).
+        // 3.6 console socket 路径; QemuConsoleBridge 在 QEMU 启动后 connect.
         let consoleSocketURL = HVMPaths.consoleSocketPath(for: config.id)
         FSCleanup.removeQuietly(at: consoleSocketURL, context: "stale console socket")
 
         // 3.7 AutoUnattend ISO (仅 windows + bypassInstallChecks/autoInstallVirtioWin/autoInstallSpiceTools 任一开).
-        // 启动前用 hdiutil makehybrid 现做现挂; 失败 fail-soft (warn + 不挂第二 cdrom),
-        // 用户仍可手动按 Shift+F10 在 Setup 里跑 reg add. 不阻塞 VM 启动.
-        // UTM Guest Tools ISO 走全局 cache (~/Library/Application Support/HVM/cache/utm-guest-tools/utm-guest-tools.iso),
-        // 不打进 unattend ISO (~120MB 太大), QemuArgsBuilder 把它当第四 cdrom 单独挂.
-        // 缓存缺失时, 我们传 utmGuestToolsISOPath = nil → 不挂 cdrom; OOBE 那条 cmd 找不到
-        // utm-guest-tools-*.exe 也 noop, 不阻塞流程. user 装机前应当先在 GUI 创建向导
-        // 触发 UtmGuestToolsCache.ensureCached 下载.
+        // 启动前 hdiutil makehybrid 现做现挂; 失败 fail-soft (warn, 用户可手动 Shift+F10 跑 reg add).
+        // UTM Guest Tools ISO 走全局 cache, 不打进 unattend ISO (~120MB 太大), 当第四 cdrom 单独挂.
+        // 缓存缺失则传 nil 不挂 cdrom (OOBE 那条 cmd noop), 不阻塞.
         var unattendISOPath: String? = nil
         var utmGuestToolsPath: String? = nil
         if config.guestOS == .windows, let win = config.windows,
@@ -174,10 +151,8 @@ public enum QemuHostEntry {
         }
 
         // 4. 构造 argv
-        // 4.1 HDP / 输入 QMP / spice-vdagent socket 路径 (跟现有 console / qmp 同 runDir).
-        // 这些 socket 启动后由 QEMU bind, host (主 GUI / hvm-cli detach 后再 attach 的客户端)
-        // 通过 DisplayChannel + InputForwarder 连接. argv 注入这些路径会触发 patch 0002 的
-        // ui/iosurface backend 起 listener pthread + 额外 -qmp + virtio-serial-pci.
+        // 4.1 HDP / 输入 QMP / spice-vdagent socket 路径. QEMU bind 后由 host 端
+        // DisplayChannel + InputForwarder 连接; argv 注入触发 patch 0002 的 ui/iosurface backend.
         let iosurfaceSocketURL  = HVMPaths.iosurfaceSocketPath(for: config.id)
         let qmpInputSocketURL   = HVMPaths.qmpInputSocketPath(for: config.id)
         let vdagentSocketURL    = HVMPaths.vdagentSocketPath(for: config.id)
@@ -191,8 +166,8 @@ public enum QemuHostEntry {
         FSCleanup.removeQuietly(at: webdavSocketURL,    context: "stale webdav socket")
         FSCleanup.removeQuietly(at: hvmClipboardSocketURL, context: "stale hvm-clipboard socket")
 
-        // 4.5 加密 disks / nvram secret 文件准备 (启动期 0o600 临时文件, 启动后立即 unlink).
-        // 走公共 LuksSecretFile (binary → base64 ASCII passphrase).
+        // 4.5 加密 disks / nvram secret 文件 (启动期 0o600 临时文件, 启动后立即 unlink).
+        // 走 LuksSecretFile (binary → base64 ASCII passphrase).
         var diskSecretFile: LuksSecretFile? = nil
         var nvramSecretFile: LuksSecretFile? = nil
         if let subKeys = encryptedHandle?.qemuSubKeys {
@@ -233,11 +208,9 @@ public enum QemuHostEntry {
                 vdagentSocketPath: vdagentSocketURL.path,
                 utmGuestToolsISOPath: utmGuestToolsPath,
                 qgaSocketPath: qgaSocketURL.path,
-                // SPICE WebDAV: sharedFolders 非空才注入 chardev/device argv.
-                // 空时也不起 server, 不占 socket 路径.
+                // SPICE WebDAV: sharedFolders 非空才注入 chardev/device argv 并起 server.
                 webdavSocketPath: config.sharedFolders.isEmpty ? nil : webdavSocketURL.path,
-                // HVM 自家 guest helper (UTM 风格文件剪贴板). 仅 Windows guest 接 — helper
-                // EXE 只有 Win ARM64 build, Linux guest 没意义 (Linux 走 xclip 不同通路).
+                // HVM 自家 guest helper (文件剪贴板). 仅 Windows guest 接 (helper EXE 只有 Win ARM64 build).
                 hvmClipboardSocketPath: config.guestOS == .windows ? hvmClipboardSocketURL.path : nil,
                 qemuDiskSecretPath: diskSecretFile?.path,
                 qemuNvramSecretPath: nvramSecretFile?.path,
@@ -250,11 +223,9 @@ public enum QemuHostEntry {
         }
         QemuHostState.shared.consoleSocketURL = consoleSocketURL
 
-        // 2.9 vmnet bridged 模式: 启 QEMU 前 ~200ms 探测 daemon 响应性. 抓 socket 孤儿 /
-        //     daemon 协议错配 / daemon 异常拒绝. **不抓** "bridge attach silent 死" 那条
-        //     (user-space 无法可靠区分, 见 VMnetBridgeProbe.swift R5).
-        //     仅 warn, 不阻断启动 — argv 构造里的 SocketPaths.isReady 仍是硬门.
-        //     shared / host 模式不探 (没物理桥, 这类故障路径不一样).
+        // 2.9 vmnet bridged 模式: 启 QEMU 前 ~200ms 探测 daemon 响应性 (socket 孤儿 / 协议错配 /
+        //     异常拒绝). 仅 warn 不阻断 (argv 构造里 SocketPaths.isReady 是硬门).
+        //     **不抓** "bridge attach silent 死" (user-space 无法可靠区分). shared/host 模式不探.
         for (idx, net) in config.networks.enumerated() {
             guard net.enabled, net.mode == .vmnetBridged else { continue }
             guard let sock = net.effectiveSocketPath else { continue }
@@ -272,9 +243,7 @@ public enum QemuHostEntry {
             }
         }
 
-        // 3. stderr 落全局 ~/Library/.../HVM/logs/<displayName>-<uuid8>/qemu-stderr.log
-        // (truncate, 不累积老错误). 日志开关关闭 → stderrLog=nil, runner 丢弃 stderr,
-        // 不创建 vmLogsDir 子目录.
+        // 3. stderr 落 vmLogsDir/qemu-stderr.log (truncate). 日志开关关闭 → stderrLog=nil, 丢弃 stderr.
         let loggingEnabled = LoggingPreferences.readEnabledFromDefaults()
         let stderrLog: URL?
         if loggingEnabled {
@@ -287,7 +256,7 @@ public enum QemuHostEntry {
             stderrLog = nil
         }
 
-        // 4. 启动 QEMU 子进程. 桥接 (vmnet) 路径已下线; 当前仅支持 NAT, 不需要 fd 透传.
+        // 4. 启动 QEMU 子进程
         let runner = QemuProcessRunner(
             binary: qemuBin, args: buildResult.args, stderrLog: stderrLog
         )
@@ -299,10 +268,8 @@ public enum QemuHostEntry {
         }
         fputs("HVMHost(qemu): QEMU 已启动 (state=\(runner.state)) bundle=\(bundleURL.lastPathComponent)\n", stderr)
 
-        // 加密 secret 文件: QEMU 启动 init 阶段 secret object 创建时即读完 file (disk attach
-        // 同步完成于 main_loop 之前). QMP 连接成功 = init 完成 = secret 已读 → 可 unlink.
-        // (TODO #6 缩窗口) 旧策略保留到 VM 退出 (~小时级); 新策略 QMP 连成功后秒级清.
-        // 残留窗口最差 = QMP 连接超时窗口 (HVMTimeout.qmpConnect). tearDown 兜底 cleanup.
+        // 加密 secret 文件: QEMU init 阶段 secret object 创建时即读完 file.
+        // QMP 连成功 = init 完成 = secret 已读 → 可 unlink (下面 QMP 连成功后做). tearDown 兜底 cleanup.
         if let dsf = diskSecretFile {
             fputs("HVMHost(qemu): ✔ disk secret 文件 \(dsf.path) (QMP 连成功后 unlink)\n", stderr)
         }
@@ -319,7 +286,7 @@ public enum QemuHostEntry {
         QemuHostState.shared.qmpSocketURL = qmpSocketURL
         QemuHostState.shared.lock = lock
         QemuHostState.shared.startedAt = startedAt
-        // GUI 派生场景跳过自家 status item, 避免主 GUI 已有的图标重复出现.
+        // GUI 派生场景跳过自家 status item, 避免图标重复.
         if !embeddedInGUI {
             QemuHostState.shared.installStatusItem(displayName: config.displayName)
         }
@@ -340,8 +307,7 @@ public enum QemuHostEntry {
             QemuHostState.shared.qmpClient = client
             fputs("HVMHost(qemu): QMP 已连接\n", stderr)
 
-            // (TODO #6) QMP 已连 = QEMU init 完成 = secret object 已读完 file → 立即 unlink.
-            // 缩残留窗口从 VM 全生命周期 → 启动期 ~秒级.
+            // QMP 已连 = secret object 已读完 file → 立即 unlink.
             if let dsf = QemuHostState.shared.diskSecretFile {
                 dsf.cleanup()
                 QemuHostState.shared.diskSecretFile = nil
@@ -353,18 +319,12 @@ public enum QemuHostEntry {
                 fputs("HVMHost(qemu): ✔ nvram secret 已 unlink\n", stderr)
             }
 
-            // (6.0 EFI Shell auto-inject 已删除: bootmgfw "Press any key to boot from CD or DVD"
-            // 倒计时 5s 内 user 手动按一次任意键即可进 Setup, 跟物理 USB 装机一致, 不再
-            // host 端 spam Enter — 之前 spam 在 NVRAM 探测漏判 / Win 装好但 user 没切
-            // bootFromDiskOnly 这种边缘场景下会砸到 OOBE 让焦点元素被反复 click.)
-
-            // 6.1 thumbnail 抓帧定时器 (M-4): 与 VZ 路径周期一致, 抓 → 写 bundle/meta/thumbnail.png
+            // 6.1 thumbnail 抓帧定时器 (现已 no-op, 见 startThumbnailTimer 注释)
             QemuHostState.shared.startThumbnailTimer()
 
             // 6.4 vdagent 持久 connect + (按配置) 启动剪贴板桥.
             // vdagent socket 是 single-client (-chardev server=on), 必须由 VMHost 唯一持有.
-            // GUI 想改分辨率 / 切剪贴板都走 IPC (display.setMonitors / clipboard.setEnabled),
-            // 由 VMHost 转 vdagent. 这条路径同时给 hvm-dbg display.resize 复用.
+            // GUI 改分辨率 / 切剪贴板走 IPC (display.setMonitors / clipboard.setEnabled) 转 vdagent.
             let vdagent = VdagentClient(socketPath: vdagentSocketURL.path)
             vdagent.connect()
             QemuHostState.shared.vdagent = vdagent
@@ -377,11 +337,8 @@ public enum QemuHostEntry {
                 fputs("HVMHost(qemu): clipboard sharing 关闭 (config.clipboardSharingEnabled=false)\n", stderr)
             }
 
-            // 6.4c HVM 自家 guest helper bridge (UTM 风格文件剪贴板).
-            // 仅 Windows guest 起 — helper EXE 只有 Win ARM64 build, Linux guest 没意义.
-            // 启动后立即异步 connect, helper 没就绪不报错 (silently retry 5s, 等 guest helper
-            // 进程拉起来). PR-3 接 PasteboardBridge.onFileURLs callback 走 publishFiles 完整通路.
-            // PR-4 helper 自动安装 (QGA 推 EXE + 注册表自启 + 立即拉起).
+            // 6.4c HVM 自家 guest helper bridge (文件剪贴板). 仅 Windows guest 起.
+            // 异步 connect, helper 没就绪不报错 (silently retry 5s 等 guest helper 拉起).
             if config.guestOS == .windows {
                 let clipBridge = HVMFileClipboardBridge(
                     socketPath: hvmClipboardSocketURL.path,
@@ -389,8 +346,7 @@ public enum QemuHostEntry {
                 )
                 clipBridge.start()
                 QemuHostState.shared.fileClipboardBridge = clipBridge
-                // 接 PasteboardBridge file URLs callback (跟 vdagent text/image 平行路径).
-                // 必须在 PasteboardBridge.start() 之后 / 之前都行 (callback 是 var, runtime 改).
+                // 接 PasteboardBridge file URLs callback (跟 vdagent text/image 平行路径)
                 QemuHostState.shared.pasteboardBridge?.onFileURLs = { [weak clipBridge] urls in
                     guard let bridge = clipBridge else { return }
                     // 后台异步上传 + 通知 helper, 不阻 NSPasteboard 轮询线程
@@ -401,9 +357,8 @@ public enum QemuHostEntry {
                 }
                 fputs("HVMHost(qemu): HVM file-clipboard bridge 已启动 (chardev: \(hvmClipboardSocketURL.lastPathComponent))\n", stderr)
 
-                // 6.4d helper EXE 自动安装. QGA 推 EXE + 写 Run 注册表 + 立即 schtasks 拉起.
-                // 已装走 marker 跳过. 安装失败 fail-soft (log warn, VM 继续启动).
-                // 后台异步跑, 不阻塞主流程 (QGA 推 ~280 KB 通常 < 5s).
+                // 6.4d helper EXE 自动安装 (QGA 推 EXE + 写 Run 注册表 + schtasks 拉起).
+                // 已装走 marker 跳过, 失败 fail-soft. 后台异步跑不阻塞主流程.
                 let qgaPath = qgaSocketURL.path
                 Task.detached(priority: .userInitiated) {
                     do {
@@ -415,11 +370,9 @@ public enum QemuHostEntry {
                 }
             }
 
-            // 6.4b SPICE WebDAV server (共享目录):
-            // sharedFolders 非空才起. SpiceWebdavServer 跟 vdagent 一样是 single-client
-            // (-chardev server=on, HVM 主进程作 client 连入). guest 内 spice-webdavd 服务
-            // 通过 virtio-port org.spice-space.webdav.0 跟我们说 WebDAV-over-mux-frame 协议.
-            // 失败 fail-soft: server 起不来不阻塞 VM 启动 (config sharedFolders 不应让 VM 跑不起来).
+            // 6.4b SPICE WebDAV server (共享目录), sharedFolders 非空才起.
+            // single-client socket (HVM 作 client 连入), 跟 guest spice-webdavd 走
+            // virtio-port org.spice-space.webdav.0 的 WebDAV-over-mux-frame 协议. 失败 fail-soft.
             if !config.sharedFolders.isEmpty {
                 let roots: [SpiceWebdavServer.Root] = config.sharedFolders.map { sf in
                     .init(name: sf.name, url: URL(fileURLWithPath: sf.hostPath), readOnly: sf.readOnly)
@@ -436,7 +389,7 @@ public enum QemuHostEntry {
                 socketPath: consoleSocketURL.path,
                 logsDir: BundleLayout.logsDir(bundleURL)
             )
-            // QEMU 监听 console socket 几乎跟 QMP 同时就绪; 仍 poll 防 race (HVMTimeout.consoleBridgeConnect)
+            // console socket 几乎跟 QMP 同时就绪, 仍 poll 防 race
             let consDeadline = Date().addingTimeInterval(HVMTimeout.consoleBridgeConnect)
             var connected = false
             while Date() < consDeadline {
@@ -459,12 +412,11 @@ public enum QemuHostEntry {
                 fputs("HVMHost(qemu): ⚠ console bridge 5s 未连上, dbg.console.* 不可用\n", stderr)
             }
 
-            // 6a. 监听 QMP 异步事件: SHUTDOWN / POWERDOWN → 等进程 exit
+            // 6a. 监听 QMP 异步事件: SHUTDOWN 后 QEMU 自动 exit, 由 process observer 收尾
             Task { @MainActor in
                 for await event in client.events {
                     fputs("HVMHost(qemu): [event] \(event.name)\n", stderr)
                     if event.name == "SHUTDOWN" {
-                        // SHUTDOWN 之后 QEMU 自动 exit (ACPI poweroff 路径), 由 process observer 收尾
                         return
                     }
                 }
@@ -488,7 +440,7 @@ public enum QemuHostEntry {
             }
         }
 
-        // 7. IPC server (与 VZ 路径同 socketPath; CLI 客户端无需感知 backend 类型)
+        // 7. IPC server (CLI 客户端无需感知 backend 类型)
         let server = SocketServer(socketPath: socketURL)
         QemuHostState.shared.ipcServer = server
         do {
@@ -514,7 +466,7 @@ public enum QemuHostEntry {
 
         fputs("HVMHost(qemu): 就绪 (pid=\(getpid()), qmp=\(qmpSocketURL.lastPathComponent))\n", stderr)
 
-        // 8. NSApp.run() 驻留主循环 (status item + Cocoa 显示渲染依赖 main event loop)
+        // 8. NSApp.run() 驻留主循环 (status item + Cocoa 渲染依赖 main event loop)
         app.run()
         exit(0)
     }
@@ -542,9 +494,8 @@ public enum QemuHostEntry {
             exit(30)
         }
 
-        // 2. 路径准备: state dir 持久 (留 bundle, TPM NVRAM 表征属 VM 自身) /
-        //    socket+pid 运行时 (HVM/run) / log 全局 (HVM/logs/<displayName>-<uuid8>/)
-        // 日志开关关闭 → swtpm.log / swtpm-stderr.log 全部跳过, 不创建 vmLogsDir 子目录.
+        // 2. 路径准备: state dir 持久 (留 bundle) / socket+pid 运行时 (HVM/run) / log 全局.
+        // 日志开关关闭 → swtpm.log / swtpm-stderr.log 跳过.
         let stateDir = BundleLayout.tpmStateDir(bundleURL)
         try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         let sockPath = HVMPaths.swtpmSocketPath(for: config.id).path
@@ -558,18 +509,16 @@ public enum QemuHostEntry {
         } else {
             logFile = nil
         }
-        // orphan reaper: 上次 host 异常退出 (SIGKILL / OOM / 修前的 SIGPIPE) 可能留 orphan
-        // swtpm 进程, 占着 tpm/.lock NVRAM 锁让新 swtpm 启不来. 先读 pid file kill 老 pid,
-        // 再清 stale 文件. 详见 HVMQemu/SidecarOrphanReaper 注释.
+        // orphan reaper: 上次 host 异常退出可能留 orphan swtpm 占着 tpm/.lock 锁让新 swtpm 启不来.
+        // 先读 pid file kill 老 pid, 再清 stale 文件.
         SidecarOrphanReaper.reapByPidFile(pidFile: pidPath, expectedNamePrefix: "swtpm")
 
         // 清残留 socket / pid (上次崩溃留的会让 swtpm bind 失败 / 误以为已在跑)
         FSCleanup.removeQuietly(atPath: sockPath, context: "stale swtpm socket")
         FSCleanup.removeQuietly(at: pidPath,      context: "stale swtpm pid file")
 
-        // 3. 构造 argv + 启动. 加密 VM (encryptionKey != nil) 时 argv 加 `--key fd=0,...`,
-        // SwtpmRunner 通过 stdinHandle 透传 Pipe read 端给 swtpm fd=0; 父进程后续 flush()
-        // 写 32 字节 binary key, swtpm 用此 key AES-256-CBC 加密 NVRAM state.
+        // 3. 构造 argv + 启动. 加密 VM 时 argv 加 `--key fd=0,...`, SwtpmRunner 透传 Pipe read 端给
+        // swtpm fd=0, 父进程后续 flush() 写 32B binary key (swtpm AES-256-CBC 加密 NVRAM state).
         var swtpmArgs = SwtpmArgsBuilder.build(SwtpmArgsBuilder.Inputs(
             stateDir: stateDir,
             ctrlSocketPath: sockPath,
@@ -616,8 +565,7 @@ public enum QemuHostEntry {
             }
         }
 
-        // 4. 阻塞等 socket 文件就绪 (swtpm 通常 <500ms; QEMU 比 swtpm 早连会 ECONNREFUSED).
-        //    主动 poll (HVMTimeout.swtpmSocketReady); 若 swtpm 早退也立即报错.
+        // 4. 阻塞等 socket 文件就绪 (swtpm 通常 <500ms). poll, swtpm 早退也立即报错.
         let deadline = Date().addingTimeInterval(HVMTimeout.swtpmSocketReady)
         var ready = false
         while Date() < deadline {
@@ -727,31 +675,27 @@ final class QemuHostState {
     /// guest serial console 桥接 (-chardev socket); console.read/write 走它
     var consoleBridge: QemuConsoleBridge?
     var consoleSocketURL: URL?
-    /// VM 列表 thumbnail 抓帧定时器 (M-4): QMP screendump → bundle/meta/thumbnail.png. 与 VZ 路径同周期 10s
+    /// VM 列表 thumbnail 抓帧定时器 (现 no-op, 见 startThumbnailTimer)
     var thumbnailTimer: Timer?
 
-    /// 持久 vdagent client. 启动后立即 connect 并保活, 给 GUI 转发 resize +
-    /// 给 PasteboardBridge 做剪贴板双向同步. socket 是 single-client, 由 VMHost 唯一持有.
+    /// 持久 vdagent client (single-client socket, 由 VMHost 唯一持有). 给 GUI 转发 resize +
+    /// PasteboardBridge 做剪贴板双向同步.
     var vdagent: VdagentClient?
-    /// host ↔ guest 剪贴板桥. nil 表示用户关掉了 clipboard sharing.
+    /// host ↔ guest 剪贴板桥. nil = 用户关掉了 clipboard sharing.
     var pasteboardBridge: PasteboardBridge?
-    /// host → guest 文件粘贴桥.
-    /// 跟 PasteboardBridge 共享同一 VdagentClient (不同 callback slot, 不抢).
-    /// lazy: 第一个 clipboard.paste-files 请求到达时创建 + install.
-    /// clipboard sharing 关掉时**不**自动 uninstall — 文件粘贴是显式 Cmd+V 触发, 跟
-    /// 文本剪贴板 1Hz 轮询是不同语义, 不联动开关.
+    /// host → guest 文件粘贴桥, 跟 PasteboardBridge 共享同一 VdagentClient (不同 callback slot).
+    /// lazy: 第一个 clipboard.paste-files 请求到达时 install. clipboard sharing 关掉时**不**自动
+    /// uninstall (文件粘贴是显式 Cmd+V 触发, 跟文本 1Hz 轮询不同语义, 不联动开关).
     var filePasteBridge: FilePasteBridge?
-    /// SPICE WebDAV server (共享目录). nil = 该 VM config.sharedFolders 空.
-    /// 跟 vdagent 同款 single-client socket, 由 VMHost 唯一持有. tearDown 不需特殊清理 (deinit 自动关 fd).
+    /// SPICE WebDAV server (共享目录). nil = sharedFolders 空. single-client socket.
     var spiceWebdav: SpiceWebdavServer?
-    /// HVM 自家 guest helper 通路 — UTM 风格文件剪贴板.
-    /// 仅 Windows guest 启动. tearDown 时 stop() 让 read loop 退出 + 清 pending continuations.
+    /// HVM 自家 guest helper 通路 (文件剪贴板). 仅 Windows guest 启动.
     var fileClipboardBridge: HVMFileClipboardBridge?
 
     var statusItem: NSStatusItem?
     var statusMenu: QemuStatusMenuController?
 
-    /// 安装 menu bar 图标 + Stop/Kill/Quit 菜单 (与 VZ HostState 形态一致)
+    /// 安装 menu bar 图标 + Stop/Kill/Quit 菜单
     func installStatusItem(displayName: String) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
@@ -872,14 +816,13 @@ final class QemuHostState {
         }
     }
 
-    // MARK: - dbg.* 处理 (E4a)
+    // MARK: - dbg.* 处理
 
     private func handleDbgScreenshot(req: IPCRequest) async -> IPCResponse {
         guard let client = qmpClient else {
             return .failure(id: req.id, code: "backend.qmp_unavailable", message: "QMP 未就绪")
         }
         do {
-            // 与 VZ 路径一致 (Anthropic many-image 上限, HVMScreenshot.apiMaxEdge)
             let shot = try await QemuScreenshot.capture(
                 via: client,
                 tempDir: HVMPaths.runDir,
@@ -899,8 +842,7 @@ final class QemuHostState {
     }
 
     private func handleDbgStatus(req: IPCRequest) -> IPCResponse {
-        // QEMU 端 framebuffer 尺寸: 当前 cocoa 自带窗口, 没有简单 API 取实时尺寸;
-        // 用 guestOS 估算 (走 GuestOSType.defaultFramebufferSize, 与 VZ DbgOps 一致)
+        // framebuffer 尺寸没有简单 API 取实时值, 用 guestOS 估算
         let (gw, gh): (Int, Int)
         if let os = config?.guestOS {
             let s = os.defaultFramebufferSize; (gw, gh) = (s.width, s.height)
@@ -921,7 +863,7 @@ final class QemuHostState {
         guard let client = qmpClient else {
             return .failure(id: req.id, code: "backend.qmp_unavailable", message: "QMP 未就绪")
         }
-        // OCR 不缩放, 保留原分辨率以维持识别精度 (与 VZ DbgOps.handleOcr 一致)
+        // OCR 不缩放, 保留原分辨率以维持识别精度
         let shot: QemuScreenshot.Result
         do {
             shot = try await QemuScreenshot.capture(via: client, tempDir: HVMPaths.runDir, maxEdge: nil)
@@ -960,7 +902,7 @@ final class QemuHostState {
         guard let client = qmpClient else {
             return .failure(id: req.id, code: "backend.qmp_unavailable", message: "QMP 未就绪")
         }
-        // 只接受 running (paused 时 send-key 也行但 guest 不消化, 行为不可预测)
+        // 只接受 running (paused 时 guest 不消化按键)
         if case .running = runner?.state {} else {
             return .failure(id: req.id, code: "dbg.vm_not_running",
                             message: "QEMU 进程未运行")
@@ -991,10 +933,8 @@ final class QemuHostState {
             return .failure(id: req.id, code: "dbg.vm_not_running",
                             message: "QEMU 进程未运行")
         }
-        // guest framebuffer 真实尺寸 (用 QMP screendump 拿 PPM header). dynamic resize
-        // 后框架尺寸会变, 用写死的 defaultFramebufferSize 会让 mouse 坐标映射错位
-        // (实测 OCR 报 800x600 时 mouse 用 1920x1080 映射 → click 偏到屏幕外).
-        // screendump 失败 fallback 到 defaultFramebufferSize.
+        // guest framebuffer 真实尺寸 (QMP screendump 拿 PPM header). 必须取实时尺寸: dynamic
+        // resize 后用写死的 defaultFramebufferSize 会让 mouse 坐标映射错位. screendump 失败回退.
         var gw = 1, gh = 1
         let tmpURL = HVMPaths.runDir.appendingPathComponent("mouse-fbsize-\(UUID().uuidString.prefix(8)).ppm")
         if (try? await client.screendump(filename: tmpURL.path)) != nil,
@@ -1020,7 +960,7 @@ final class QemuHostState {
                 let (x, y) = try parseXY(req)
                 try await QemuInput.mouseDoubleClick(x: x, y: y, button: button, guestSize: guestSize, via: client)
             case "drag":
-                // hvm-dbg MouseCommand 把 --from x,y --to x,y 编进 (x,y) 起点 + (x2,y2) 终点
+                // (x,y) 起点 + (x2,y2) 终点 (hvm-dbg --from/--to)
                 let (fx, fy) = try parseXY(req)
                 let (tx, ty) = try parseXY2(req)
                 try await QemuInput.mouseDrag(
@@ -1060,9 +1000,9 @@ final class QemuHostState {
         return (x, y)
     }
 
-    // MARK: - dbg.boot_progress / console.* (F 系列)
+    // MARK: - dbg.boot_progress / console.*
 
-    /// boot_progress: state + 截屏 + OCR 启发式. 与 VZ DbgOps.handleBootProgress 同算法.
+    /// boot_progress: state + 截屏 + OCR 启发式分类 boot 阶段.
     private func handleDbgBootProgress(req: IPCRequest) async -> IPCResponse {
         let elapsed: Int? = startedAt.map { Int(Date().timeIntervalSince($0)) }
         func reply(_ phase: String, _ confidence: Float) -> IPCResponse {
@@ -1129,8 +1069,7 @@ final class QemuHostState {
     }
 
     /// 通过 QMP screendump 拿当前 framebuffer 真实尺寸 (PPM header).
-    /// 用于 hvm-dbg display-info 验证 spice-vdagent dynamic resize 实际生效:
-    /// resize 触发前后两次调用对比 widthPx/heightPx 是否变化.
+    /// 用于 hvm-dbg display-info 验证 spice-vdagent dynamic resize 是否生效.
     private func handleDbgDisplayInfo(req: IPCRequest) async -> IPCResponse {
         guard let client = qmpClient else {
             return .failure(id: req.id, code: "backend.qmp_unavailable", message: "QMP 未就绪")
@@ -1139,7 +1078,7 @@ final class QemuHostState {
         defer { try? FileManager.default.removeItem(at: tmpURL) }
         do {
             try await client.screendump(filename: tmpURL.path)
-            // 只读前 64 字节就够拿 PPM header (P6\n<width> <height>\n255\n...)
+            // 前 64 字节够拿 PPM header (P6\n<width> <height>\n255\n...)
             guard let fh = try? FileHandle(forReadingFrom: tmpURL) else {
                 return .failure(id: req.id, code: "dbg.frame_unavailable", message: "open ppm failed")
             }
@@ -1153,20 +1092,14 @@ final class QemuHostState {
         }
     }
 
-    /// 通过 qemu-guest-agent 跑 guest 内 process. 协议:
-    /// 1. connect qga unix socket
-    /// 2. send {"execute":"guest-exec", "arguments":{"path":..., "arg":[...], "capture-output":true}}
-    /// 3. 拿到 {"return": {"pid": N}}
-    /// 4. 轮询 {"execute":"guest-exec-status","arguments":{"pid": N}}
-    /// 5. 拿到 {"return": {"exited": true, "exitcode": K, "out-data":"base64", "err-data":"base64"}}
-    /// 6. return base64 stdout/stderr/exitcode
+    /// 通过 qemu-guest-agent 跑 guest 内 process (guest-exec + 轮询 guest-exec-status),
+    /// 返 base64 stdout/stderr + exitcode.
     private func handleDbgExecGuest(req: IPCRequest) async -> IPCResponse {
         guard let path = req.args["path"], !path.isEmpty else {
             return .failure(id: req.id, code: "ipc.bad_args",
                             message: "dbg.exec.guest 需要 args.path (binary 全路径或可执行名)")
         }
-        // args 解析: arg0|arg1|... (用 \x1f 0x1F unit separator 分隔, 防 shell quote 麻烦);
-        // 参数为空 OK (跑无参数 binary)
+        // args 用 0x1F unit separator 分隔 (防 shell quote 麻烦); 空 OK
         let argList: [String] = (req.args["argv"] ?? "")
             .split(separator: "\u{1F}", omittingEmptySubsequences: false)
             .map(String.init)
@@ -1198,9 +1131,8 @@ final class QemuHostState {
     }
 
     /// dbg.file.push — 通过 qemu-guest-agent guest-file-* API 把 host 文件复制到 guest.
-    /// args: localPath (host 绝对路径), remotePath (guest 绝对路径), timeoutSec? (默认 600)
-    /// VMHost 子进程是 sandboxless, 直接 open(2) localPath 即可 (用户文件权限只看 user perms,
-    /// 不需要 NSOpenPanel security-scoped URL 跨进程传递).
+    /// args: localPath / remotePath / timeoutSec? (默认 600).
+    /// VMHost 子进程 sandboxless, 直接 open(2) localPath 即可.
     private func handleDbgFilePush(req: IPCRequest) async -> IPCResponse {
         guard let localPath = req.args["localPath"], !localPath.isEmpty else {
             return .failure(id: req.id, code: "ipc.bad_args", message: "dbg.file.push 需要 args.localPath")
@@ -1257,7 +1189,7 @@ final class QemuHostState {
             return .failure(id: req.id, code: "qga.socket_not_found",
                             message: "qga socket 缺 (\(qgaSocketPath)); VM 未运行或 qga chardev 未启")
         }
-        // 本地父目录必须存在 (FileManager.replaceItemAt / moveItem 不会自动 mkdir)
+        // 本地父目录必须存在 (moveItem 不自动 mkdir)
         let dstURL = URL(fileURLWithPath: localPath)
         let parentDir = dstURL.deletingLastPathComponent().path
         guard FileManager.default.fileExists(atPath: parentDir) else {
@@ -1329,9 +1261,8 @@ final class QemuHostState {
 
     // MARK: - 非 dbg op: 业务级 IPC
 
-    /// display.setMonitors — GUI 拖主窗口 (debounce 后) 通过 IPC 让 VMHost 改 guest 分辨率.
-    /// 走 VMHost 持有的持久 vdagent.sendMonitorsConfig (无重连开销, 也避开 single-client 抢 socket).
-    /// args.width / args.height (字符串). 失败返 ipc.bad_args 或 backend.vdagent_unavailable.
+    /// display.setMonitors — GUI 拖主窗口后通过 IPC 改 guest 分辨率, 走持久 vdagent.sendMonitorsConfig.
+    /// args.width / args.height (字符串).
     private func handleDisplaySetMonitors(req: IPCRequest) -> IPCResponse {
         guard let widthStr = req.args["width"], let w = UInt32(widthStr) else {
             return .failure(id: req.id, code: "ipc.bad_args", message: "需要 args.width")
@@ -1378,9 +1309,8 @@ final class QemuHostState {
         return .success(id: req.id)
     }
 
-    /// clipboard.paste-files — GUI 把用户 Cmd+V 选中的 host 文件 list 推给 VMHost,
-    /// VMHost 走 SPICE vdagent FILE_XFER_* 流式传给 guest. 长事务 (单文件 4 GiB 最长几分钟),
-    /// 客户端 SocketClient.request 应给足 timeoutSec (≥ 600).
+    /// clipboard.paste-files — GUI 把 Cmd+V 选中的 host 文件推给 VMHost, 走 SPICE vdagent
+    /// FILE_XFER_* 流式传给 guest. 长事务 (单文件 4 GiB 几分钟), 客户端应给足 timeoutSec (≥ 600).
     /// args.paths = JSON 编码的 host 绝对路径数组.
     private func handleClipboardPasteFiles(req: IPCRequest) async -> IPCResponse {
         guard let pathsJSON = req.args["paths"] else {
@@ -1399,7 +1329,7 @@ final class QemuHostState {
             return .failure(id: req.id, code: "backend.vdagent_unavailable",
                             message: "vdagent client 未初始化 (VM 启动早期?)")
         }
-        // lazy install: PasteboardBridge 跟 FilePasteBridge 共享 vdagent, 不同 callback slot
+        // lazy install (跟 PasteboardBridge 共享 vdagent, 不同 callback slot)
         if filePasteBridge == nil {
             let bridge = FilePasteBridge(vdagent: vdagent)
             bridge.install()
@@ -1407,7 +1337,7 @@ final class QemuHostState {
             fputs("HVMHost(qemu): FilePasteBridge installed (lazy on first paste)\n", stderr)
         }
         let urls = paths.map { URL(fileURLWithPath: $0) }
-        // await 期间 main actor 让出, 其它 IPC 请求 (status / stop) 不被阻塞.
+        // await 期间 main actor 让出, 其它 IPC 请求 (status / stop) 不被阻塞
         let r = await filePasteBridge!.handlePasteFiles(urls)
         let payload = IPCClipboardPasteFilesPayload(
             successful: r.successful.map { .init(path: $0, reason: "") },
@@ -1417,9 +1347,8 @@ final class QemuHostState {
         return .encoded(id: req.id, payload: payload, kind: "clipboard paste files")
     }
 
-    /// clipboard.install-helper — GUI 一键装 helper 入口. 走 GuestHelperInstaller.install,
-    /// 仅 Windows guest 有意义 (Linux/macOS guest 直接返 success 当 noop). args.force = "1"
-    /// 时先删 marker 再装 (重装路径). 走 Task.detached 跑后台, GUI 显示进度.
+    /// clipboard.install-helper — GUI 一键装 helper, 走 GuestHelperInstaller.install.
+    /// 仅 Windows guest 有意义 (其它 guest 返 success 当 noop). args.force="1" 先删 marker 重装.
     private func handleClipboardInstallHelper(req: IPCRequest) async -> IPCResponse {
         guard let cfg = self.config else {
             return .failure(id: req.id, code: "backend.no_vm", message: "VM config 未就绪")
@@ -1433,7 +1362,7 @@ final class QemuHostState {
 
         do {
             if force {
-                // 先清 marker, 让 installer 重新走完整流程
+                // 先清 marker 让 installer 重走完整流程
                 _ = try? await QgaExec.run(
                     socketPath: qgaPath, path: "powershell.exe",
                     args: ["-NoProfile", "-NonInteractive", "-Command",
@@ -1452,10 +1381,9 @@ final class QemuHostState {
         }
     }
 
-    /// dbg.display.resize — 模拟 GUI 拖窗口触发 host → guest resize.
-    /// 双通路并发: HDP RESIZE_REQUEST + vdagent MONITORS_CONFIG.
-    /// **要求**: GUI 没在 attach (iosurface / vdagent chardev 都是 single-client).
-    /// 结果只标 "sent / connect_failed", 真实生效与否需 hvm-dbg display-info 验.
+    /// dbg.display.resize — 模拟 GUI 拖窗口触发 host → guest resize, 双通路并发
+    /// (HDP RESIZE_REQUEST + vdagent MONITORS_CONFIG). 要求 GUI 没在 attach (single-client).
+    /// 结果只标 sent / connect_failed, 真实生效需 hvm-dbg display-info 验.
     private func handleDbgDisplayResize(req: IPCRequest) async -> IPCResponse {
         guard let widthStr = req.args["width"], let w = UInt32(widthStr) else {
             return .failure(id: req.id, code: "ipc.bad_args", message: "需要 args.width")
@@ -1470,7 +1398,7 @@ final class QemuHostState {
             return .failure(id: req.id, code: "backend.no_vm", message: "VM config 未就绪")
         }
 
-        // ---- A. HDP RESIZE_REQUEST (适用 Linux virtio-gpu, 对 ramfb 是诊断信号) ----
+        // ---- A. HDP RESIZE_REQUEST (Linux virtio-gpu; 对 ramfb 仅诊断信号) ----
         var hdpResult = "skipped"
         let iosurfacePath = HVMPaths.iosurfaceSocketPath(for: configID).path
         if FileManager.default.fileExists(atPath: iosurfacePath) {
@@ -1480,7 +1408,7 @@ final class QemuHostState {
                 try channel.connect()
                 fputs("HVMHost(qemu): dbg.display.resize → HDP requestResize(\(w)x\(h))\n", stderr)
                 channel.requestResize(width: w, height: h)
-                // 给 send queue + read thread 一点时间把 bytes 推过去并收 ack
+                // 给 send queue + read thread 时间推 bytes 并收 ack
                 try? await Task.sleep(nanoseconds: 300_000_000)
                 channel.disconnect(reason: .normal)
                 hdpResult = "sent"
@@ -1492,8 +1420,8 @@ final class QemuHostState {
             hdpResult = "skipped: iosurface socket 不存在"
         }
 
-        // ---- B. vdagent MONITORS_CONFIG (适用 Win spice-vdagent → SetDisplayConfig) ----
-        // VMHost 持有持久 vdagent (启动时已 connect), dbg 不再临时 connect/disconnect 抢 socket.
+        // ---- B. vdagent MONITORS_CONFIG (Win spice-vdagent → SetDisplayConfig) ----
+        // 走 VMHost 持有的持久 vdagent, 不临时 connect 抢 socket.
         var vdagentResult = "skipped"
         if let vdagent = self.vdagent {
             fputs("HVMHost(qemu): dbg.display.resize → vdagent.sendMonitorsConfig(\(w)x\(h))\n", stderr)
@@ -1550,9 +1478,8 @@ final class QemuHostState {
         }
     }
 
-    /// 把 QmpError 映射到稳定的 backend.qmp_* code, 让用户/客户端能区分 closed / timeout /
-    /// protocol error / socket error / qemu-side error. 老逻辑全部统一返 backend.qmp_error
-    /// 加 raw "\(error)", 用户看到 "Connection reset" 不知是哪种根因.
+    /// 把 QmpError 映射到稳定的 backend.qmp_* code, 让客户端区分 closed / timeout /
+    /// protocol / socket / qemu-side error.
     private func mapQmpFailure(req: IPCRequest, error: Error) -> IPCResponse {
         guard let qe = error as? QmpError else {
             return .failure(id: req.id, code: "backend.qmp_error", message: "\(error)")
@@ -1581,7 +1508,7 @@ final class QemuHostState {
         guard let config else {
             return .failure(id: req.id, code: "backend.no_vm", message: "config 未注入")
         }
-        // 优先用 QMP query-status; QMP 未就绪或失败时回退到进程 state
+        // 优先 QMP query-status, 未就绪/失败时回退到进程 state
         var stateString = "starting"
         if let client = qmpClient {
             if let qstat = try? await client.queryStatus() {
@@ -1616,11 +1543,8 @@ final class QemuHostState {
         }
     }
 
-    /// QEMU 后端的 thumbnail 抓帧改在 GUI 进程做 (QemuEmbeddedSession), 直接读
-    /// FramebufferRenderer 的 bytesNoCopy mmap shm 编 PNG, 0 暂停 0 拷贝.
-    /// host 进程不再调 QMP screendump (它是 stop-the-world, 每 10s 卡顿一次,
-    /// 严重影响 guest 体验). 这里保留空函数仅为
-    /// API 兼容, 本身 no-op.
+    /// no-op: thumbnail 抓帧已移到 GUI 进程 (QemuEmbeddedSession 读 mmap shm 编 PNG, 0 暂停 0 拷贝).
+    /// host 进程不再调 QMP screendump (stop-the-world, 卡顿 guest). 保留空函数仅为 API 兼容.
     func startThumbnailTimer() {
         thumbnailTimer?.invalidate()
         thumbnailTimer = nil
@@ -1641,12 +1565,12 @@ final class QemuHostState {
         ipcServer?.stop()
         qmpClient?.close()
         runner?.waitUntilExit()
-        // swtpm 因 --terminate 通常已自动退; 保险再终止 + 等
+        // swtpm 通常已自动退; 保险再终止 + 等
         if let s = swtpmRunner {
             s.terminate()
             s.waitUntilExit()
         }
-        // socket_vmnet 现在是系统级 launchd daemon, 不归本进程生命周期; tearDown 不动它
+        // socket_vmnet 是系统级 launchd daemon, 不归本进程生命周期, tearDown 不动它
         if let qmpSocketURL {
             try? FileManager.default.removeItem(at: qmpSocketURL)
         }
@@ -1657,7 +1581,7 @@ final class QemuHostState {
         if let u = consoleSocketURL {
             try? FileManager.default.removeItem(at: u)
         }
-        // 加密 secret 文件兜底清 (启动后已 unlink, 这里 deinit 时再 unlink 是 noop)
+        // 加密 secret 文件兜底清 (启动后通常已 unlink, 这里再 unlink 是 noop)
         diskSecretFile?.cleanup()
         nvramSecretFile?.cleanup()
         diskSecretFile = nil
@@ -1670,7 +1594,7 @@ final class QemuHostState {
     }
 }
 
-/// menu bar 菜单 action 接收方 (QEMU 后端版).
+/// menu bar 菜单 action 接收方.
 @MainActor
 final class QemuStatusMenuController: NSObject {
     @objc func stopAction() {

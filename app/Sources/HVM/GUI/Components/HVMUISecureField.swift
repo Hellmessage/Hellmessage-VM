@@ -1,16 +1,8 @@
-// HVMUISecureField.swift — 新 GUI 密码 / 敏感文本字段 (PR-C2)
+// HVMUISecureField.swift — 新 GUI 密码 / 敏感文本字段.
 //
-// 跟 HVMUI.TextField 同套 chrome (复用 HVMUI.FieldChrome modifier) 但底层是 SwiftUI
-// SecureField (NSSecureTextField); 加 show/hide toggle 切显隐.
-//
-// 用法:
-//   HVMUI.SecureField("密码", text: $pwd, placeholder: "请输入")
-//   HVMUI.SecureField("密码", text: $pwd, showToggle: true,
-//                     probeID: "dialog.encrypt.field.password")
-//
-// showToggle = true 时右侧加 eye / eye.slash icon 按钮; 点击后字段切到 TextField
-// (明文) 直到再次点击. probe 仍按 SecureField 通路, getter/setter 透当前 binding
-// (不论明文还是密文 SwiftUI 内部都是 String).
+// 跟 HVMUI.TextField 同套 chrome (复用 FieldChrome) 但底层是 NSSecureTextField (本质禁 IME).
+// showToggle = true 时右侧加 eye 按钮切显隐 (reveal 态切到明文 TextField).
+// 用法: HVMUI.SecureField("密码", text: $pwd, probeID: "dialog.encrypt.field.password")
 
 
 import SwiftUI
@@ -112,8 +104,7 @@ struct SecureField: View {
                     .foregroundStyle(HVMTheme.color.textSecondary)
             }
 
-            // 明文态: SwiftUI TextField (showToggle reveal, 罕见); 密文态: NSSecureTextField
-            // (本质禁 IME — 密码不该走中文/日文输入法候选).
+            // 明文态: SwiftUI TextField (showToggle reveal); 密文态: NSSecureTextField (本质禁 IME)
             if isRevealed {
                 SwiftUI.TextField(placeholder, text: $text)
                     .textFieldStyle(.plain)
@@ -152,7 +143,7 @@ struct SecureField: View {
                     .progressViewStyle(.circular)
             }
         }
-        // padding + frame 内化 (FieldChrome 不再管), 让 hit test 覆盖整个 padding 区
+        // padding + frame 内化, 让 hit test 覆盖整个 padding 区
         .padding(.horizontal, size.horizontalPadding)
         .frame(maxWidth: .infinity, minHeight: size.height)
         .contentShape(Rectangle())
@@ -161,8 +152,8 @@ struct SecureField: View {
 
 }  // extension HVMUI 结束
 
-/// 真 NSSecureTextField 包装 — SwiftUI SecureField 实测在 macOS 仍弹 IME 候选 (密码框不该走
-/// 中文/日文输入法). NSSecureTextField 本质禁 IME (安全文本输入强制 ASCII/Roman), 是可靠修法.
+/// 真 NSSecureTextField 包装 — SwiftUI SecureField 在 macOS 仍弹 IME 候选;
+/// NSSecureTextField 本质禁 IME (安全文本输入强制 ASCII/Roman).
 private struct MacSecureField: NSViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool

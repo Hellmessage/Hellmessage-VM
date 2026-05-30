@@ -1,12 +1,8 @@
-// DetailEncryptionSection.swift — 详情页"加密"section + 加密事务入口 (业务页 #3, E2).
+// DetailEncryptionSection.swift — 详情页"加密"section + 加密事务入口 (放详情页最底, 破坏性重操作沉底).
 //
-// 放详情页最底 (破坏性重操作沉底). 按 VM 加密状态显不同入口:
-//   - 明文 + QEMU + 非 macOS: "未加密" + [加密 VM…]
-//   - 加密 qemuPerfile:        "已加密 · qemu-perfile" + [改密…] + [解密…]
-//   - 加密 vzSparsebundle:     灰显 "VZ 加密 GUI 暂未接入 (走 hvm-cli)"
-//   - macOS guest / VZ 明文:   灰显 "不支持整盘加密 (仅 QEMU + Linux/Windows)"
-// 解密/改密 不要求先解锁 (dialog 自收密码). 入口仅 stopped 可点. 动作读 store.selected
-// 防 stale probe 闭包 (同 VM_DETAIL 约束). 事务走 NewGUIEncryptionDialog 三态 dialog.
+// 按 VM 加密状态显不同入口: 明文 → [加密 VM…]; 加密 qemuPerfile → [改密…] + [解密…];
+// vzSparsebundle / macOS guest / VZ 明文 → 灰显文案.
+// 解密/改密不要求先解锁 (dialog 自收密码). 入口仅 stopped 可点. 动作读 store.selected 防 stale probe 闭包.
 
 
 import SwiftUI

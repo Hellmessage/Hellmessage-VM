@@ -7,11 +7,7 @@ import Darwin
 import HVMCore
 
 public enum Frame {
-    /// 单帧 payload 上限. 实际用例:
-    ///   - console.read: ringBuffer 256 KiB → base64 ≈ 340 KiB
-    ///   - gui.screenshot: 主窗口 PNG 通常 < 4 MiB → base64 ≈ 5.5 MiB (5K 显示器留余量)
-    ///   - 其他命令几 KiB
-    /// 收紧到 8 MiB 既覆盖 screenshot 上限又防异常请求撑大 parser 内存
+    /// 单帧 payload 上限 8 MiB — 覆盖最大用例 (gui.screenshot base64 ≈ 5.5 MiB) 又防异常请求撑大 parser 内存.
     public static let maxPayloadBytes: UInt32 = 8 * 1024 * 1024
 
     /// 读取单个帧. 返回 nil 表示 peer 正常关闭连接. 超时 / 错误抛 HVMError.ipc.*

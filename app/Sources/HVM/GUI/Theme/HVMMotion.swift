@@ -1,8 +1,5 @@
-// HVMMotion.swift — 新 GUI 动效时长 + 曲线 token
-//
-// 业务侧禁止 .animation(.easeOut(duration: 0.2)) 硬写, 一律走 HVMTheme.motion.<name>.
-// 时长档位 fast (120ms hover/press) / base (200ms 字段 focus / Dialog 进出) /
-// slow (320ms 切页 / Wizard 步骤). spring 仅按钮 press 反馈.
+// HVMMotion.swift — 新 GUI 动效时长 + 曲线 token. 业务侧禁硬写 duration, 走 HVMTheme.motion.<name>.
+// fast (120ms hover/press) / base (200ms focus / Dialog) / slow (320ms 切页); spring 仅按钮 press.
 
 
 import SwiftUI

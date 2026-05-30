@@ -1,11 +1,7 @@
-// hvm-dbg/Commands/QemuLaunchCommand.swift
-// hvm-dbg qemu-launch — 独立调试命令: 直接拉起 QEMU 后端 VM, 绕过 hvm-cli start
-// 的 host process / IPC server 流程. 用于验证 QEMU 模块端到端正确性.
+// hvm-dbg qemu-launch — 调试命令: 直接拉起 QEMU 后端 VM, 绕过 hvm-cli start 的 host
+// process / IPC server 流程, 验证 QEMU 模块端到端正确性.
 //
-// 与 hvm-cli start 的区别:
-//   - hvm-cli start 走 HVMHost 子进程 + IPC, VZ 后端正式生产路径
-//   - hvm-dbg qemu-launch 直接 in-process 启动 QEMU, 命令前台等待, ctrl+c 走 ACPI
-//   - 不抢 BundleLock (这是调试命令; 别人若已起着, 端口冲突自见)
+// in-process 启动 QEMU, 前台等待, ctrl+c 走 ACPI; 不抢 BundleLock (端口冲突自见).
 //
 // 用法:
 //   hvm-dbg qemu-launch <vm-name>           # 启动并附着
@@ -76,12 +72,9 @@ struct QemuLaunchCommand: AsyncParsableCommand {
             (swtpmRunner, swtpmSockPath) = try await launchSwtpmSidecar(config: config, bundleURL: bundleURL)
         }
 
-        // socket_vmnet 现在是系统级 launchd daemon (scripts/install-vmnet-helper.sh 安装),
-        // QemuArgsBuilder 直接连 /var/run/socket_vmnet*; daemon 缺会抛 configInvalid
+        // socket_vmnet 是系统级 launchd daemon, QemuArgsBuilder 直接连 /var/run/socket_vmnet*
 
-        // 也传 qemuPidPath: qemu-launch 跑的是 production QEMU binary, 同样可能产生 orphan
-        // (人为 Ctrl-C / sigkill). 下次 QemuHostEntry 启动时会读 pid file reap orphan, 让 dev
-        // 期 qemu-launch 后再开 GUI 不踩坑.
+        // 传 qemuPidPath: qemu-launch 也可能产生 orphan, 下次 QemuHostEntry 启动读 pid file reap
         let inputs = QemuArgsBuilder.Inputs(
             config: config,
             bundleURL: bundleURL,
@@ -99,9 +92,7 @@ struct QemuLaunchCommand: AsyncParsableCommand {
             return
         }
 
-        // stderr 落全局 ~/Library/.../HVM/logs/<displayName>-<uuid8>/qemu-stderr.log;
-        // 每次 truncate 避免累积老错误干扰判断. 日志开关关闭 → stderrLog=nil, runner
-        // 丢弃 stderr, 不创建 vmLogsDir 子目录.
+        // stderr 落 vmLogsDir/qemu-stderr.log, 每次 truncate; 日志开关关 → stderrLog=nil 丢弃
         let stderrLog: URL?
         if LoggingPreferences.readEnabledFromDefaults() {
             let qemuLogsDir = HVMPaths.vmLogsDir(displayName: config.displayName, id: config.id)
@@ -113,7 +104,6 @@ struct QemuLaunchCommand: AsyncParsableCommand {
             stderrLog = nil
         }
 
-        // 桥接 (vmnet) 路径已下线; 当前仅 .nat 可用, 不需要父进程 fd 透传.
         let runner = QemuProcessRunner(
             binary: qemuBin, args: buildResult.args, stderrLog: stderrLog
         )
@@ -125,8 +115,7 @@ struct QemuLaunchCommand: AsyncParsableCommand {
             print("  stderr: \(stderrLog?.path ?? "(日志关, 不落盘)")")
         }
 
-        // QMP 连接重试: QEMU bind unix socket 与 listen 之间有窗口, ECONNREFUSED 期间重试.
-        // 同时若 QEMU 进程提前退出 (例如缺 ROM / 配置错误), 不再继续重试.
+        // QMP 连接重试: bind 与 listen 之间有窗口, ECONNREFUSED 期间重试; QEMU 提前退出则停
         var client: QmpClient?
         let connectDeadline = Date().addingTimeInterval(TimeInterval(HVMTimeout.qmpConnect))
         var lastErr: Error?
@@ -159,8 +148,7 @@ struct QemuLaunchCommand: AsyncParsableCommand {
             runner.waitUntilExit()
             throw ExitCode(5)
         }
-        // QmpClient close 是幂等的, 走 defer 兜底任何抛出路径 (queryStatus / waiter / event task 都可能抛).
-        // 之前只在 line 203 显式 close, 中途 throw 漏关 socket fd
+        // QmpClient close 幂等, 走 defer 兜底任何抛出路径 (queryStatus / waiter / event task 都可能抛)
         defer { client.close() }
 
         let status = try await client.queryStatus()
@@ -188,8 +176,7 @@ struct QemuLaunchCommand: AsyncParsableCommand {
             }
         }
 
-        // SIGINT (ctrl+c) → ACPI powerdown + 强杀 fallback
-        // 注: signal(SIGINT, SIG_IGN) 后 DispatchSource 才能可靠拦截
+        // SIGINT (ctrl+c) → ACPI powerdown + 强杀 fallback; SIG_IGN 后 DispatchSource 才能可靠拦截
         signal(SIGINT, SIG_IGN)
         let sigSrc = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
         let timeout = self.shutdownTimeout
@@ -215,7 +202,7 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         await waiter.wait()
         eventTask.cancel()
         runner.waitUntilExit()
-        // client.close() 走 defer (line 152), 此处不再显式调; close 幂等再调一次也安全
+        // client.close() 走 defer
 
         // swtpm: --terminate 通常已让它自退; 保险再 SIGTERM
         if let s = swtpmRunner {
@@ -269,7 +256,7 @@ struct QemuLaunchCommand: AsyncParsableCommand {
         try HVMPaths.ensure(HVMPaths.runDir)
         let sockPath = HVMPaths.swtpmSocketPath(for: config.id).path
         let pidPath = HVMPaths.swtpmPidPath(for: config.id)
-        // 日志开关关闭 → swtpm.log / swtpm-stderr.log 全部跳过, 不创建 vmLogsDir 子目录.
+        // 日志开关关 → swtpm.log / swtpm-stderr.log 全跳过
         let logFile: URL?
         let stderrLog: URL?
         if LoggingPreferences.readEnabledFromDefaults() {

@@ -1,7 +1,6 @@
-// DetailNetworkSection.swift — 详情页网络 section (NIC 列表 + 展开编辑, V5).
+// DetailNetworkSection.swift — 详情页网络 section (NIC 列表 + 展开编辑).
 //
-// 多网卡铺路: 每个 NIC 一个紧凑行 (网卡N | 模式 badge | MAC | 桥接接口 | 启用开关 | 删除),
-// 点击行展开编辑表单 (模式/设备型号/MAC/桥接接口). 标题右侧 [添加网卡].
+// 每个 NIC 一个紧凑行 (网卡N | 模式 | MAC | 桥接接口 | 启用 | 删除), 点击行展开编辑表单.
 // 编辑 networks draft (绑定自 DetailOverviewView), 统一 saveFooter 保存.
 
 

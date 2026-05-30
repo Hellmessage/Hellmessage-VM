@@ -1,32 +1,16 @@
 // HVMEncryption/EncryptedConfigIO.swift
-// QEMU 路径加密 VM 的 config.yaml in-place 加密. 整 VM 加密设计 v2.2.
-//
-// 文件名: <bundle>/config.yaml.enc (与明文 config.yaml 互斥, 同 bundle 不能同时存在)
+// QEMU 路径加密 VM 的 config.yaml in-place 加密 (AES-256-GCM, config-key).
+// 文件名 <bundle>/config.yaml.enc (与明文 config.yaml 互斥).
 //
 // 落盘格式 (二进制):
-//   [0..3]   magic = "HENC" (4 bytes, 'H' 'E' 'N' 'C' = 0x48 0x45 0x4E 0x43)
-//   [4]      format version = 0x01 (未来切 ChaCha20-Poly1305 / 加 AAD 等升 v2)
+//   [0..3]   magic = "HENC" (0x48 0x45 0x4E 0x43)
+//   [4]      format version = 0x01 (切 ciphersuite / 加 AAD 时 bump)
 //   [5..7]   reserved = [0, 0, 0]
-//   [8..]    AES.GCM.SealedBox.combined (12-byte nonce + ciphertext + 16-byte auth tag)
+//   [8..]    AES.GCM.SealedBox.combined (12B nonce + ciphertext + 16B auth tag)
+// 8 字节头部让用户 `head -c 8` 一眼识别 HVM 加密 config.
 //
-// 8 字节头部对齐, 让用户用 `head -c 8` / `xxd | head -1` 一眼能识别 HVM 加密 config.
-//
-// 加密流程:
-//   1. config -> YAMLEncoder -> yaml string -> utf8 bytes (plaintext)
-//   2. AES-256-GCM seal with config-key (random 12-byte nonce, output combined)
-//   3. magic + version + reserved + combined -> atomic write to config.yaml.enc
-//
-// 解密流程:
-//   1. read config.yaml.enc
-//   2. 校验 magic + version
-//   3. AES.GCM.SealedBox(combined: rest) -> AES.GCM.open(sealed, using: key)
-//   4. plaintext bytes -> utf8 yaml string -> YAMLDecoder -> VMConfig
-//   5. validate
-//
-// 错误处理:
-//   - magic 不对 / version 不识别 / combined 长度不够 -> .parseFailed
-//   - AES.GCM.open 失败 (auth tag 验证失败) -> .wrongPassword (密码错或文件被改)
-//   - YAML 解析失败 -> .bundle(.parseFailed) (理论上密码对不会触发, 防御兜底)
+// 错误: magic/version/长度不对 → .parseFailed; AES.GCM.open 失败 (密码错或文件被改)
+// → .wrongPassword; YAML 解析失败 → .bundle(.parseFailed) 防御兜底.
 
 import Foundation
 import CryptoKit
@@ -52,16 +36,14 @@ public enum EncryptedConfigIO {
     }
 
     /// 检查 bundle 是否走加密 config 路径 (= config.yaml.enc 存在).
-    /// 用于 EncryptedBundleIO 路由层判定 (PR-7 之后用).
     public static func isEncrypted(at bundleURL: URL) -> Bool {
         FileManager.default.fileExists(atPath: configEncURL(bundleURL).path)
     }
 
     // MARK: - save
 
-    /// AES-GCM 加密 config 写到 <bundle>/config.yaml.enc, atomic. 走 .yaml.enc.tmp 中转.
-    /// overrideURL: 非 nil 则写到该路径, 不是默认 bundleURL/config.yaml.enc. 用于 RekeyVMOperation
-    /// 原子化写 staging 文件 (TODO #12).
+    /// AES-GCM 加密 config 写到 <bundle>/config.yaml.enc, atomic (走 .tmp 中转).
+    /// overrideURL: 非 nil 则写到该路径 (RekeyVMOperation 原子化写 staging 用).
     public static func save(config: VMConfig,
                              to bundleURL: URL,
                              key: SymmetricKey,
@@ -163,7 +145,7 @@ public enum EncryptedConfigIO {
             throw HVMError.encryption(.parseFailed(reason: "SealedBox.combined 解析失败: \(error)"))
         }
 
-        // 3. AES-GCM open. 失败原因可能是密码错 / 文件被改 — 都报 .wrongPassword (用户视角等价)
+        // 3. AES-GCM open. 失败 (密码错 / 文件被改) 都报 .wrongPassword (用户视角等价)
         let plaintext: Data
         do {
             plaintext = try AES.GCM.open(sealed, using: key)

@@ -1,6 +1,5 @@
 // HVMIPC/SocketServer.swift
-// Unix domain socket 服务端. 每个连接串行处理单请求/单响应 (M1)
-// 运行于 HVMHost 进程内
+// HVMHost 进程内的 Unix domain socket 服务端. 每连接串行处理请求/响应.
 
 import Foundation
 import Darwin
@@ -10,8 +9,7 @@ import HVMCore
 public final class SocketServer: @unchecked Sendable {
     public typealias Handler = @Sendable (IPCRequest) -> IPCResponse
 
-    /// 单 server 同时处理的连接上限. 超过则新连接立即 close.
-    /// CLI / GUI 探针正常并发 1-2; 32 给重试 + bug 留余量, 上限防失控线程
+    /// 同时连接上限, 超过则新连接立即 close (正常并发 1-2; 32 防失控线程).
     public static let maxConcurrentConnections = 32
 
     private let path: String
@@ -20,8 +18,7 @@ public final class SocketServer: @unchecked Sendable {
     private var handler: Handler?
     private var stopped = false
 
-    /// 跑连接 handler 的 dispatch 队列 (concurrent, 由 GCD 池管线程, 非 1:1 thread-per-conn).
-    /// 配合 activeConnections 计数硬上限, 不会无限制涨.
+    /// 跑连接 handler 的 concurrent 队列 (GCD 池管线程, 非 1:1 thread-per-conn), 配合 activeConnections 上限.
     private let connectionQueue = DispatchQueue(
         label: "hvm.ipc.server.connections",
         qos: .userInitiated,
@@ -35,7 +32,7 @@ public final class SocketServer: @unchecked Sendable {
         self.path = socketPath.path
     }
 
-    /// 绑定并开始 accept. handler 将在独立线程上被调用, 必须线程安全
+    /// 绑定并开始 accept. handler 在独立线程上被调用, 必须线程安全.
     public func start(handler: @escaping Handler) throws {
         // 预清理旧 socket (上次崩溃留下)
         unlink(path)
@@ -116,14 +113,12 @@ public final class SocketServer: @unchecked Sendable {
             if client < 0 {
                 if stopped || errno == EBADF { return }
                 if errno == EINTR { continue }
-                // 其他 errno 可能是临时资源 (EMFILE / ENFILE / ENOMEM) 或瞬时网络故障;
-                // 至少 sleep 10ms 防忙轮询打爆 CPU
+                // 临时资源 (EMFILE/ENFILE/ENOMEM) 等: sleep 10ms 防忙轮询打爆 CPU
                 Self.log.warning("accept failed errno=\(errno)")
                 usleep(10_000)
                 continue
             }
-            // 上限保护: 超过 maxConcurrentConnections 立即拒绝. CLI/GUI 探针正常 1-2 连接,
-            // 真到 32 多半是 client 漏 close 或对端无限重连
+            // 上限保护: 超过 maxConcurrentConnections 立即拒绝 (多半是 client 漏 close 或无限重连)
             let allowed = activeConnections.withLock { count -> Bool in
                 if count >= Self.maxConcurrentConnections { return false }
                 count += 1

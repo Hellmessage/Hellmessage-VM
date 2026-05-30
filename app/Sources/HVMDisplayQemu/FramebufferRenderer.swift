@@ -2,18 +2,15 @@
 //
 // Metal 全屏渲染器: 把 SURFACE_NEW 携带的 POSIX shm framebuffer 零拷贝绘到 MTKView.
 //
-// 关键链路 (零拷贝, hell-vm 同款方案):
-//   1. SURFACE_NEW 携带 shm fd (SCM_RIGHTS), 由 DisplayChannel 转交
+// 零拷贝链路:
+//   1. SURFACE_NEW 的 shm fd (SCM_RIGHTS) 由 DisplayChannel 转交
 //   2. mmap shm → device.makeBuffer(bytesNoCopy:): GPU 与 host 共享同一物理页
-//   3. buffer.makeTexture(descriptor:offset:bytesPerRow:): texture 直接 view 自 mmap
-//   4. fullscreen pipeline + fragment shader 采样 → drawable (无任何 CPU memcpy)
+//   3. buffer.makeTexture(...): texture 直接 view 自 mmap
+//   4. fullscreen pipeline + fragment shader 采样 → drawable (无 CPU memcpy)
 //
-// 关键约束: bytesPerRow 必须 ≥256B 对齐, 否则 M3+ 的 _mtlValidateStrideTextureParameters
-// 会 abort. 这要求 QEMU iosurface backend 的 shm stride 已被 padding 到 256
-// (patches/qemu/0002 里 IOS_STRIDE_ALIGN). 客户端直接信任 info.stride, 不自己推.
-//
-// 性能: 30Hz draw 只触发 GPU encode + present, CPU 端 0 拷贝; QEMU 端 dpy_gfx_update
-// 仍然只拷 dirty 区到 shm. 1080p 全屏动画在 M3 Max 上稳 30Hz 接近 0% CPU.
+// 硬约束: bytesPerRow 必须 ≥256B 对齐, 否则 M3+ 的 _mtlValidateStrideTextureParameters
+// abort. QEMU iosurface backend 已把 shm stride padding 到 256 (patch 0002 IOS_STRIDE_ALIGN),
+// 客户端直接信任 info.stride.
 
 import Foundation
 import Metal
@@ -21,11 +18,8 @@ import MetalKit
 import Darwin
 import HVMCore
 
-/// MTLBuffer.makeBuffer(deallocator:) 的 deallocator closure 在 Swift 6 SDK 里
-/// 类型为 `@Sendable @escaping (UnsafeMutableRawPointer, Int) -> Void`. 直接 capture
-/// `UnsafeMutableRawPointer` 触发 non-Sendable warning. 包成 @unchecked Sendable
-/// wrapper 让编译器跳过检查 — mmap 返回的 raw pointer 跨线程访问本身是 race-free
-/// (kernel mapping 不变), munmap 也是线程安全 syscall.
+/// 包 mmap raw pointer 给 deallocator closure 捕获. @unchecked Sendable: mmap 返回的
+/// raw pointer 跨线程访问 race-free (kernel mapping 不变), munmap 也线程安全.
 fileprivate struct HVMFbShmRegion: @unchecked Sendable {
     let raw: UnsafeMutableRawPointer
     let size: Int
@@ -60,8 +54,8 @@ public final class FramebufferRenderer: NSObject {
             preconditionFailure("FramebufferRenderer: command queue creation failed")
         }
 
-        // 内嵌 Metal Shading Language: 4-vertex triangle strip 全屏 + 采样纹理.
-        // 不依赖 SwiftPM .metal 编译流程 (编译期需要 Xcode shader compiler 链).
+        // 内嵌 MSL: 4-vertex triangle strip 全屏 + 采样纹理. 运行时编译, 不依赖
+        // SwiftPM .metal 编译流程 (那要 Xcode shader compiler 链).
         let shaderSource = """
         #include <metal_stdlib>
         using namespace metal;
@@ -164,9 +158,8 @@ public final class FramebufferRenderer: NSObject {
         // mmap 成功后我们的 fd 副本可释放, mmap 持有内核引用直到 munmap.
         Darwin.close(fd)
 
-        // bytesNoCopy: MTLBuffer 直接 view 自 mmap 内存; deallocator 在 GPU 释放
-        // 最后一个引用后 munmap. PROT_READ|WRITE 是因为 .storageModeShared 要求
-        // 可写映射 (Metal driver 内部可能写 cache control bits), 即便我们只读.
+        // bytesNoCopy: MTLBuffer 直接 view 自 mmap 内存; deallocator 在 GPU 释放最后引用后
+        // munmap. PROT_READ|WRITE 是 .storageModeShared 要求可写映射 (driver 写 cache bits).
         let region = HVMFbShmRegion(raw: raw, size: size)
         guard let buf = device.makeBuffer(
             bytesNoCopy: raw,
@@ -210,17 +203,9 @@ public final class FramebufferRenderer: NSObject {
         currentWidth = 0; currentHeight = 0; currentStride = 0
     }
 
-    /// 抓一张当前 framebuffer 的 CGImage. **不再零拷贝** — 改成 main actor 同步
-    /// memcpy 一份到独立 Data, 返回基于 Data 的 CGImage.
-    ///
-    /// 设计权衡:
-    /// - 旧路径 (零拷贝): CGImage 持 MTLBuffer 强引用, bg thread PNG encode 时直接
-    ///   读 mmap 共享内存 → 跟 GPU 当前帧渲染抢同一物理页 cache → 用户报每 ~10s
-    ///   鼠标卡顿一次 (thumbnail timer 间隔). cache contention.
-    /// - 新路径 (memcpy): main thread 一次性 ~8MB memcpy (1080p BGRA) ~1ms, bg thread
-    ///   的 downscale / PNG encode 完全访问独立 Data 副本, 不再触发 mmap → GPU
-    ///   渲染不被打扰. 1ms main thread 抖动远小于 cache contention 引起的 100ms+ 视觉
-    ///   stutter, 综合 UX 提升明显.
+    /// 抓一张当前 framebuffer 的 CGImage. **非零拷贝** — main actor 同步 memcpy 一份到独立
+    /// Data 再构 CGImage. 零拷贝路径会让 bg thread PNG encode 跟 GPU 渲染抢同一物理页 cache
+    /// (cache contention → 鼠标周期性卡顿); memcpy 一次 ~1ms 远小于 contention stutter.
     /// nil = 还没绑 surface.
     @MainActor
     public func snapshotCGImage() -> CGImage? {
@@ -229,15 +214,14 @@ public final class FramebufferRenderer: NSObject {
             return nil
         }
         let len = currentStride * currentHeight
-        // memcpy framebuffer 到独立 Data; CGImage 通过 CGDataProvider(data:) 持有 Data,
-        // bg thread 渲染 thumbnail 时只摸这份副本, 跟 GPU mmap 完全脱钩.
+        // memcpy 到独立 Data; CGImage 持有它, bg thread 只摸副本跟 GPU mmap 脱钩.
         let copy = Data(bytes: buf.contents(), count: len)
         guard let provider = CGDataProvider(data: copy as CFData) else {
             return nil
         }
         let cs = CGColorSpaceCreateDeviceRGB()
-        // QEMU iosurface backend 推的 byte order 是 BGRA (host little-endian =
-        // pixman_x8r8g8b8); 在 CGImage 描述里用 .byteOrder32Little + noneSkipFirst.
+        // iosurface backend 推 BGRA byte order (= pixman_x8r8g8b8); CGImage 用
+        // .byteOrder32Little + noneSkipFirst.
         let bitmapInfo: CGBitmapInfo = [
             .byteOrder32Little,
             CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue),
@@ -260,13 +244,9 @@ public final class FramebufferRenderer: NSObject {
     // MARK: - draw
 
     /// 在 MTKView 当前 drawable 上绘. 在 MTKViewDelegate.draw(in:) 里调.
-    /// MTKView.currentDrawable / currentRenderPassDescriptor 是 @MainActor isolated,
-    /// 因此本函数也标 @MainActor (调用方 FramebufferHostView 的 MTKViewDelegate
-    /// draw(in:) 已在 main actor 上, 无 hop 开销).
+    /// @MainActor: currentDrawable / currentRenderPassDescriptor 是 main actor isolated.
     @MainActor
     public func draw(in view: MTKView) {
-        // bytesNoCopy 路径: texture 直接 view 自 mmap 内存, fragment shader
-        // 采样时 Apple Silicon UMA driver 自动同步 cache, 无需 CPU memcpy.
         guard let drawable = view.currentDrawable,
               let descriptor = view.currentRenderPassDescriptor,
               let cmdBuf = commandQueue.makeCommandBuffer(),
@@ -275,9 +255,8 @@ public final class FramebufferRenderer: NSObject {
 
         // 没绑 surface 时仍要 present 一个空 drawable 让 MTKView 不卡帧.
         if let tex = currentTexture, currentWidth > 0, currentHeight > 0 {
-            // 等比 letterbox: 按 guest framebuffer 实际比例居中渲染, 不拉伸.
-            // drawable 没覆盖到的区域 = MTKView clearColor (黑) = 自然黑边.
-            // scale = min(dw/tw, dh/th) 保证 quad 完整落入 drawable.
+            // 等比 letterbox 居中渲染, 不拉伸. scale = min(dw/tw, dh/th) 保证 quad 完整落入
+            // drawable; 没覆盖区域 = clearColor 黑边.
             let dw = Double(drawable.texture.width)
             let dh = Double(drawable.texture.height)
             let tw = Double(currentWidth)

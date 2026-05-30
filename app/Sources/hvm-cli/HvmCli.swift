@@ -35,9 +35,7 @@ struct HvmCli: AsyncParsableCommand {
         ]
     )
 
-    /// 覆写默认 main, 在 ArgumentParser parse 前装 SIGPIPE ignore.
-    /// 防止 hvm-cli 给 host IPC server 写命令时 (start/stop/...), server 已死或 socket 断,
-    /// write(2) 触发 SIGPIPE 直接杀掉 hvm-cli 进程, 报错不友好. 详见 SignalGuard.ignoreSIGPIPE() 注释.
+    /// 覆写默认 main, 在 parse 前装 SIGPIPE ignore (IPC socket 断时 write(2) 不杀进程).
     static func main() async {
         SignalGuard.ignoreSIGPIPE()
         do {

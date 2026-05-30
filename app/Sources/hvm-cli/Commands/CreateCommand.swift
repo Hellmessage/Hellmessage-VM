@@ -1,5 +1,5 @@
 // CreateCommand.swift
-// hvm-cli create — 非交互式创建 VM bundle (Linux ISO 引导 / macOS IPSW 装机)
+// hvm-cli create — 非交互式创建 VM bundle (Linux / Windows arm64 ISO 装机)
 
 import ArgumentParser
 import Foundation
@@ -62,11 +62,9 @@ struct CreateCommand: AsyncParsableCommand {
     func run() async throws {
         do {
             let os = try parseGuestOS(self.os)
-            // QEMU-only: GuestOSType 仅 linux/windows, Engine 仅 qemu — ArgumentParser 解析阶段
-            // 已拒 --os macOS / --engine vz (非法 raw value), 无需再显式拦.
 
             // ---- 导入磁盘镜像分支 (跳过 ISO 装机, 直接 boot) ----
-            // 与 --iso / --ipsw 互斥, 仅 --os linux 支持; engine 由镜像格式锁定 (qcow2→qemu, raw→vz)
+            // 与 --iso / --ipsw 互斥, 仅 --os linux 支持
             var importInfo: DiskFactory.ImportableDiskInfo? = nil
             if let importPath = importDisk {
                 guard os == .linux else {
@@ -84,18 +82,14 @@ struct CreateCommand: AsyncParsableCommand {
                 )
             }
 
-            // engine: 导入时由镜像格式锁定; 否则按 --engine / guestOS 默认.
-            // ArgumentParser 已在解析阶段把非 vz/qemu 的拼写错挡掉, self.engine 只可能是
-            // .vz / .qemu / nil, 这里不再校验字符串.
-            // QEMU-only (P1a): engine 恒 qemu (vz 已在上面拒). 导入 raw/qcow2 均走 qemu.
+            // engine 恒 qemu (QEMU-only)
             let engineValue: Engine = .qemu
-            _ = importInfo   // 格式由 inspectImage 决定 DiskSpec.format, engine 不再随格式分流
+            _ = importInfo   // 格式由 inspectImage 决定 DiskSpec.format
 
-            // OS 分支专属字段校验 (导入分支已在上面处理, 此处只走 ISO/IPSW)
+            // ISO/IPSW 分支字段校验 (导入分支已在上面处理)
             var isoPath: String? = nil
-            let ipswPath: String? = nil   // macOS/IPSW 已随 VZ 移除, 恒 nil
+            let ipswPath: String? = nil   // macOS/IPSW 已下线, 恒 nil
             if importInfo == nil {
-                // QEMU-only: linux/windows 都走 ISO 装机
                 guard let p = iso else { throw HVMError.config(.missingField(name: "iso")) }
                 try ISOValidator.validate(at: p)
                 isoPath = p
@@ -115,8 +109,7 @@ struct CreateCommand: AsyncParsableCommand {
             try HVMPaths.ensure(parentDir)
             let bundleURL = parentDir.appendingPathComponent("\(name).hvmz", isDirectory: true)
 
-            // 卷空间预检 (主盘. macOS 装机时 IPSW 缓冲单独在 install 阶段预检)
-            // 导入模式: 用 max(--disk, 镜像 virtual-size GiB) 作为预检值, 防呆下限就是镜像本身
+            // 卷空间预检 (主盘). 导入模式预检值取 max(--disk, 镜像 virtual-size GiB)
             let effectiveDiskGiB: UInt64 = {
                 if let info = importInfo { return max(disk, info.virtualSizeGiB) }
                 return disk
@@ -126,7 +119,6 @@ struct CreateCommand: AsyncParsableCommand {
                 requiredBytes: effectiveDiskGiB * (1 << 30)
             )
 
-            // engine-aware 主盘: VZ → os.img (raw), QEMU → os.qcow2
             let mainFormat: DiskFormat = engineValue == .qemu ? .qcow2 : .raw
             let mainDiskFile = "\(BundleLayout.disksDirName)/\(BundleLayout.mainDiskFileName(for: engineValue))"
             let mainDisk = DiskSpec(
@@ -153,7 +145,7 @@ struct CreateCommand: AsyncParsableCommand {
                 windows: os == .windows ? WindowsSpec() : nil
             )
 
-            // ---- 加密分支 (--encrypt; v2.4 仅 QEMU) ----
+            // ---- 加密分支 (--encrypt; 仅 QEMU) ----
             if encrypt {
                 guard engineValue == .qemu else {
                     throw HVMError.config(.invalidEnum(
@@ -247,14 +239,13 @@ struct CreateCommand: AsyncParsableCommand {
         ))
     }
 
-    /// 创建加密 QEMU VM. 走 EncryptedBundleIO.create + QcowLuksFactory + OVMFVarsLuksFactory.
-    /// 失败一律清残留 (handle.deinit 兜底 close).
+    /// 创建加密 QEMU VM (EncryptedBundleIO.create + QcowLuksFactory + OVMFVarsLuksFactory). 失败清残留.
     private func createEncryptedVM(parentDir: URL,
                                     bundleURL: URL,
                                     password: String,
                                     config: VMConfig,
                                     sizeGiB: UInt64) throws {
-        // 1. EncryptedBundleIO.create 创建加密外壳 (config.yaml.enc + meta/encryption.json)
+        // 1. 加密外壳 (config.yaml.enc + meta/encryption.json)
         let handle = try EncryptedBundleIO.create(
             parentDir: parentDir,
             displayName: config.displayName,
@@ -326,12 +317,7 @@ struct CreateCommand: AsyncParsableCommand {
         try handle.close()
     }
 
-    /// 解析 --network 参数 → (mode, bridgedInterface).
-    /// - "nat"             → (.user, nil)         (兼容老命名, 现行 NAT 走 user-mode)
-    /// - "shared"          → (.vmnetShared, nil)
-    /// - "host"            → (.vmnetHost, nil)
-    /// - "bridged:<iface>" → (.vmnetBridged, "<iface>")
-    /// - "none"            → (.none, nil)
+    /// 解析 --network → (mode, bridgedInterface): nat→user, shared/host/none, bridged:<iface>.
     private func parseNetwork(_ raw: String) throws -> (NetworkMode, String?) {
         if raw == "nat" || raw == "user" { return (.user, nil) }
         if raw == "shared" { return (.vmnetShared, nil) }

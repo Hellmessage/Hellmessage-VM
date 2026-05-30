@@ -1,36 +1,10 @@
-// HVMUISection.swift — 新 GUI 卡片容器 (PR-C5)
+// HVMUISection.swift — 新 GUI 卡片容器. 业务页每节内容包进 Section 卡片.
 //
-// 业务页 layout 基石. 每节业务内容包进 Section 卡片, 有清晰边界 + R8 layered
-// shadow + double border 给"飘起来"的精致感.
-//
-// 用法:
-//   HVMUI.Section("基本信息") { content }
-//   HVMUI.Section("网络", description: "vmnet daemon 控制") { content }
-//   HVMUI.Section("确认配置") {
-//       content
-//   } footer: {
-//       HStack {
-//           HVMUI.Button("取消", variant: .secondary) { ... }
-//           HVMUI.Button("保存", variant: .primary) { ... }
-//       }
-//   }
-//   HVMUI.Section(variant: .elevated) { content }   // 无 title, Dialog 卡片风
-//
-// variant:
-//   .default  — bgRaised 卡片底 + hairline border + 轻 shadow (业务 section)
-//   .elevated — bgOverlay 抬一档 + double border (inner highlight + outer
-//               borderEmphasis) + 重 shadow (Dialog / popover 卡片)
-//
-// 视觉细节 (Linear+ 精致化):
-//   - 双层 border (R8): inner highlight (white α 0.04 top→clear 渐变, mock
-//     "光从上洒下来" 效果) + outer hairline (borderDefault / borderEmphasis)
-//   - layered shadow (R8): 主投影 (radius 12, y 6, 黑 α 0.3) + 近层投影
-//     (radius 2, y 1, 黑 α 0.1), 给"轻轻浮起" 感
-//   - 不裁 .clipShape (沿用 PR-C4 修复: 让内部 Select popover 等子组件
-//     overlay 能浮出 Section 边界)
-//
-// 模块化 (R7): 一文件 = 一组件, footer 用 trailing closure label 让 API 自然.
-// 没 footer 时用 EmptyView, Swift 类型推断处理.
+// 2 variant: .default (bgRaised + hairline + 轻 shadow, 业务 section) /
+//            .elevated (bgOverlay + double border + 重 shadow, Dialog / popover).
+// 视觉: 双层 border (inner highlight + outer) + layered shadow; 不裁 .clipShape
+//       (让内部 Select popover 等 overlay 浮出边界).
+// 用法: HVMUI.Section("基本信息") { content }, 可带 description / headerTrailing / footer.
 
 
 import SwiftUI
@@ -134,7 +108,6 @@ struct Section<Content: View, Footer: View>: View {
     }
 
     /// 卡片背景层: fill + double border + layered shadow.
-    /// 三个 modifier 组合给"飘起来"+"质感"+"精致"三层视觉.
     private var cardBackground: some View {
         ZStack {
             // 主 fill + outer border + 主 shadow
@@ -149,7 +122,7 @@ struct Section<Content: View, Footer: View>: View {
                 .shadow(color: .black.opacity(shadowNearAlpha),
                         radius: shadowNearRadius, x: 0, y: shadowNearY)
 
-            // Inner highlight: 顶部 1px 浅光 (R8 "光从上洒下" 效果, Linear 同款)
+            // Inner highlight: 顶部 1px 浅光 ("光从上洒下" 效果)
             RoundedRectangle(cornerRadius: HVMTheme.radius.lg)
                 .stroke(
                     LinearGradient(

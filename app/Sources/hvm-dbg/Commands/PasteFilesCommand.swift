@@ -1,19 +1,11 @@
-// hvm-dbg/Commands/PasteFilesCommand.swift
-// hvm-dbg paste-files — 模拟用户在 FramebufferHostView 按 Cmd+V 的整条 host→guest
-// 文件粘贴通路.
+// hvm-dbg paste-files — 模拟用户在 FramebufferHostView 按 Cmd+V 的 host→guest 文件粘贴通路.
 //
 // 用法:
 //   hvm-dbg paste-files <vm> --file /local/a.txt --file /local/b.zip
 //
-// 区别 `hvm-dbg file push`:
-//   - file push 走 qemu-guest-agent (QGA) guest-file-* API, 落 guest 内任意路径,
-//     1-10 MB/s, 自动化测试 / 脚本场景用
-//   - paste-files 走 SPICE vdagent VD_AGENT_FILE_XFER_*, 落 guest ~/Downloads,
-//     ~50 MB/s, 模拟用户交互 + 验证 GUI Cmd+V 后端通路
-//
-// 配套要求:
-//   - VM 在跑 + QEMU 后端 + guest 内 spice-vdagent 服务正常
-//   - 单文件 ≤ 4 GiB; 文件夹会被 server 跳过 (返 skipped 项)
+// 区别 file push: file push 走 QGA 落 guest 任意路径 (1-10 MB/s); paste-files 走 SPICE
+// vdagent file_xfer 落 guest ~/Downloads (~50 MB/s), 验证 GUI Cmd+V 后端通路.
+// 配套: VM 在跑 + QEMU + guest 内 spice-vdagent; 单文件 ≤ 4 GiB, 文件夹被 server 跳过.
 
 import ArgumentParser
 import Foundation
@@ -45,7 +37,7 @@ struct PasteFilesCommand: AsyncParsableCommand {
             guard !file.isEmpty else {
                 throw HVMError.config(.missingField(name: "至少一个 --file"))
             }
-            // host 路径展开 + 存在性检查 (server 端也会查, 这里前置一次避免无意义 IPC)
+            // host 路径展开 + 存在性检查 (server 端也会查, 前置避免无意义 IPC)
             let paths: [String] = try file.map { raw -> String in
                 let url = URL(fileURLWithPath: (raw as NSString).expandingTildeInPath)
                 guard FileManager.default.fileExists(atPath: url.path) else {
@@ -77,7 +69,7 @@ struct PasteFilesCommand: AsyncParsableCommand {
                 throw HVMError.ipc(.decodeFailed(reason: "paste-files payload"))
             }
             printResult(payload, format: format)
-            // 如果有 failed, 退出码非 0 方便 CI/脚本判失败 (skipped 不算失败 — 是已知拒绝项)
+            // 有 failed 退非 0 给 CI/脚本判失败 (skipped 是已知拒绝项, 不算失败)
             if !payload.failed.isEmpty {
                 throw ExitCode(2)
             }

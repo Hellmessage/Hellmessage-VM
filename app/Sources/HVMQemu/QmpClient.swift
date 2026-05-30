@@ -9,9 +9,8 @@
 //   5. close()
 //
 // 并发约束 (Swift 6 严格并发):
-//   - 全部可变状态用 OSAllocatedUnfairLock 包 (NSLock 在 async 上下文不可用)
-//   - readQueue: 专用串行队列, 跑 blocking recv() loop
-//   - writeQueue: 专用串行队列, 跑 send() (避免命令交错切碎)
+//   - 全部可变状态用 OSAllocatedUnfairLock 包
+//   - readQueue / writeQueue: 专用串行队列分跑 blocking recv() / send() (避免命令交错)
 
 import Foundation
 import Darwin
@@ -133,8 +132,7 @@ public final class QmpClient: @unchecked Sendable {
         _ = try await executeRaw("cont", argumentsObject: nil)
     }
 
-    /// quit: QEMU 进程立即退出 (不走 ACPI shutdown, guest 不知情).
-    /// 谨慎使用; 通常先 system_powerdown 等 SHUTDOWN event, 退化方案才 quit.
+    /// quit: QEMU 进程立即退出 (不走 ACPI, guest 不知情). 谨慎用, 通常先 system_powerdown.
     public func quit() async throws {
         _ = try await executeRaw("quit", argumentsObject: nil)
     }
@@ -150,9 +148,7 @@ public final class QmpClient: @unchecked Sendable {
         _ = try await executeRaw("screendump", argumentsObject: args)
     }
 
-    /// human-monitor-command: 包装 QMP HMP 桥接, 让我们能跑老 monitor 命令
-    /// (sendkey / mouse_move / mouse_button 等; QMP 原生命令 send-key + input-send-event 也可,
-    /// 但 sendkey HMP 形式更短). 返 monitor stdout 字符串.
+    /// human-monitor-command: QMP HMP 桥接, 跑老 monitor 命令 (sendkey / mouse_* 等). 返 monitor stdout.
     public func humanMonitorCommand(_ command: String) async throws -> String {
         let args: [String: Any] = ["command-line": command]
         let returnData = try await executeRaw("human-monitor-command", argumentsObject: args)
@@ -299,7 +295,7 @@ public final class QmpClient: @unchecked Sendable {
     private func readLoop() {
         let f = state.withLock { $0.fd }
         if f < 0 { return }
-        // 读 loop 期间禁用 recv 超时 (用 0,0 = 不超时)
+        // 读 loop 期间禁用 recv 超时
         var tv = timeval(tv_sec: 0, tv_usec: 0)
         setsockopt(f, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
 
@@ -311,7 +307,7 @@ public final class QmpClient: @unchecked Sendable {
                 return recv(f, base, ptr.count, 0)
             }
             if n < 0 {
-                // EINTR: 信号中断, 重试. 历史 bug: 当成 EOF 触发 close, QMP 命令丢失
+                // EINTR: 信号中断, 重试 (不能当 EOF, 否则 QMP 命令丢失)
                 if errno == EINTR { continue }
                 handleEofOrError()
                 return

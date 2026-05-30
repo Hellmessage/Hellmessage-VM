@@ -1,16 +1,12 @@
-// hvm-dbg/Commands/ConsoleCommand.swift
 // hvm-dbg console — 读/写 guest 的 virtio-console (hvc0).
 //
 // 模式:
-//   --read [--since-bytes N]                         拉 [N, totalBytes) 的 guest stdout (base64 解码后输出原始字节)
-//   --write "<text>"                                 把 text 当 UTF-8 写入 guest stdin
-//   --write-stdin                                    从 host stdin 读字节流写入 guest stdin
+//   --read [--since-bytes N]   拉 [N, totalBytes) 的 guest stdout (base64 解码后输出原始字节)
+//   --write "<text>"           把 text 当 UTF-8 写入 guest stdin
+//   --write-stdin              从 host stdin 读字节流写入 guest stdin
 //
-// 设计要点:
-//   - 不做流式 attach. AI agent 用 read+write 组合即可, 真要交互式 tty 走 ssh.
-//   - --read 默认 sinceBytes=0 = 拿 ring buffer 全量, 客户端拿响应里的 totalBytes 当下次起点.
-//   - --read 输出是 base64 解码后的原始字节 (二进制 escape 序列也保留, 不强行 utf-8 解码).
-//   - --format json 时 read 输出整段 JSON, write 输出 { ok: true, bytesWritten: N }.
+// 不做流式 attach (read+write 组合即可, 交互式 tty 走 ssh). --read 默认 sinceBytes=0 = ring buffer
+// 全量, 客户端拿响应里的 totalBytes 当下次起点; 输出原始字节不强行 utf-8 解码.
 
 import ArgumentParser
 import Foundation

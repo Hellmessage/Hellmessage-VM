@@ -1,19 +1,11 @@
 // HVMQemu/QgaExec.swift
-//
 // qemu-guest-agent (qga) 协议封装 — 通过 unix socket 在 guest 内跑 process 拿结果.
 // 协议参考: https://qemu.readthedocs.io/en/latest/interop/qemu-ga-ref.html
 //
-// 用途: hvm-dbg exec --via-qga 跑 PowerShell / cmd 等命令, 拿 stdout/stderr/exit_code.
-// 不依赖 keyboard typing (避 IME 字符替换) / OCR (避识别误差) / GUI mouse (避 USB
-// tablet 坐标问题) — 端到端自动化验证 guest 行为最可靠通路.
-//
-// socket / NDJSON 通路在 QgaSocket.swift, 与 QgaFile.swift 共用.
-//
-// 配套要求:
-//   - argv 挂 chardev qga + virtserialport name=org.qemu.guest_agent.0 (QemuArgsBuilder
-//     已支持 qgaSocketPath)
-//   - guest 内装 qemu-ga.exe 服务 (UTM Guest Tools 装包含 qemu-ga-x86_64.msi)
-//   - 服务自动连 \\.\Global\com.qemu.guest_agent.0 virtio-serial port
+// 用途: hvm-dbg exec --via-qga 跑 PowerShell / cmd, 拿 stdout/stderr/exit_code — 不依赖
+// keyboard typing / OCR / GUI mouse, 端到端验证 guest 行为最可靠通路.
+// socket / NDJSON 通路在 QgaSocket.swift (与 QgaFile 共用). 配套: guest 内 qemu-ga 服务 +
+// argv 挂 chardev qga (QemuArgsBuilder 的 qgaSocketPath).
 
 import Foundation
 import Darwin

@@ -1,7 +1,6 @@
-// hvm-dbg/Commands/MouseCommand.swift
 // hvm-dbg mouse <vm> <op> [opts] — 鼠标事件注入.
 //
-// 坐标系: guest 像素左上原点. CLI 接受 "x,y" 格式. VMHost 侧 MouseEmulator 翻成 view 内点 + window 坐标.
+// 坐标系: guest 像素左上原点, CLI 接受 "x,y"; VMHost 侧 MouseEmulator 翻成 view 内点 + window 坐标.
 //
 // 例:
 //   hvm-dbg mouse foo move --to 640,360
@@ -89,8 +88,7 @@ struct MouseCommand: AsyncParsableCommand {
     }
 
     private func parsePair(_ s: String, label: String) throws -> (Int, Int) {
-        // host 侧 (QemuHostState.parseXY / DbgOps.handleMouse) 只接受整数像素 — 用
-        // Double 解析会把 "640.0" 发过去, host 端 Int(xs) 返回 nil 报"必须是整数".
+        // host 侧只接受整数像素 (传 "640.0" 会被 Int() 拒)
         let parts = s.split(separator: ",")
         guard parts.count == 2,
               let x = Int(parts[0].trimmingCharacters(in: .whitespaces)),

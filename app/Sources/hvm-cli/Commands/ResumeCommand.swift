@@ -1,5 +1,5 @@
 // ResumeCommand.swift
-// hvm-cli resume — 恢复 VM (VZ resume).
+// hvm-cli resume — 恢复暂停的 VM.
 
 import ArgumentParser
 import Foundation

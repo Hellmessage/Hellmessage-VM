@@ -1,8 +1,5 @@
 // hvm-cli/Support/PasswordPrompt.swift
-// 加密 VM 操作 (start / encrypt / decrypt / rekey) 的密码输入助手.
-// 走 BSD readpassphrase(3) — 关闭终端 echo, 不显示用户输入字符.
-//
-// 强制每次输入密码, 不缓存到 Keychain.
+// 密码输入助手, 走 BSD readpassphrase(3) (关终端 echo). 每次都输, 不缓存 Keychain.
 
 import Foundation
 import Darwin

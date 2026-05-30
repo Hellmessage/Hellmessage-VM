@@ -1,29 +1,16 @@
 // HVMEncryption/EncryptVMOperation.swift
-// 老明文 QEMU VM → 加密 VM 冷迁移. 整 VM 加密设计 v2.4 PR-10a.
+// 明文 QEMU VM → 加密 VM 冷迁移 (`hvm-cli encrypt <vm>`). VM 必须 stopped (调用方抢 .edit lock).
 //
-// 流程 (`hvm-cli encrypt <vm>`):
-//   1. 校验 VM stopped (调用方抢 .edit lock)
-//   2. 校验 engine == .qemu (VZ engine 暂不支持: raw → LUKS qcow2 切引擎需独立 PR)
-//   3. 用户输 password (调用方 prompt)
-//   4. 派生 master KEK (PBKDF2) + 4 子 keys (HKDF)
-//   5. 临时目录 .encrypting-<random>/ 旁建临时加密文件 (失败可清, 不破原数据)
-//   6. disks/*.qcow2 / *.img → 临时目录/<name>.qcow2 (LUKS) via qemu-img convert
-//   7. nvram/efi-vars.fd → 临时目录/efi-vars.qcow2 via OVMFVarsLuksFactory.create
-//   8. config + routing JSON 写完 → 全部 OK
-//   9. 替换原文件: rm 老明文, mv 新加密, rmdir 临时目录
+// 流程: 校验 engine==.qemu → 派生 master KEK (PBKDF2) + 4 子 keys (HKDF) → 临时目录
+// .encrypting-<random>/ 旁建加密文件 (disks/*.{qcow2,img} → LUKS qcow2; nvram → OVMF LUKS;
+// config.yaml.enc + routing JSON) → 全部 OK 后替换原文件.
 //
-// 失败回滚: 任意步骤抛错 → 临时目录留着, 主 bundle 未动. 用户可手动清 .encrypting-*.
-// 失败也不写 routing JSON / config.yaml.enc, 主 bundle 保持明文状态.
+// 失败回滚: 任意步骤抛错 → 临时目录留, 主 bundle 不动 (仍明文), 不写 routing/config.enc.
 //
-// TPM 重置 (Win VM): 现有 swtpm state 是明文 binary, 用新 swtpm-key 启动时 swtpm 解不开
-// (它会用 key 试解密, fail). 简化决策: 加密后**重置 TPM** (rm tpm/), 用户警告
-// "BitLocker / SecureBoot 信任根重置, 系统首次启动会重新 attest". 用户自觉重新装 BitLocker.
-// 真正 swtpm rewrap 留 PR-后续.
+// TPM 重置 (Win VM): 现有 swtpm state 明文 binary, 新 swtpm-key 解不开. 加密后**重置 TPM**
+// (rm tpm/) + 警告 "BitLocker / SecureBoot 信任根重置". swtpm rewrap 留后续.
 //
-// 不做:
-// - VZ engine VM (raw .img 切 LUKS qcow2 改 engine, 涉及 boot loader 等, 单独 PR)
-// - 增量加密 (一次必须把整 VM disks 全转, 不支持只加密部分)
-// - 在线加密 (VM 必须 stopped)
+// 不做: VZ engine VM / 增量加密 / 在线加密.
 
 import Foundation
 import CryptoKit
@@ -92,7 +79,7 @@ public enum EncryptVMOperation {
                                                       withIntermediateDirectories: true)
         }
 
-        // SIGINT 防中断 + 兜底清理 (PR-C). atexit / 二次 Ctrl-C 硬退时跑.
+        // SIGINT 防中断 + 兜底清理. atexit / 二次 Ctrl-C 硬退时跑.
         SignalGuard.install(message: "⚠ 加密操作进行中, 请等待结束 (再次 Ctrl-C 强制退出, 临时目录可能残留)")
         SignalGuard.registerCleanup {
             try? FileManager.default.removeItem(at: tmpDir)
@@ -138,9 +125,7 @@ public enum EncryptVMOperation {
                 throw HVMError.config(.missingField(
                     name: "ovmfVarsTemplate (Win VM 加密需要 OVMF VARS 模板)"))
             }
-            // 现有 nvram/efi-vars.fd 可能没装机过 (template 直接用); 装过的也直接用 stock template,
-            // 因为 OVMF 加密 VARS 启动后会自己写入 (BootOrder 等会丢, 但这是 user warning).
-            // 实际我们应保留现有 vars 内容: 用 qemu-img convert -f raw -O qcow2 -o encrypt 转换.
+            // 现有 vars: convert raw → LUKS qcow2 保留 BootOrder; 无现有 vars: 用 stock template.
             let srcVars = BundleLayout.nvramURL(bundleURL)
             let dstTmp = tmpDir.appendingPathComponent("nvram/\(BundleLayout.nvramLuksFileName)")
 
@@ -175,10 +160,9 @@ public enum EncryptVMOperation {
         )
         config.disks = newDisks   // 更新 disk paths
         let tmpConfigEnc = tmpDir.appendingPathComponent(EncryptedConfigIO.configEncFileName)
-        // EncryptedConfigIO.save 写到 <bundle>/config.yaml.enc; 这里走临时目录, 自己 in-line.
         try saveEncryptedConfig(config: config, key: subKeys.config, to: tmpConfigEnc)
 
-        // 7. 写临时 routing JSON. guestOS 进 v3 让 GUI 解锁前正确显示 guest 类型.
+        // 7. 写临时 routing JSON. guestOS 让 GUI 解锁前正确显示 guest 类型.
         let routing = RoutingMetadata(
             vmId: config.id,
             scheme: .qemuPerfile,
@@ -193,8 +177,8 @@ public enum EncryptVMOperation {
         rollbackTmpDir = false
         log("✔ 转换完成, 替换原文件 ...")
 
-        // 8. 替换 disks (TODO #13 加固): 先 rename 旧 → mv 新 → 全部 mv 完后再 secure-erase 旧.
-        // 原顺序"先 erase 旧 → 再 mv 新"风险: mv 失败后 disks/ 空 (灾难). 现新顺序保证 mv 失败仍可恢复.
+        // 8. 替换 disks: 先 rename 旧 → mv 新 → 全部 mv 完后 secure-erase 旧.
+        // 保证 mv 失败仍可恢复 (不会出现 disks/ 空的灾难).
         let disksDir = BundleLayout.disksDir(bundleURL)
         var oldDiskRenames: [(orig: URL, staged: URL)] = []
         if let entries = try? FileManager.default.contentsOfDirectory(atPath: disksDir.path) {
@@ -229,7 +213,7 @@ public enum EncryptVMOperation {
             SecureErase.eraseFile(at: staged)
         }
 
-        // 9. NVRAM (Win) 加固: 同 disks 模式
+        // 9. NVRAM (Win): 同 disks 模式
         if nvramReplaced {
             let oldVars = BundleLayout.nvramURL(bundleURL)
             let stagedVars = BundleLayout.nvramURL(bundleURL).appendingPathExtension("old-encrypt")
@@ -289,8 +273,7 @@ public enum EncryptVMOperation {
 
     // MARK: - 内部 helper
 
-    /// qemu-img convert raw / qcow2 → LUKS qcow2.
-    /// 走 LuksSecretFile (base64 ASCII passphrase).
+    /// qemu-img convert raw / qcow2 → LUKS qcow2. 走 LuksSecretFile (base64 ASCII passphrase).
     private static func convertDiskToLuks(source: URL,
                                             sourceFormat: DiskFormat,
                                             destination: URL,
@@ -333,9 +316,7 @@ public enum EncryptVMOperation {
     /// 写 EncryptedConfigIO 格式 (HENC + AES-GCM SealedBox.combined) 到指定路径.
     /// EncryptedConfigIO.save 写到 <bundle>/config.yaml.enc 固定位置, 这里允许任意 url.
     private static func saveEncryptedConfig(config: VMConfig, key: SymmetricKey, to url: URL) throws {
-        // 复用 EncryptedConfigIO 主体逻辑. 简便: copy 文件实现 inline 等价代码.
-        // 走 EncryptedConfigIO.save 到一个临时 bundle URL 然后 mv?
-        // 简化: 直接调 EncryptedConfigIO.save 到一个临时 bundle dir, 再 mv config.yaml.enc 到 url.
+        // EncryptedConfigIO.save 到临时 bundle dir, 再 mv config.yaml.enc 到 url.
         let tmpBundle = url.deletingLastPathComponent().appendingPathComponent(".cfg-tmp-\(UUID().uuidString.prefix(6))",
                                                                                   isDirectory: true)
         try FileManager.default.createDirectory(at: tmpBundle, withIntermediateDirectories: true)

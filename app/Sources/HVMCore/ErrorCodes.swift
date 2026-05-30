@@ -1,6 +1,5 @@
 // HVMCore/ErrorCodes.swift
 // 错误码权威清单. 新增错误必须在此登记
-// M0 先列框架, 具体 case 随模块实现补齐
 
 /// 稳定字符串错误码, dotted 风格 "<domain>.<name>"
 public enum HVMErrorCode: String, Sendable {
@@ -61,7 +60,7 @@ public enum HVMErrorCode: String, Sendable {
     case configInvalidRange     = "config.invalid_range"
     case configDuplicateRole    = "config.duplicate_role"
 
-    // encryption.* (整 VM 加密, sparsebundle + Keychain)
+    // encryption.*
     case encryptionHdiutilFailed              = "encryption.hdiutil_failed"
     case encryptionWrongPassword              = "encryption.wrong_password"
     case encryptionMountpointInUse            = "encryption.mountpoint_in_use"

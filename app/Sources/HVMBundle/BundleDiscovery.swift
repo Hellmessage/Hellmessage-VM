@@ -16,11 +16,7 @@ public enum BundleDiscovery {
             .sorted { $0.lastPathComponent.lowercased() < $1.lastPathComponent.lowercased() }
     }
 
-    /// 按名字 / 路径解析 bundle URL.
-    /// 解析顺序:
-    ///   1. 绝对路径 (或含 /) 直接返回
-    ///   2. 相对当前工作目录查找 "<ref>" 或 "<ref>.hvmz"
-    ///   3. 在 defaultRoot 下查 "<ref>.hvmz"
+    /// 按名字 / 路径解析 bundle URL. 顺序: 绝对路径 → 当前目录 "<ref>[.hvmz]" → defaultRoot "<ref>.hvmz".
     public static func resolve(reference ref: String, defaultRoot: URL) -> URL? {
         let fm = FileManager.default
 

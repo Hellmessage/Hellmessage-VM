@@ -1,13 +1,6 @@
 // hvm-cli/Support/EncryptedConfigEditor.swift
-// 加密-aware config 读写助手. 把 "明文 BundleIO" 与 "加密 EncryptedConfigIO" 路径
-// 收敛成单一接口, 给 config/disk/iso/boot-from-disk 等子命令复用.
-//
-// 边界:
-//   - VZ-sparsebundle: 暂未实现 (ENCRYPTION.md v2.4 QEMU 优先), 抛错
-//   - QEMU-perfile: PasswordPrompt + EncryptedBundleIO.unlock + EncryptedConfigIO.save
-//   - 明文 (无 routing JSON): BundleIO.load + BundleIO.save
-//
-// 临时解密的 config 只在内存里 mutate, 直接 EncryptedConfigIO.save 重写 .enc, 不落明文 yaml.
+// 加密-aware config 读写助手: 把明文 BundleIO 与加密 EncryptedConfigIO 收敛成单一接口,
+// 给 config/disk/iso/boot-from-disk 等子命令复用. 解密的 config 只在内存 mutate, 不落明文 yaml.
 
 import Foundation
 import HVMBundle

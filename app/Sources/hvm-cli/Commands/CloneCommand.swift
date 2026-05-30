@@ -1,11 +1,6 @@
 // CloneCommand.swift
-// hvm-cli clone — 整 VM 克隆 (APFS clonefile + 身份字段重生).
-// 必须 VM stopped: CloneManager 内部抢源 .edit lock 排他, 与 .runtime 冲突直接抛 .busy.
-//
-// 加密 VM clone (D9 = 等价复制 + 同密码):
-//   - prompt 源密码 → unlock 拿 sub keys → 字节复制 + 用源 sub.config 重新加密 config
-//   - clone 出来跟源同密码; 想换密码自跑 hvm-cli rekey
-//
+// hvm-cli clone — 整 VM 克隆 (APFS clonefile + 身份字段重生). 必须 VM stopped.
+// 加密 VM: prompt 源密码 → unlock → 字节复制 + 用源 sub.config 重加密 config, clone 出来同密码.
 // 实现见 HVMStorage/CloneManager.swift.
 
 import ArgumentParser
@@ -43,7 +38,7 @@ struct CloneCommand: AsyncParsableCommand {
         do {
             let sourceBundle = try BundleResolve.resolve(vm)
 
-            // 加密源 VM: prompt 密码 + 二次确认 (说清"同密码"语义)
+            // 加密源 VM: prompt 密码 + 二次确认
             var password: String? = nil
             if let scheme = EncryptedBundleIO.detectScheme(at: sourceBundle) {
                 guard scheme == .qemuPerfile else {
