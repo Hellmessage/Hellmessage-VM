@@ -58,22 +58,25 @@ struct DetailOverviewView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: HVMTheme.space.xl) {
                     if vm.runState == .running {
-                        runningNote.zIndex(55)
+                        runningNote.zIndex(60)
                     }
-                    overviewSection(vm).zIndex(50)
+                    overviewSection(vm).zIndex(55)
+                    // 共享目录 / 选项 / 加密 放在资源上面 (用户偏好)
                     if vm.config != nil {
-                        resourceSection(vm).zIndex(40)
+                        DetailSharingSection(vm: vm).zIndex(50)
+                        DetailOptionsSection(vm: vm).zIndex(45)
+                    }
+                    // 加密 section: 入口不依赖 config (加密 VM 锁定态 config=nil 也要显
+                    // 解密/改密入口; 明文 / 不支持态也各有内容)
+                    DetailEncryptionSection(vm: vm).zIndex(40)
+                    if vm.config != nil {
+                        resourceSection(vm).zIndex(35)
                         DetailNetworkSection(networks: $draftNetworks,
                                              editable: vm.runState == .stopped)
                             .zIndex(30)
                         diskSection(vm).zIndex(10)
                         DetailBootSection(vm: vm).zIndex(5)
-                        DetailSharingSection(vm: vm).zIndex(4)
-                        DetailOptionsSection(vm: vm).zIndex(3)
                     }
-                    // 加密 section: 入口不依赖 config (加密 VM 锁定态 config=nil 也要显
-                    // 解密/改密入口; 明文 / 不支持态也各有内容), 放最底沉底 (破坏性重操作)
-                    DetailEncryptionSection(vm: vm).zIndex(2)
                 }
                 .padding(.horizontal, HVMTheme.space.xl)
                 .padding(.bottom, HVMTheme.space.xl)
