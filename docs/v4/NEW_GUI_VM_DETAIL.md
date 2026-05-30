@@ -115,7 +115,7 @@ public extension VMControl {
 ### vmnet daemon 安装入口
 
 - 老 `VMnetSupervisor` 在 `app/Sources/HVM/UI/` (GUI 耦合). 新 GUI 网络 section 需"安装/重启 daemon"按钮.
-- **待定 (D3)**: 把 `VMnetSupervisor` 的核心 (osascript 提权 + plist 写) 抽到视图无关层 (HVMNet 或 HVMControl), 还是新 GUI 侧薄封装. 网络面板完整化其实更适合放 [NEW_GUI_NETWORK.md](NEW_GUI_NETWORK.md) 子稿 — 本稿网络 section 可只做 NIC 字段编辑, daemon 安装按钮引导到"网络面板子稿待接入"或最小可用封装
+- **待定 (D3)**: 把 `VMnetSupervisor` 的核心 (osascript 提权 + plist 写) 抽到视图无关层 (HVMNet 或 HVMControl), 还是新 GUI 侧薄封装. 网络面板完整化其实更适合放 `NEW_GUI_NETWORK.md` 子稿(后已折叠进 V5+V6, 未单独立稿)— 本稿网络 section 可只做 NIC 字段编辑, daemon 安装按钮引导到"网络面板子稿待接入"或最小可用封装
 
 ### `NewGUIStore` 编辑方法
 

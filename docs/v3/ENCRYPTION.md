@@ -50,7 +50,7 @@ VMware 是 hypervisor 内部解密 vmdk → bytes 在 VMware 进程内存. HVM �
 
 **根因**: `VZDiskImageStorageDeviceAttachment` 只接受真实 raw 字节, **VZ 没有 hypervisor 内部 decrypt hook**. 所以 macOS guest (= 必走 VZ) 永远只能容器级加密. Linux/Windows guest 走 QEMU 时拿到 VMware 同等保护 (per-file + 运行期 host 隔离).
 
-威胁模型评估见 [docs/v1/SECURITY.md](../v1/SECURITY.md) (本稿合入后落地). HVM 单机产品场景, 实际威胁主要是磁盘 / 笔记本被偷 — 双后端在此模型下保护等价.
+威胁模型评估原计划落 `docs/v1/SECURITY.md` (PR-12, 实际未单独建该文档). HVM 单机产品场景, 实际威胁主要是磁盘 / 笔记本被偷 — 双后端在此模型下保护等价.
 
 ## 路线选型
 

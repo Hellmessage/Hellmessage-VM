@@ -18,7 +18,7 @@
 | **整 VM 加密** (HVMEncryption) | qcow2 LUKS + config.yaml.enc + KDF 跨机器 portable | ✅ QEMU 路径全闭环; VZ-sparsebundle 启动解锁推后 |
 | **HDP-GUI 测试协议** | hvm-dbg gui * + ProbeRegistry | ✅ 已完成 |
 
-以下只排优先级, 不排日期(个人项目, 按进展推进)。当前主体能力已闭环, 残余项收纳在 [../CHANGELOG.md](../CHANGELOG.md) 历史完成清单 + 顶层 [todo.md](todo.md)。
+以下只排优先级, 不排日期(个人项目, 按进展推进)。当前主体能力已闭环, 残余项收纳在 [../CHANGELOG.md](../CHANGELOG.md) 历史完成清单。
 
 ## M0 — 项目骨架 ✅
 
@@ -205,8 +205,7 @@
 - [ENCRYPTION.md](ENCRYPTION.md) — 整 VM 加密
 - [CLONE.md](CLONE.md) — 整 VM 克隆
 - [ENTITLEMENT.md](ENTITLEMENT.md) — VZ bridged 前置依赖
-- [todo.md](todo.md) — 已完成项历史
-- [../CHANGELOG.md](../CHANGELOG.md) — v2 全量 TODO 归档
+- [../CHANGELOG.md](../CHANGELOG.md) — v2 全量 TODO 归档 + v1 todo 历史
 
 ---
 

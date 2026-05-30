@@ -18,6 +18,9 @@
 | [SHARED_FOLDER.md](SHARED_FOLDER.md) | QEMU 共享目录 (SPICE WebDAV, Win + Linux 统一; Swift 原生 WebDAV server) | **代码已合入** 2026-05-24 (PR-0~7 一晚一次性落; 协议层 e2e 验过, 真机 guest 安装步留给用户) |
 | [INPUT_CAPTURE.md](INPUT_CAPTURE.md) | 键盘捕获 / 释放重构 (UTM 风格): modifier 镜像修卡键 + 左右键区分 + Cmd+Opt captured 双态 + CGS 全局热键禁用 | **代码已合入** 2026-05-24 (一次性 PR, hotfix 性质; 真机 e2e 留给用户) |
 | [HOST_FILE_PASTE.md](HOST_FILE_PASTE.md) | host Finder Cmd+C 文件 → VM Cmd+V 自动传 (SPICE VD_AGENT_FILE_XFER, 落 guest ~/Downloads) | **代码已合入** 2026-05-28 (PR-1~4 一次性落; 真机 e2e 留给用户) |
+| [HOST_FILE_DRAG.md](HOST_FILE_DRAG.md) | host 文件拖入 framebuffer → 落 guest ~/Downloads (复用 HOST_FILE_PASTE 后端, 换触发方式) | **实现中** 2026-05-28 |
+| [HOST_IMAGE_CLIPBOARD.md](HOST_IMAGE_CLIPBOARD.md) | host 图片剪贴板 → guest (SPICE vdagent CLIPBOARD mime=2 PNG) | **实现中** 2026-05-28 |
+| [HOST_FILE_CLIPBOARD.md](HOST_FILE_CLIPBOARD.md) | UTM 风 paste-where-you-paste 文件剪贴板 (mime=6 FILE_LIST) | **设计稿** 待评审 2026-05-28 |
 | [TODO.md](TODO.md) | QEMU 加密 BUG / 遗漏清单 + 工具链 | **TODO 清单 v1**, 大多已 Done; 仍存的低优项已挪 [../v1/ROADMAP.md](../v1/ROADMAP.md) "残余项指引" |
 
 新 GUI 重构主线挪到独立目录 [../v4/](../v4/README.md) (含 NEW_GUI.md + 后续业务页子稿). v3 / v4 平行: v3 是 v2 → v3 已基本合的能力归档; v4 是 GUI 体系重做.
@@ -43,4 +46,4 @@
 
 ---
 
-**最后更新**: 2026-05-29 (NEW_GUI.md 挪到 [../v4/](../v4/README.md), 单独立 GUI 重构主线; v3 索引仅保留 v2→v3 合入归档)
+**最后更新**: 2026-05-30 (补登 HOST_FILE_DRAG / HOST_IMAGE_CLIPBOARD / HOST_FILE_CLIPBOARD 三份漏索引提案)

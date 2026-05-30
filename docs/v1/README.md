@@ -55,7 +55,6 @@
 |---|---|
 | [ENTITLEMENT.md](ENTITLEMENT.md) | entitlement 申请追踪, bridged SOP |
 | [ROADMAP.md](ROADMAP.md) | 里程碑 M0–M6(全部完成)、加密 / 克隆 / GUI 自动化新里程碑、不做清单、风险项 |
-| [todo.md](todo.md) | 历史已完成项滚动归档 |
 
 ## 文档风格约定
 
@@ -88,7 +87,7 @@
 
 新加文档 → 分配下一个字母前缀。
 
-> 历史 v1/todo.md 中遗留的 V/L/P 系列已挪 [ROADMAP.md](ROADMAP.md) "残余项指引" + [../CHANGELOG.md](../CHANGELOG.md) 归档。
+> 历史 v1 todo 中遗留的 V/L/P 系列已挪 [ROADMAP.md](ROADMAP.md) "残余项指引" + [../CHANGELOG.md](../CHANGELOG.md) 归档(原 todo.md 已删,内容全在 CHANGELOG)。
 
 ## 约束冲突处置
 
