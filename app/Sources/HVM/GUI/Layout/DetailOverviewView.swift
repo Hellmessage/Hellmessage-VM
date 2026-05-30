@@ -23,6 +23,10 @@ struct DetailOverviewView: View {
     @State private var draftLoadedID: UUID? = nil
     @State private var draftLoadedHasConfig = false
 
+    /// running 详情区: 画面 / 配置 切换 (F2). 切 VM / 改 runState 时 reset 回 .screen.
+    enum RunningTab { case screen, config }
+    @State private var runningTab: RunningTab = .screen
+
     var body: some View {
         ZStack {
             HVMTheme.color.bgBase
@@ -45,14 +49,51 @@ struct DetailOverviewView: View {
     }
 
     private func detail(_ vm: VMSummary) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let isRunning = vm.runState == .running
+        return VStack(alignment: .leading, spacing: 0) {
             // 固定头部 (标题 + badges + 启停/删除) — 不随下方卡片滚动
             headerBlock(vm)
                 .padding(.horizontal, HVMTheme.space.xl)
                 .padding(.top, HVMTheme.space.xl)
-                .padding(.bottom, HVMTheme.space.lg)
+                .padding(.bottom, isRunning ? HVMTheme.space.md : HVMTheme.space.lg)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+            // running: 画面 / 配置 TAB 切换 (F2)
+            if isRunning {
+                runningTabBar(vm)
+                    .padding(.horizontal, HVMTheme.space.xl)
+                    .padding(.bottom, HVMTheme.space.md)
+            }
+
+            // running 画面 tab → framebuffer; 其它 → 配置滚动
+            if isRunning && runningTab == .screen {
+                QemuFramebufferView(vm: vm, store: store,
+                                    dialogPresenting: dialog.isPresenting)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                configScroll(vm)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onChange(of: store.selectedID) { _, _ in syncDraftIfNeeded(); runningTab = .screen }
+        .onChange(of: store.selected?.config?.cpuCount) { _, _ in syncDraftIfNeeded() }
+        .onChange(of: store.selected?.runState) { _, _ in runningTab = .screen }
+        .onAppear { syncDraftIfNeeded() }
+    }
+
+    /// 画面 / 配置 TAB (running). HVMUI.Button primary/ghost 按选中.
+    private func runningTabBar(_ vm: VMSummary) -> some View {
+        HStack(spacing: HVMTheme.space.sm) {
+            HVMUI.Button("画面", variant: runningTab == .screen ? .primary : .ghost, size: .sm,
+                         probeID: "detail.tab.screen") { runningTab = .screen }
+            HVMUI.Button("配置", variant: runningTab == .config ? .primary : .ghost, size: .sm,
+                         probeID: "detail.tab.config") { runningTab = .config }
+            Spacer()
+        }
+    }
+
+    /// 配置滚动区 (stopped 全可编辑 / running 多字段 disabled).
+    private func configScroll(_ vm: VMSummary) -> some View {
             // 可滚动卡片区. 反向 zIndex (上→下递减) 让网络 section 的 Select 下拉浮在
             // 下方 saveFooter / 磁盘之上, 不被盖住.
             ScrollView {
@@ -84,12 +125,6 @@ struct DetailOverviewView: View {
                 .hvmHideScroller()   // 强制隐滚动条 (系统"始终显示"设置下 .scrollIndicators 不生效)
             }
             .scrollIndicators(.hidden)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        // 选中 VM 变化 / 解锁后 config 出现时同步 draft; 1Hz 刷新不清 (靠守卫)
-        .onChange(of: store.selectedID) { _, _ in syncDraftIfNeeded() }
-        .onChange(of: store.selected?.config?.cpuCount) { _, _ in syncDraftIfNeeded() }
-        .onAppear { syncDraftIfNeeded() }
     }
 
     // MARK: - 磁盘 (V4)
@@ -253,7 +288,7 @@ struct DetailOverviewView: View {
     private var runningNote: some View {
         HStack(spacing: HVMTheme.space.sm) {
             HVMUI.Icon("display", size: .sm, color: .info)
-            Text("运行中 — 画面嵌入待 framebuffer 子稿 (当前可用老 GUI 看画面)")
+            Text("运行中 — 切到「画面」tab 看 VM 屏幕 + 键鼠操作; 运行中多数配置需停机才能改")
                 .font(HVMTheme.font.sm)
                 .foregroundStyle(HVMTheme.color.textSecondary)
         }

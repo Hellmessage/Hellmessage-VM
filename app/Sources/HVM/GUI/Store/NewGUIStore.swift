@@ -59,6 +59,11 @@ public final class NewGUIStore {
 
     private static let unlockTTL: TimeInterval = 300   // 5 分钟无活动 auto-lock
 
+    // MARK: - QEMU 画面 fanout (业务页 #4 framebuffer, F1)
+    /// running VM 的 HDP 显示 fanout (复用 QemuFanoutSession). @ObservationIgnored:
+    /// fanout 进出不驱动 UI 重绘 (画面由 fbView 自渲染). 停机/断连时拆.
+    @ObservationIgnored private var qemuFanouts: [UUID: QemuFanoutSession] = [:]
+
     // MARK: - 自定义排序 (拖拽重排, 持久化到 UserDefaults; GUI 侧, 加密 VM 也适用)
     @ObservationIgnored private var vmOrder: [UUID] = []
     private static let orderKey = "com.hellmessage.vm.newgui.vmOrder"
@@ -117,6 +122,11 @@ public final class NewGUIStore {
             selectedID = fresh.first?.id
         } else if selectedID == nil {
             selectedID = fresh.first?.id
+        }
+        // 拆已停止 VM 的 fanout (停机 / 删除) — 防泄漏 + 残画面
+        let liveIDs = Set(fresh.filter { $0.runState == .running }.map(\.id))
+        for id in Array(qemuFanouts.keys) where !liveIDs.contains(id) {
+            tearDownFanout(id)
         }
     }
 
@@ -280,6 +290,31 @@ public final class NewGUIStore {
             run("剪贴板切换失败") {
                 try VMControl.setClipboardSharing(bundleURL: s.bundleURL, enabled: enabled)
             }
+        }
+    }
+
+    // MARK: - QEMU 画面 fanout 生命周期 (F1)
+
+    /// running VM 的显示 fanout: 已有复用, 否则建 + 设 onDisconnected hook + start.
+    /// QemuFramebufferView.makeNSView 调它拿 fanout 再 addSubscriber.
+    @discardableResult
+    func ensureQemuFanout(_ s: VMSummary) -> QemuFanoutSession {
+        if let existing = qemuFanouts[s.id] { return existing }
+        let fanout = QemuFanoutSession(vmID: s.id, bundleURL: s.bundleURL)
+        qemuFanouts[s.id] = fanout
+        // host 子进程退出 / GOODBYE / IO 错误 → 拆 fanout + refresh (切回 stopped)
+        fanout.onDisconnected = { [weak self] in
+            self?.tearDownFanout(s.id)
+            self?.refresh()
+        }
+        fanout.start()
+        return fanout
+    }
+
+    /// 拆 fanout (停机 / 断连 / 删除). stop 断 socket + 释放资源.
+    func tearDownFanout(_ id: UUID) {
+        if let fanout = qemuFanouts.removeValue(forKey: id) {
+            fanout.stop()
         }
     }
 

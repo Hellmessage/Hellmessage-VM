@@ -1,0 +1,471 @@
+// QemuFanoutSession.swift
+//
+// 把 QEMU host 子进程暴露的 HDP socket 接到一个**多消费者**扇出器:
+// 一个 channel + N 个 subscriber view (主窗口嵌入 + 任意数量独立窗口) 共存.
+//
+// 跟旧的单消费者 QemuEmbeddedSession 的关键差异:
+//   1. fanout 不再 own 单一 view, 改成 weak subscriber 列表
+//   2. SURFACE_NEW 拿到的 shm fd 通过 dup() 分发给每个 subscriber 各自 mmap
+//      (POSIX shm 同一物理页可多次映射, 跨 view 共享 zero-copy 不冲突)
+//   3. 缓存最近一次 SurfaceNew info + 缓存 fd, 让"晚来"的 subscriber (例如用户
+//      点 detach 弹出独立窗口时) 立即拿到当前 framebuffer 不等下一帧
+//   4. 缓存最近一次 LED 状态, 新 subscriber 即时同步 caps lock 等指示灯
+//
+// **fd 生命周期**:
+//   - SURFACE_NEW 携带的 fd 由 fanout 接管: 第一个活跃 subscriber 拿原 fd
+//     (它 mmap + close), 其余 subscriber 拿 dup 的 fd (各自 mmap + close)
+//   - fanout 自己 dup 一份保活 (cachedSurfaceFD), 用于以后新 subscriber 加入
+//     时再次 dup 给它. 收到下一个 SURFACE_NEW 时关掉旧的 cachedSurfaceFD
+//   - fanout 销毁时关掉 cachedSurfaceFD
+//
+// 输入 (键鼠) 不在 fanout 处理: 每个 FramebufferHostView 自带 InputForwarder,
+// 各自连同一个 QMP input socket. macOS NSEvent 默认只送 key window 的 first
+// responder, 双 view 共存不会双发事件.
+
+import Foundation
+import AppKit
+import OSLog
+import Darwin
+import HVMCore
+import HVMBundle
+import HVMQemu
+import HVMDisplayQemu
+import HVMIPC
+
+private let log = Logger(subsystem: "com.hellmessage.vm", category: "QemuFanout")
+
+@MainActor
+final class QemuFanoutSession {
+
+    // MARK: - 公共标识 (新 subscriber 加入时用得上)
+
+    let vmID: UUID
+    let bundleURL: URL
+
+    // MARK: - 内部资源
+
+    /// var 而非 let: channel 可在 disconnected 时重建 (例如 guest reset 触发
+    /// QEMU iosurface backend 短暂关闭 socket, host 子进程仍在运行 — 这时不该
+    /// tearDown fanout, 应当重连 channel 让 view 订阅持续有效).
+    private var channel: DisplayChannel
+    /// 同 VM 唯一的 InputForwarder (QMP socket 单 client 限制, 不能多 client 并发连).
+    /// fanout 启动时 connect 一次, 停止时 disconnect; 多 view (主嵌入 + detached)
+    /// 共享同一个实例, 通过 weak 引用注入 view (FramebufferHostView.forwarder).
+    /// 每个 view 在 viewCoords 调用前先 setViewSize 同步 view 自己的 size,
+    /// NSEvent 一时刻只送一个 view, 序列化无竞争.
+    private let forwarder: InputForwarder
+
+    /// 弱引用包. View 销毁后 fanout 自动跳过 (不需要显式 unsubscribe 也安全).
+    private final class WeakBox {
+        weak var view: FramebufferHostView?
+        init(_ v: FramebufferHostView) { self.view = v }
+    }
+    private var subscribers: [WeakBox] = []
+
+    /// 当前 surface 几何 + dup 的 fd 缓存. 仅 fanout 内部持有, deinit/换帧时关闭.
+    private var cachedSurfaceInfo: HDP.SurfaceNew?
+    private var cachedSurfaceFD: Int32 = -1
+
+    /// 当前 LED 状态. 新 subscriber 加入立即下发, 防止 caps 指示灯滞后一拍.
+    private var cachedLED: HDP.LedState?
+
+    /// 最近一次 hardware cursor 数据 (viogpudo / virtio-gpu cursor virtqueue 推过来的).
+    /// 新 subscriber 加入时 replay 一次, 防止 detached 窗口拉起后光标隐形.
+    /// CURSOR_DEFINE 推 BGRA pixels + hot spot; CURSOR_POS 推 visible flag (x/y 不用,
+    /// host 鼠标 ↔ guest tablet 已 1:1, 位置由 macOS 自己跟踪 host 鼠标).
+    private var cachedCursorDefine: HDP.CursorDefine?
+    private var cachedCursorPos: HDP.CursorPos?
+
+    /// channel 收到 disconnected 事件 (QEMU host 子进程退出 / GOODBYE / 网络错误)
+    /// 时回调. 上层 (AppModel) 用这个回调及时拆 fanout + 关 detached + refresh
+    /// list, 否则 detached 窗口会停在最后一帧、主嵌入会黑屏不响应, 直到下次
+    /// refreshList 兜底探测 BundleLock. AppModel.ensureQemuFanout 设置该 hook.
+    var onDisconnected: (@MainActor () -> Void)?
+
+    private var eventLoopTask: Task<Void, Never>?
+    private var connectTask: Task<Void, Never>?
+    private var thumbnailTimer: Timer?
+
+    /// resize debounce: master view 拖动过程中 drawableSizeWillChange 高频触发,
+    /// 不立即下发给 guest — 新尺寸来就 cancel 旧 workItem, 用户停 300ms 后真正
+    /// 推一次 RESIZE_REQUEST + MonitorsConfig. 防 Win guest 一边拖一边反复改分辨率.
+    private var pendingResizeWorkItem: DispatchWorkItem?
+    private static let resizeDebounceSeconds: Double = 0.3
+
+    // MARK: - 初始化 / 启动 / 停止
+
+    init(vmID: UUID, bundleURL: URL) {
+        self.vmID = vmID
+        self.bundleURL = bundleURL
+        let iosurfacePath = HVMPaths.iosurfaceSocketPath(for: vmID).path
+        let qmpInputPath  = HVMPaths.qmpInputSocketPath(for: vmID).path
+        self.channel = DisplayChannel(socketPath: iosurfacePath)
+        self.forwarder = InputForwarder(qmpSocketPath: qmpInputPath)
+    }
+
+    /// 启动连接 + 事件循环. 不阻塞调用线程. 多次调用安全 (第二次无效).
+    /// vdagent socket 由 VMHost 进程持久 own (single-client 限制), GUI 不直连; 拖窗口 resize
+    /// 走 IPC `display.setMonitors` 让 VMHost 内的 vdagent.sendMonitorsConfig 转 guest.
+    func start() {
+        guard connectTask == nil else { return }
+        log.info("start: retry connecting HDP channel for vm=\(self.vmID.uuidString)")
+        forwarder.connect()
+        startThumbnailTimer()
+        runConnectLoop()
+    }
+
+    /// HDP channel 重连: guest reset 让 QEMU iosurface backend 短暂关 socket 时,
+    /// 不能 tearDown fanout (view 订阅会丢, 主嵌入永久黑屏); 应当新建 DisplayChannel
+    /// 重新连同一个 socket 路径, view 订阅原样保留, 等新 SURFACE_NEW 到达自然恢复画面.
+    private func reconnectChannel() {
+        log.info("reconnectChannel: rebuilding channel for vm=\(self.vmID.uuidString)")
+        connectTask?.cancel(); connectTask = nil
+        eventLoopTask?.cancel(); eventLoopTask = nil
+        let iosurfacePath = HVMPaths.iosurfaceSocketPath(for: vmID).path
+        self.channel = DisplayChannel(socketPath: iosurfacePath)
+        runConnectLoop()
+    }
+
+    /// 异步 connect 重试 (最多 60 秒). 成功后启动 eventLoop. start() / reconnectChannel()
+    /// 共用. 相同 socket 路径; eventLoop 重启时 self.channel 已是新实例.
+    /// 60s 窗口 (600 × 100ms): 加密 VM 子进程从 BundleLock 拿到 (GUI 据此判 running
+    /// 触发 fanout.start) 到 QEMU iosurface backend 真正 listen, 加上 PBKDF2 解锁 +
+    /// LUKS keyslot + secret file + swtpm + unattend regen + QEMU init, 通常 5-10s,
+    /// 冷启动可能 20s+. 老 5s 窗口对加密 VM 不够 → 永远黑屏不恢复. 明文 VM 通常 1-2s
+    /// 内连上, 不受窗口扩大影响. Task.cancel 让 stop / refreshList 中途打断.
+    private func runConnectLoop() {
+        let channel = self.channel
+        connectTask = Task.detached(priority: .userInitiated) { [weak self] in
+            for attempt in 0..<600 {
+                do {
+                    try channel.connect()
+                    log.info("HDP channel connect OK on attempt \(attempt)")
+                    await MainActor.run { self?.startEventLoop() }
+                    return
+                } catch {
+                    if attempt == 0 || attempt == 50 || attempt == 200 {
+                        log.info("HDP connect attempt \(attempt) failed: \(String(describing: error))")
+                    }
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    if Task.isCancelled { return }
+                }
+            }
+            log.error("HDP connect attempts exhausted (60s)")
+        }
+    }
+
+    /// 停止连接 + 事件循环. 多次调用安全. 不主动通知 subscriber 释放 surface —
+    /// view 销毁会自然清掉 renderer 持有的 mmap.
+    func stop() {
+        thumbnailTimer?.invalidate(); thumbnailTimer = nil
+        connectTask?.cancel(); connectTask = nil
+        eventLoopTask?.cancel(); eventLoopTask = nil
+        pendingResizeWorkItem?.cancel(); pendingResizeWorkItem = nil
+        channel.disconnect()
+        forwarder.disconnect()
+        if cachedSurfaceFD >= 0 {
+            Darwin.close(cachedSurfaceFD); cachedSurfaceFD = -1
+        }
+        cachedSurfaceInfo = nil
+        cachedLED = nil
+    }
+
+    deinit {
+        // deinit 跨线程, 不能 call MainActor-isolated 方法.
+        // channel.disconnect / forwarder.disconnect 内部 DispatchQueue 已线程安全.
+        channel.disconnect()
+        forwarder.disconnect()
+        connectTask?.cancel()
+        eventLoopTask?.cancel()
+        if cachedSurfaceFD >= 0 {
+            Darwin.close(cachedSurfaceFD)
+        }
+    }
+
+    // MARK: - subscriber 管理
+
+    /// 注册一个 view. 若 fanout 已经收到过 SurfaceNew, 立即把当前 surface dup 一份
+    /// 喂给这个 view; 同时把当前 LED 状态同步过去.
+    /// `isResizeMaster=true` 时 view 的 drawable size 变化会通过 HDP 请求 guest
+    /// 改分辨率; false 时忽略 (例如独立窗口 view 拖大不应改 guest 分辨率,
+    /// 避免主窗口嵌入 view 跟 detached view 之间反复 resize 拉锯).
+    func addSubscriber(_ view: FramebufferHostView, isResizeMaster: Bool) {
+        subscribers.removeAll { $0.view == nil || $0.view === view }
+        subscribers.append(WeakBox(view))
+
+        // 注入唯一的 forwarder (weak), view 走 NSEvent → forwarder.mouseMove 等.
+        view.forwarder = self.forwarder
+
+        // resize master 把自己的 drawable size 推给 guest:
+        //   1. channel.requestResize → QEMU patch 0002 RESIZE_REQUEST handler →
+        //      dpy_set_ui_info (Linux/Asahi guest 内核 virtio-gpu driver 收 EDID 改分辨率)
+        //   2. vdagent.sendMonitorsConfig → 直接通过 vdagent chardev 发
+        //      VDAgentMonitorsConfig (Win guest spice-vdagent 服务收 → SetDisplayConfig).
+        //      Win 的 ramfb / virtio-gpu driver 不响应 EDID, 必须走这条 spice 协议.
+        // 两路并发, guest 哪条 work 哪条生效 (Linux 用 #1, Win 用 #2).
+        // **debounce**: 拖动过程中高频 drawableSizeWillChange 不直接下发, 用户停
+        // resizeDebounceSeconds 后才真正推一次, 防 Win guest 反复改分辨率刷屏.
+        // **不**绑 view.onDrawableSizeChange = scheduleResize: 那样 mtkView 任何
+        // drawableSizeWillChange (window setContentSize / 主嵌入 ↔ detached 切换 / chrome
+        // 估算误差导致的 layout 微调) 都会盲发 resize 请求, 用户没拖窗口 guest 也被改
+        // 分辨率. 现在只在用户真正拖窗口结束 (NSWindow live resize) 时才发, 由
+        // DetachedVMWindowController.windowDidEndLiveResize 主动调 fanout.scheduleResize.
+        // isResizeMaster 字段保留 (语义: 当前 view 是否是 resize 决策者, 调用方据此决定
+        // 是否监听 windowDidEndLiveResize). 主嵌入永远 false.
+        view.onDrawableSizeChange = nil
+        _ = isResizeMaster
+
+        // replay 当前 surface (如果已有)
+        if let info = cachedSurfaceInfo, cachedSurfaceFD >= 0 {
+            let dup = Darwin.dup(cachedSurfaceFD)
+            if dup >= 0 {
+                let arrival = DisplayChannel.SurfaceArrival(info: info, shmFD: dup)
+                view.bindSurface(arrival)
+                view.markFramebufferDirty()
+            } else {
+                log.error("addSubscriber: dup cachedSurfaceFD failed errno=\(errno)")
+            }
+        }
+        if let leds = cachedLED {
+            view.updateGuestLEDState(leds)
+        }
+        if let def = cachedCursorDefine {
+            view.applyGuestCursorDefine(def)
+        }
+        if let pos = cachedCursorPos {
+            view.applyGuestCursorPos(pos)
+        }
+    }
+
+    /// 显式注销. View 销毁后不调也无所谓 (weak 自然失效), 但显式调可立即释放
+    /// fanout 端引用槽位.
+    func removeSubscriber(_ view: FramebufferHostView) {
+        subscribers.removeAll { $0.view == nil || $0.view === view }
+    }
+
+    /// 用户主动触发 resize (NSWindow live resize 结束). 调用方: DetachedVMWindowController
+    /// 的 windowDidEndLiveResize. 对外入口, internal 可见.
+    @MainActor
+    func requestResizeFromUser(width: UInt32, height: UInt32) {
+        scheduleResize(width: width, height: height)
+    }
+
+    /// resize 防抖入口. 拖动过程中高频被调 (live resize 期间 windowDidResize),
+    /// 真正下发由 main queue timer 触发.
+    /// 双通路:
+    ///   1) HDP RESIZE_REQUEST — GUI 自家直连 iosurface socket (Linux virtio-gpu 走这条)
+    ///   2) IPC display.setMonitors → VMHost vdagent.sendMonitorsConfig (Win spice-vdagent 走这条)
+    /// IPC 走 background queue 防 main 阻塞; 失败 silent (vdagent 通道挂了不该卡 UI).
+    ///
+    /// **dedup**: 跟 guest 当前 framebuffer (cachedSurfaceInfo) 一致就跳过, 双保险防
+    /// 用户"拖动结束但 size 没真的变" 的边界情况. 没收过 SURFACE_NEW 也跳过 (不知
+    /// guest 状态不盲发).
+    @MainActor
+    private func scheduleResize(width: UInt32, height: UInt32) {
+        // dedup: 跟当前 guest framebuffer 一致 → 跳过
+        if let info = cachedSurfaceInfo, info.width == width, info.height == height {
+            return
+        }
+        // 没收过 SURFACE_NEW → 不知 guest 当前 size → 不轻易发
+        guard cachedSurfaceInfo != nil else {
+            log.info("scheduleResize \(width)x\(height) skipped: no cachedSurfaceInfo (waiting first SURFACE_NEW)")
+            return
+        }
+        pendingResizeWorkItem?.cancel()
+        let channel = self.channel
+        let bundleURL = self.bundleURL
+        let vmIDStr = self.vmID.uuidString
+        let item = DispatchWorkItem {
+            log.info("FanoutSession[\(vmIDStr)] resize debounced \(width)x\(height) → HDP + IPC")
+            channel.requestResize(width: width, height: height)
+            DispatchQueue.global(qos: .userInitiated).async {
+                Self.ipcSetMonitors(bundleURL: bundleURL, width: width, height: height)
+            }
+        }
+        pendingResizeWorkItem = item
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.resizeDebounceSeconds, execute: item)
+    }
+
+    /// 后台线程调: BundleLock.inspect 取 socket → SocketClient.request display.setMonitors.
+    /// 任一步失败 silent log.warn — vdagent 通道挂了不该让 GUI 卡或弹错.
+    nonisolated private static func ipcSetMonitors(bundleURL: URL, width: UInt32, height: UInt32) {
+        guard let holder = BundleLock.inspect(bundleURL: bundleURL),
+              !holder.socketPath.isEmpty else {
+            log.warning("FanoutSession resize: BundleLock.inspect 失败, 跳过 IPC")
+            return
+        }
+        let req = IPCRequest(
+            op: IPCOp.displaySetMonitors.rawValue,
+            args: ["width": "\(width)", "height": "\(height)"]
+        )
+        do {
+            let resp = try SocketClient.request(socketPath: holder.socketPath, request: req, timeoutSec: 3)
+            if !resp.ok {
+                log.warning("FanoutSession resize IPC failed: \(resp.error?.message ?? "?")")
+            }
+        } catch {
+            log.warning("FanoutSession resize IPC error: \(String(describing: error))")
+        }
+    }
+
+    /// 当前活跃 subscriber 数 (compaction 后). 上层 (AppModel) 用这个判断
+    /// 是否还需要保留 fanout: 0 时 + VM 仍 running 时 → tearDown 节省资源.
+    var activeSubscriberCount: Int {
+        subscribers.removeAll { $0.view == nil }
+        return subscribers.compactMap { $0.view }.count
+    }
+
+    /// 当前 guest framebuffer 像素尺寸 (cachedSurfaceInfo 的 width/height).
+    /// 独立窗口打开时用来按 guest 分辨率定 contentSize, fanout 还没收到首帧时返 nil.
+    var currentGuestPixelSize: CGSize? {
+        guard let info = cachedSurfaceInfo, info.width > 0, info.height > 0 else {
+            return nil
+        }
+        return CGSize(width: Int(info.width), height: Int(info.height))
+    }
+
+    // MARK: - thumbnail
+
+    private func startThumbnailTimer() {
+        thumbnailTimer?.invalidate()
+        thumbnailTimer = Timer.scheduledTimer(
+            withTimeInterval: HVMScreenshot.thumbnailIntervalSec,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor in self?.captureThumbnail() }
+        }
+    }
+
+    /// 借用任意一个 alive subscriber 的 renderer 抓 CGImage; 全部空时跳过本 tick.
+    /// 各 subscriber 的 renderer 内容相同 (映射同一份 shm), 借任一个均可.
+    private func captureThumbnail() {
+        // 缩略图开关关闭 → 跳过 capture, 不写 bundle/meta/thumbnail.png.
+        // 每 tick 读 (而非启动时拍板), 用户切换 toggle 立即生效.
+        guard ThumbnailPreferences.readEnabledFromDefaults() else { return }
+        guard let view = subscribers.lazy.compactMap({ $0.view }).first,
+              let cg = view.renderer.snapshotCGImage() else { return }
+        let bundle = self.bundleURL
+        let maxEdge = HVMScreenshot.thumbnailMaxEdge
+        Task.detached(priority: .background) {
+            let scaled = PPMReader.downscale(cg, maxEdge: maxEdge)
+            guard let png = PPMReader.encodePNG(scaled) else { return }
+            try? ThumbnailWriter.writeAtomic(png, to: bundle)
+        }
+    }
+
+    // MARK: - 事件循环 / 扇出
+
+    private func startEventLoop() {
+        let stream = channel.events
+        // 高频 surfaceDamage 不能在 MainActor 上吃, 否则 30Hz draw 调度会被 starve.
+        // 跟旧实现一致: 事件循环跑在默认 actor, 状态更新切回 MainActor.
+        eventLoopTask = Task { [weak self] in
+            log.info("event loop started")
+            for await event in stream {
+                guard let self else { return }
+                switch event {
+                case .helloDone(let caps):
+                    log.info("event helloDone caps=0x\(String(caps.rawValue, radix: 16))")
+                case .surfaceNew(let arrival):
+                    log.info("event surfaceNew \(arrival.info.width)x\(arrival.info.height) stride=\(arrival.info.stride) shm_size=\(arrival.info.shmSize) fd=\(arrival.shmFD)")
+                    await MainActor.run { self.broadcastSurface(arrival) }
+                case .surfaceDamage:
+                    await MainActor.run { self.broadcastDamage() }
+                case .ledState(let leds):
+                    log.info("event ledState caps=\(leds.capsLock) num=\(leds.numLock) scroll=\(leds.scrollLock)")
+                    await MainActor.run { self.broadcastLED(leds) }
+                case .cursorDefine(let def):
+                    await MainActor.run {
+                        self.cachedCursorDefine = def
+                        for box in self.subscribers {
+                            box.view?.applyGuestCursorDefine(def)
+                        }
+                    }
+                case .cursorPos(let pos):
+                    await MainActor.run {
+                        self.cachedCursorPos = pos
+                        for box in self.subscribers {
+                            box.view?.applyGuestCursorPos(pos)
+                        }
+                    }
+                case .disconnected(let reason):
+                    log.info("event disconnected reason=\(String(describing: reason))")
+                    // 关键判断: host 子进程是否仍持 BundleLock.
+                    //   busy=true: QEMU 进程还在跑 (例如 Win guest 触发 ACPI reset,
+                    //     iosurface backend 短暂关 socket 重新初始化) — 重连 channel,
+                    //     view 订阅保留, 等新 SURFACE_NEW 自然恢复, 不 tearDown.
+                    //   busy=false: host 子进程退出 (QEMU exit / panic) — 真 stopped,
+                    //     onDisconnected 走 AppModel.tearDownQemuFanout + refreshList.
+                    await MainActor.run {
+                        let stillBusy = BundleLock.isBusy(bundleURL: self.bundleURL)
+                        log.info("disconnected: BundleLock.isBusy=\(stillBusy)")
+                        if stillBusy {
+                            self.reconnectChannel()
+                        } else {
+                            self.onDisconnected?()
+                        }
+                    }
+                    return
+                }
+            }
+            log.info("event loop ended (stream finished)")
+        }
+    }
+
+    /// 把新到达的 SurfaceArrival fan-out 给所有 alive subscriber.
+    /// **先一次性 dup 出所有需要的 fd, 再分发** — 之前用"第一个 subscriber 拿原 fd, 其余
+    /// dup" 的写法有 bug: 第一个 subscriber 的 FramebufferRenderer.bindShm 内 mmap 后
+    /// 立即 close(fd), close 完后续循环再 dup(arrival.shmFD) 全部 EBADF, detached 窗口
+    /// 等任何 idx>0 的 subscriber 永远收不到新 surface, 卡在 resize 前那一帧.
+    /// 现在统一: cache + 每个 subscriber 各 dup 一份, 最后再 close 原 fd, 顺序无歧义.
+    private func broadcastSurface(_ arrival: DisplayChannel.SurfaceArrival) {
+        let alive = subscribers.compactMap { $0.view }
+
+        // 关旧缓存, dup 一份新 fd 进 cache (供后续 addSubscriber replay)
+        if cachedSurfaceFD >= 0 {
+            Darwin.close(cachedSurfaceFD); cachedSurfaceFD = -1
+        }
+        let cacheDup = Darwin.dup(arrival.shmFD)
+        if cacheDup >= 0 {
+            cachedSurfaceFD = cacheDup
+            cachedSurfaceInfo = arrival.info
+        } else {
+            log.error("broadcastSurface: dup for cache failed errno=\(errno)")
+            cachedSurfaceInfo = nil
+        }
+
+        // 给每个 subscriber 提前 dup 一份独立 fd. 必须在分发前全部 dup 完, 否则
+        // 第一个 view.bindSurface 内 close 原 fd 后, 后续 dup 失败.
+        var subFds: [Int32] = []
+        subFds.reserveCapacity(alive.count)
+        for _ in alive {
+            let d = Darwin.dup(arrival.shmFD)
+            if d < 0 {
+                log.error("broadcastSurface: dup for subscriber failed errno=\(errno)")
+            }
+            subFds.append(d)
+        }
+        // 原 fd 已不再用 (cache + N 个 subscriber 各持独立 dup), close 防泄漏
+        Darwin.close(arrival.shmFD)
+
+        for (view, fd) in zip(alive, subFds) {
+            if fd < 0 { continue }
+            let copy = DisplayChannel.SurfaceArrival(info: arrival.info, shmFD: fd)
+            view.bindSurface(copy)
+        }
+    }
+
+    private func broadcastDamage() {
+        for box in subscribers {
+            box.view?.markFramebufferDirty()
+        }
+    }
+
+    private func broadcastLED(_ leds: HDP.LedState) {
+        cachedLED = leds
+        for box in subscribers {
+            box.view?.updateGuestLEDState(leds)
+        }
+    }
+}
