@@ -74,12 +74,7 @@ public enum EncryptVMOperation {
                 allowed: ["qemu (VZ engine VM 加密暂不支持; v2.4 决策)"]
             ))
         }
-        guard config.guestOS != .macOS else {
-            throw HVMError.config(.invalidEnum(
-                field: "guestOS", raw: "macOS",
-                allowed: ["linux / windows (macOS 走 VZ, 加密推后)"]
-            ))
-        }
+        // (macOS guest 已随 VZ 移除, GuestOSType 仅 linux/windows, 无需再拦)
 
         // 2. KDF: 生成 salt + master + 4 子 keys
         let salt = try PasswordKDF.generateSalt()

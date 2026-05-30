@@ -41,7 +41,6 @@
 
 import Foundation
 import Darwin
-@preconcurrency import Virtualization
 import HVMCore
 import HVMBundle
 import HVMEncryption
@@ -110,21 +109,15 @@ public enum CloneManager {
         defer { srcLock.release() }
 
         // 加密形态分流 (D9 = 等价复制 + 同密码)
-        if let scheme = EncryptedBundleIO.detectScheme(at: sourceBundle) {
-            switch scheme {
-            case .vzSparsebundle:
-                throw HVMError.encryption(.parseFailed(
-                    reason: "VZ-sparsebundle 加密 VM clone 暂未实现 (ENCRYPTION.md v2.4 QEMU 优先)"
-                ))
-            case .qemuPerfile:
-                guard let password = options.password else {
-                    throw HVMError.config(.missingField(name: "password (加密 VM clone 必须传 password)"))
-                }
-                return try cloneEncryptedQEMU(sourceBundle: sourceBundle,
-                                                targetBundle: targetBundle,
-                                                options: options,
-                                                password: password)
+        if EncryptedBundleIO.detectScheme(at: sourceBundle) != nil {
+            // QEMU-only: 加密 VM 恒 qemu-perfile (vz-sparsebundle 已随 VZ 移除)
+            guard let password = options.password else {
+                throw HVMError.config(.missingField(name: "password (加密 VM clone 必须传 password)"))
             }
+            return try cloneEncryptedQEMU(sourceBundle: sourceBundle,
+                                          targetBundle: targetBundle,
+                                          options: options,
+                                          password: password)
         }
 
         // 加载源 config (走 schema 升级链 + 校验)
@@ -171,25 +164,9 @@ public enum CloneManager {
             try cloneIfExists(name: BundleLayout.auxiliaryDirName, from: sourceBundle, to: targetBundle)
             try cloneIfExists(name: BundleLayout.metaDirName, from: sourceBundle, to: targetBundle)
 
-            // macOS guest: 重生 machine-identifier (覆盖刚 clone 进来的字节). hardware-model 保留.
-            if config.guestOS == .macOS {
-                let auxDir = BundleLayout.auxiliaryDir(targetBundle)
-                let machineIDURL = auxDir.appendingPathComponent(BundleLayout.machineIdentifier)
-                // 如果源原本没有 auxiliary 目录 (异常 bundle), 兜底建出来
-                if !fm.fileExists(atPath: auxDir.path) {
-                    try fm.createDirectory(at: auxDir, withIntermediateDirectories: true,
-                                           attributes: [.posixPermissions: 0o755])
-                }
-                let newMachineID = VZMacMachineIdentifier()
-                do {
-                    try newMachineID.dataRepresentation.write(to: machineIDURL, options: .atomic)
-                } catch {
-                    throw HVMError.bundle(.writeFailed(reason: "machine-identifier 写入失败: \(error)",
-                                                       path: machineIDURL.path))
-                }
-            }
+            // (macOS guest machine-identifier 重生已随 VZ 移除; QEMU guest 无此字段)
 
-            // logs/ 空目录: ConsoleBridge / QemuConsoleBridge 启动时写
+            // logs/ 空目录: QemuConsoleBridge 启动时写
             try fm.createDirectory(at: BundleLayout.logsDir(targetBundle),
                                    withIntermediateDirectories: true,
                                    attributes: [.posixPermissions: 0o755])

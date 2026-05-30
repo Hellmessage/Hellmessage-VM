@@ -28,16 +28,12 @@ public enum VMCatalog {
         let runState: RunState = BundleLock.isBusy(bundleURL: bundleURL) ? .running : .stopped
 
         // 加密 VM: 无明文 config.yaml, 走 routing JSON 拿 vmId / displayName / guestOS / scheme.
-        if let scheme = EncryptedBundleIO.detectScheme(at: bundleURL) {
-            let routingURL: URL = {
-                switch scheme {
-                case .vzSparsebundle: return RoutingJSON.locationForSparsebundle(bundleURL)
-                case .qemuPerfile:    return RoutingJSON.locationForQemuBundle(bundleURL)
-                }
-            }()
+        if EncryptedBundleIO.detectScheme(at: bundleURL) != nil {
+            // QEMU-only: 加密 VM 恒 qemu-perfile
+            let routingURL = RoutingJSON.locationForQemuBundle(bundleURL)
             guard let routing = try? RoutingJSON.read(from: routingURL) else { return nil }
-            // scheme → engine: qemuPerfile=qemu, vzSparsebundle=vz
-            let engine: Engine = (scheme == .qemuPerfile) ? .qemu : .vz
+            // QEMU-only: 加密 VM 恒 qemu (vz-sparsebundle 已随 VZ 移除)
+            let engine: Engine = .qemu
             return VMSummary(
                 id: routing.vmId,
                 bundleURL: bundleURL,
@@ -45,7 +41,7 @@ public enum VMCatalog {
                 guestOS: routing.guestOS ?? .linux,   // v2 routing 无 guestOS, 兜底 linux
                 engine: engine,
                 runState: runState,
-                encryptionScheme: scheme,
+                encryptionScheme: .qemuPerfile,
                 config: nil,
                 cpuCount: nil,
                 memoryMiB: nil,

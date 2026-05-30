@@ -56,11 +56,6 @@ public enum HVMHostEntry {
                 fputs("HVMHost: 加密 VM 解锁失败: \(error)\n", stderr)
                 exit(42)
             }
-
-        case .vzSparsebundle:
-            // VZ 后端已下线 (QEMU-only 转向); vz-sparsebundle 实际从未接入
-            fputs("HVMHost: VZ 后端已下线 (QEMU-only); vz-sparsebundle 加密 VM 无法启动\n", stderr)
-            exit(43)
         }
 
         // 2. 抢锁 (共用前置)
@@ -89,19 +84,13 @@ public enum HVMHostEntry {
         let startedAt = Date()
 
         // 3. 按 engine 分派. QEMU-only: 仅 .qemu 有实现, .vz 下线报错.
-        switch config.engine {
-        case .qemu:
-            QemuHostEntry.run(
-                config: config, bundleURL: bundleURL,
-                lock: lock, socketURL: socketURL, startedAt: startedAt,
-                embeddedInGUI: embeddedInGUI,
-                encryptedHandle: unlocked
-            )
-        case .vz:
-            fputs("HVMHost: VZ 后端已下线 (QEMU-only 转向); 请重建为 QEMU VM\n", stderr)
-            try? unlocked?.close()
-            exit(43)
-        }
+        // QEMU-only: Engine 单 case, 直接分派 QemuHostEntry
+        QemuHostEntry.run(
+            config: config, bundleURL: bundleURL,
+            lock: lock, socketURL: socketURL, startedAt: startedAt,
+            embeddedInGUI: embeddedInGUI,
+            encryptedHandle: unlocked
+        )
     }
 }
 

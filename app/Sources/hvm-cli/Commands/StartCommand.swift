@@ -42,19 +42,10 @@ struct StartCommand: AsyncParsableCommand {
             let displayName: String
             let vmId: UUID
             var password: String? = nil
-            if let scheme = EncryptedBundleIO.detectScheme(at: bundleURL) {
-                let routingURL: URL = {
-                    switch scheme {
-                    case .vzSparsebundle: return RoutingJSON.locationForSparsebundle(bundleURL)
-                    case .qemuPerfile:    return RoutingJSON.locationForQemuBundle(bundleURL)
-                    }
-                }()
+            if EncryptedBundleIO.detectScheme(at: bundleURL) != nil {
+                // QEMU-only: 加密 VM 恒 qemu-perfile
+                let routingURL = RoutingJSON.locationForQemuBundle(bundleURL)
                 let routing = try RoutingJSON.read(from: routingURL)
-                if scheme == .vzSparsebundle {
-                    throw HVMError.encryption(.parseFailed(
-                        reason: "VZ 加密 VM 启动暂未实现 (docs/v3/ENCRYPTION.md v2.4 QEMU 优先); 等 VZ 接入 PR"
-                    ))
-                }
                 displayName = routing.displayName
                 vmId = routing.vmId
                 // Prompt 密码

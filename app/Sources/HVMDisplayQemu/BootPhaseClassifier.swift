@@ -33,8 +33,6 @@ public enum BootPhaseClassifier {
     /// guestOS 对应的 GUI 登录 / 桌面元素关键字. 全 lowercase, 任一命中 = ready-gui.
     public static func guiKeywords(for guestOS: GuestOSType) -> [String] {
         switch guestOS {
-        case .macOS:
-            return ["sign in", "other", "user name", "用户名", "apple", "finder"]
         case .linux:
             return ["username", "password", "sign in", "log in", "用户名", "密码"]
         case .windows:

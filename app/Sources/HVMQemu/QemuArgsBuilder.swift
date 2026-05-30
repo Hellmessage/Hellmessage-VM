@@ -142,13 +142,6 @@ public enum QemuArgsBuilder {
     public static func build(_ inputs: Inputs) throws -> BuildResult {
         let cfg = inputs.config
 
-        // 防御: VZ-only guest 不该到这里. validate() 应在调用前已拦截
-        if cfg.guestOS == .macOS {
-            throw HVMError.backend(.unsupportedGuestOS(
-                raw: "macOS via QEMU (VZ-only guest reached QEMU args builder)"
-            ))
-        }
-
         var args: [String] = []
 
         // ---- 机器 + CPU + 加速器 ----
@@ -230,9 +223,6 @@ public enum QemuArgsBuilder {
                     .appendingPathComponent("\(BundleLayout.nvramDirName)/\(BundleLayout.nvramFileName)").path
                 args += ["-drive", "if=pflash,format=raw,file=\(nvramPath)"]
             }
-        case .macOS:
-            // 上面已 throw, 此处仅穷尽 switch
-            break
         }
         // -L: QEMU 找 keymap / firmware descriptor 等辅助资源
         args += ["-L", inputs.qemuRoot.appendingPathComponent("share/qemu").path]
@@ -275,9 +265,6 @@ public enum QemuArgsBuilder {
             case .linux:
                 spec += ",if=virtio"
                 args += ["-drive", spec]
-            case .macOS:
-                // 上面已 throw, 此处仅穷尽 switch
-                break
             }
         }
 

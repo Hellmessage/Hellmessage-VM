@@ -136,21 +136,8 @@ public enum EncryptedBundleIO {
             }
         }
 
-        // VZ-sparsebundle: 看 .hvmz.sparsebundle 容器存在
-        if let name = displayName {
-            let sparsebundle = bundleOrParentURL
-                .appendingPathComponent("\(name).hvmz.sparsebundle", isDirectory: true)
-            if fm.fileExists(atPath: sparsebundle.path) {
-                return .vzSparsebundle
-            }
-        }
-
-        // 自身就是 sparsebundle?
-        if bundleOrParentURL.pathExtension == "sparsebundle"
-            && bundleOrParentURL.deletingPathExtension().pathExtension == "hvmz" {
-            return .vzSparsebundle
-        }
-
+        // (vz-sparsebundle 检测已随 VZ 移除; 加密 VM 恒 qemu-perfile)
+        _ = displayName
         return nil
     }
 
@@ -178,16 +165,8 @@ public enum EncryptedBundleIO {
                                             scheme: scheme,
                                             createdAt: Date())
 
+        _ = sparsebundleSizeBytes   // VZ-only 参数, 保留签名兼容
         switch scheme {
-        case .vzSparsebundle:
-            return try createVZ(parentDir: parentDir,
-                                 displayName: displayName,
-                                 password: password,
-                                 salt: salt,
-                                 sparsebundleSize: sparsebundleSizeBytes,
-                                 config: config,
-                                 vmId: config.id)
-
         case .qemuPerfile:
             return try createQEMU(parentDir: parentDir,
                                    displayName: displayName,
@@ -202,20 +181,12 @@ public enum EncryptedBundleIO {
     /// - bundlePath: 对 VZ 是 .hvmz.sparsebundle 路径; QEMU 是 .hvmz 路径
     public static func unlock(bundlePath: URL,
                               password: String) throws -> UnlockedHandle {
-        // 1. 读 routing JSON 拿 KDF 参数 + scheme (跨机器 portable 入口)
-        let scheme: EncryptionSpec.EncryptionScheme
-        let routingURL: URL
-        if bundlePath.pathExtension == "sparsebundle" {
-            scheme = .vzSparsebundle
-            routingURL = RoutingJSON.locationForSparsebundle(bundlePath)
-        } else {
-            scheme = .qemuPerfile
-            routingURL = RoutingJSON.locationForQemuBundle(bundlePath)
-        }
+        // 1. 读 routing JSON 拿 KDF 参数 (QEMU-only: 加密 VM 恒 qemu-perfile)
+        let routingURL = RoutingJSON.locationForQemuBundle(bundlePath)
         let routing = try RoutingJSON.read(from: routingURL)
-        guard routing.scheme == scheme else {
+        guard routing.scheme == .qemuPerfile else {
             throw HVMError.encryption(.parseFailed(
-                reason: "routing scheme=\(routing.scheme.rawValue) 与 bundle 路径 (\(scheme.rawValue)) 不一致"))
+                reason: "routing scheme=\(routing.scheme.rawValue) 非 qemu-perfile (vz-sparsebundle 已下线)"))
         }
 
         // 2. PBKDF2 派生 master KEK
@@ -223,119 +194,10 @@ public enum EncryptedBundleIO {
                                                       salt: routing.kdfSalt,
                                                       iterations: routing.kdfIterations)
 
-        // 3. 走 scheme 分流
-        switch scheme {
-        case .vzSparsebundle:
-            return try unlockVZ(sparsebundleURL: bundlePath,
-                                 password: password,
-                                 vmId: routing.vmId)
-
-        case .qemuPerfile:
-            return try unlockQEMU(bundleURL: bundlePath, master: master)
-        }
+        // 3. QEMU per-file 解锁
+        return try unlockQEMU(bundleURL: bundlePath, master: master)
     }
 
-    // MARK: - VZ 路径
-
-    private static func createVZ(parentDir: URL,
-                                  displayName: String,
-                                  password: String,
-                                  salt: Data,
-                                  sparsebundleSize: UInt64,
-                                  config: VMConfig,
-                                  vmId: UUID) throws -> CreateHandle {
-        let sparsebundleURL = parentDir.appendingPathComponent(
-            "\(displayName).hvmz.sparsebundle", isDirectory: true)
-
-        // 1. 创建 sparsebundle (hdiutil 走自家 PBKDF2)
-        let uuid8 = String(vmId.uuidString.lowercased().prefix(8))
-        try SparsebundleTool.create(at: sparsebundleURL,
-                                     password: password,
-                                     options: .init(sizeBytes: sparsebundleSize,
-                                                    volumeName: "HVM-\(uuid8)"))
-
-        // 2. attach 到 mountpoint
-        let mountpoint = HVMPaths.mountpointFor(uuid: vmId)
-        try? FileManager.default.createDirectory(at: mountpoint, withIntermediateDirectories: true)
-        _ = try SparsebundleTool.attach(at: sparsebundleURL,
-                                         password: password,
-                                         mountpoint: mountpoint)
-
-        // 3. mountpoint 内创建 .hvmz + 走 BundleIO.create
-        let bundleURL = mountpoint.appendingPathComponent(
-            "\(displayName).hvmz", isDirectory: true)
-        do {
-            try BundleIO.create(at: bundleURL, config: config)
-        } catch {
-            // 创建失败 → detach + 删 sparsebundle
-            try? SparsebundleTool.detach(mountpoint: mountpoint, force: true)
-            try? FileManager.default.removeItem(at: sparsebundleURL)
-            throw error
-        }
-
-        // 4. 写 routing JSON (与 sparsebundle 同级, 明文). guestOS 进 routing v3 让 GUI
-        // 解锁前能正确显示 guest 类型 (不再用 placeholder=.linux 兜底).
-        let routing = RoutingMetadata(vmId: vmId,
-                                       scheme: .vzSparsebundle,
-                                       displayName: displayName,
-                                       guestOS: config.guestOS,
-                                       kdfSalt: salt)
-        let routingURL = RoutingJSON.locationForSparsebundle(sparsebundleURL)
-        do {
-            try RoutingJSON.write(routing, to: routingURL)
-        } catch {
-            try? SparsebundleTool.detach(mountpoint: mountpoint, force: true)
-            try? FileManager.default.removeItem(at: sparsebundleURL)
-            throw error
-        }
-
-        Self.log.info("EncryptedBundleIO create VZ: \(displayName, privacy: .public) sparsebundle=\(sparsebundleURL.lastPathComponent, privacy: .public)")
-
-        return CreateHandle(scheme: .vzSparsebundle,
-                            bundleURL: bundleURL,
-                            qemuSubKeys: nil,
-                            sparsebundleURL: sparsebundleURL,
-                            mountpoint: mountpoint,
-                            routingJSONURL: routingURL)
-    }
-
-    private static func unlockVZ(sparsebundleURL: URL,
-                                  password: String,
-                                  vmId: UUID) throws -> UnlockedHandle {
-        let mountpoint = HVMPaths.mountpointFor(uuid: vmId)
-        try? FileManager.default.createDirectory(at: mountpoint, withIntermediateDirectories: true)
-
-        // attach (密码错抛 wrongPassword)
-        _ = try SparsebundleTool.attach(at: sparsebundleURL,
-                                         password: password,
-                                         mountpoint: mountpoint)
-
-        // 找 mountpoint 下唯一 .hvmz 子目录
-        let fm = FileManager.default
-        let entries = (try? fm.contentsOfDirectory(atPath: mountpoint.path)) ?? []
-        guard let hvmzName = entries.first(where: { $0.hasSuffix(".hvmz") }) else {
-            try? SparsebundleTool.detach(mountpoint: mountpoint, force: true)
-            throw HVMError.encryption(.parseFailed(
-                reason: "sparsebundle 内未找到 .hvmz 子目录"))
-        }
-        let bundleURL = mountpoint.appendingPathComponent(hvmzName, isDirectory: true)
-
-        // 读 config
-        let config: VMConfig
-        do {
-            config = try BundleIO.load(from: bundleURL)
-        } catch {
-            try? SparsebundleTool.detach(mountpoint: mountpoint, force: true)
-            throw error
-        }
-
-        return UnlockedHandle(scheme: .vzSparsebundle,
-                              bundleURL: bundleURL,
-                              config: config,
-                              qemuSubKeys: nil,
-                              sparsebundleURL: sparsebundleURL,
-                              mountpoint: mountpoint)
-    }
 
     // MARK: - QEMU 路径
 
@@ -364,15 +226,9 @@ public enum EncryptedBundleIO {
                                                      withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: BundleLayout.logsDir(bundleURL),
                                                      withIntermediateDirectories: true)
-            switch config.guestOS {
-            case .linux, .windows:
-                try FileManager.default.createDirectory(at: BundleLayout.nvramDir(bundleURL),
-                                                         withIntermediateDirectories: true)
-            case .macOS:
-                // QEMU 后端不支持 macOS guest, validate() 会拒. 但 mkdir auxiliary 仍兜底
-                try FileManager.default.createDirectory(at: BundleLayout.auxiliaryDir(bundleURL),
-                                                         withIntermediateDirectories: true)
-            }
+            // QEMU-only: linux/windows 都建 nvram 目录 (macOS auxiliary 已随 VZ 移除)
+            try FileManager.default.createDirectory(at: BundleLayout.nvramDir(bundleURL),
+                                                     withIntermediateDirectories: true)
         } catch {
             try? FileManager.default.removeItem(at: bundleURL)
             throw HVMError.bundle(.writeFailed(reason: "\(error)", path: bundleURL.path))

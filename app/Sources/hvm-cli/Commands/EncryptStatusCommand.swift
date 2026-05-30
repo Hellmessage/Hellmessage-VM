@@ -36,13 +36,8 @@ struct EncryptStatusCommand: AsyncParsableCommand {
                 return
             }
 
-            let routing: RoutingMetadata
-            switch scheme! {
-            case .qemuPerfile:
-                routing = try RoutingJSON.read(from: RoutingJSON.locationForQemuBundle(bundleURL))
-            case .vzSparsebundle:
-                routing = try RoutingJSON.read(from: RoutingJSON.locationForSparsebundle(bundleURL))
-            }
+            // QEMU-only: 加密 VM 恒 qemu-perfile
+            let routing = try RoutingJSON.read(from: RoutingJSON.locationForQemuBundle(bundleURL))
 
             switch format {
             case .human:

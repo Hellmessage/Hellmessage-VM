@@ -8,9 +8,11 @@ import Foundation
 import HVMCore
 
 public enum GuestOSType: String, Codable, Sendable, CaseIterable {
-    case macOS
     case linux
     case windows
+    // macOS guest 已随 VZ 移除 (QEMU-only 转向, docs/v4/QEMU_ONLY_PIVOT.md):
+    // QEMU 无 Apple Silicon macOS 虚拟化路径. 老 config 带 "macOS" 解码会失败 (无此 case),
+    // 该 VM 不加载 — 用户实际无 macOS guest VM, 可接受.
 }
 
 public extension GuestOSType {
@@ -23,15 +25,14 @@ public extension GuestOSType {
     var defaultFramebufferSize: (width: Int, height: Int) {
         switch self {
         case .linux:   return (1024, 768)
-        case .macOS, .windows: return (1920, 1080)
+        case .windows: return (1920, 1080)
         }
     }
 }
 
-/// 后端引擎. macOS 仅 vz; Linux 二选一; Windows 仅 qemu (CLAUDE.md 约束).
-/// 老 v1 config 缺该字段时, VMConfig.init(from:) 兜底为 .vz, 不需要 schema 迁移.
+/// 后端引擎. QEMU-only 转向后只剩 qemu (VZ 已移除). 保留单 case 枚举 + engine 字段避免
+/// schema 结构变更; 老 config 带 "vz" 或缺字段时 init(from:) 兜底为 .qemu.
 public enum Engine: String, Codable, Sendable, CaseIterable {
-    case vz
     case qemu
 }
 
@@ -376,8 +377,9 @@ public struct EncryptionSpec: Codable, Sendable, Equatable {
     public var createdAt: Date?
 
     public enum EncryptionScheme: String, Codable, Sendable, CaseIterable {
-        case vzSparsebundle = "vz-sparsebundle"
         case qemuPerfile    = "qemu-perfile"
+        // vz-sparsebundle 已随 VZ 移除 (QEMU-only); 加密 VM 恒 qemu-perfile.
+        // 老 routing JSON 带 "vz-sparsebundle" 解码会失败 — 用户实际无此类 VM.
     }
 
     public init(enabled: Bool = false,
@@ -457,7 +459,7 @@ public struct VMConfig: Codable, Sendable, Equatable {
         createdAt: Date = Date(),
         displayName: String,
         guestOS: GuestOSType,
-        engine: Engine = .vz,
+        engine: Engine = .qemu,
         cpuCount: Int,
         memoryMiB: UInt64,
         disks: [DiskSpec],
@@ -514,7 +516,8 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.createdAt = try c.decode(Date.self, forKey: .createdAt)
         self.displayName = try c.decode(String.self, forKey: .displayName)
         self.guestOS = try c.decode(GuestOSType.self, forKey: .guestOS)
-        self.engine = try c.decodeIfPresent(Engine.self, forKey: .engine) ?? .vz
+        // 老 config 带 "vz" (无此 case 会抛) 或缺字段 → 兜底 .qemu (VZ 移除)
+        self.engine = (try? c.decodeIfPresent(Engine.self, forKey: .engine) ?? .qemu) ?? .qemu
         self.cpuCount = try c.decode(Int.self, forKey: .cpuCount)
         self.memoryMiB = try c.decode(UInt64.self, forKey: .memoryMiB)
         self.disks = try c.decode([DiskSpec].self, forKey: .disks)
@@ -567,12 +570,8 @@ public struct VMConfig: Codable, Sendable, Equatable {
     /// 校验 engine 与 guestOS 的合法组合 (CLAUDE.md「支持的 Guest OS 约束」).
     /// BundleIO.save 与 hvm-cli create 应主动调用; Codable 本身不强制以保持容错.
     public func validate() throws {
-        let allowed: [Engine]
-        switch guestOS {
-        case .macOS:   allowed = [.vz]            // VZMacOSInstaller 路径, QEMU 跑不了 macOS
-        case .linux:   allowed = [.vz, .qemu]     // 双后端
-        case .windows: allowed = [.qemu]          // VZ 无 TPM, QEMU 唯一选择
-        }
+        // QEMU-only: Linux + Windows 都只允许 qemu (唯一后端)
+        let allowed: [Engine] = [.qemu]
         guard allowed.contains(engine) else {
             throw HVMError.config(.invalidEnum(
                 field: "engine",

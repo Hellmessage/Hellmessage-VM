@@ -51,21 +51,15 @@ public enum EncryptedConfigEditor {
     public static func load(bundleURL: URL,
                              promptLabel: String? = nil) throws -> (VMConfig, Session) {
         // 加密形态检测
-        if let scheme = EncryptedBundleIO.detectScheme(at: bundleURL) {
-            switch scheme {
-            case .vzSparsebundle:
-                throw HVMError.encryption(.parseFailed(
-                    reason: "VZ 加密 VM 操作暂未实现 (ENCRYPTION.md v2.4 QEMU 优先); 等 VZ 接入 PR"
-                ))
-            case .qemuPerfile:
-                let label = promptLabel ?? bundleURL.deletingPathExtension().lastPathComponent
-                let password = try PasswordPrompt.read(prompt: "密码 (\(label)): ")
-                let handle = try EncryptedBundleIO.unlock(bundlePath: bundleURL, password: password)
-                let session = Session(bundleURL: bundleURL,
-                                      scheme: .qemuPerfile,
-                                      unlockHandle: handle)
-                return (handle.config, session)
-            }
+        if EncryptedBundleIO.detectScheme(at: bundleURL) != nil {
+            // QEMU-only: 加密 VM 恒 qemu-perfile
+            let label = promptLabel ?? bundleURL.deletingPathExtension().lastPathComponent
+            let password = try PasswordPrompt.read(prompt: "密码 (\(label)): ")
+            let handle = try EncryptedBundleIO.unlock(bundlePath: bundleURL, password: password)
+            let session = Session(bundleURL: bundleURL,
+                                  scheme: .qemuPerfile,
+                                  unlockHandle: handle)
+            return (handle.config, session)
         }
 
         // 明文
@@ -81,21 +75,14 @@ public enum EncryptedConfigEditor {
             try BundleIO.save(config: config, to: session.bundleURL)
             return
         }
-        switch scheme {
-        case .qemuPerfile:
-            guard let subKeys = session.qemuSubKeys else {
-                throw HVMError.encryption(.parseFailed(
-                    reason: "EncryptedConfigEditor.save: session 无 qemuSubKeys (内部状态错)"
-                ))
-            }
-            try EncryptedConfigIO.save(config: config,
-                                        to: session.bundleURL,
-                                        key: subKeys.config)
-        case .vzSparsebundle:
-            // load 阶段已挡, 兜底
+        _ = scheme   // QEMU-only: 恒 qemu-perfile
+        guard let subKeys = session.qemuSubKeys else {
             throw HVMError.encryption(.parseFailed(
-                reason: "VZ 加密 VM save 暂未实现"
+                reason: "EncryptedConfigEditor.save: session 无 qemuSubKeys (内部状态错)"
             ))
         }
+        try EncryptedConfigIO.save(config: config,
+                                    to: session.bundleURL,
+                                    key: subKeys.config)
     }
 }

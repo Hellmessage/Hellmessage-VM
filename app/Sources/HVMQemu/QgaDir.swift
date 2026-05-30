@@ -55,8 +55,6 @@ public enum QgaDir {
             result = try await runWindowsList(socketPath: socketPath, path: path, timeoutSec: timeoutSec)
         case .linux:
             result = try await runLinuxList(socketPath: socketPath, path: path, timeoutSec: timeoutSec)
-        case .macOS:
-            throw DirError.unsupportedGuestOS("macOS guest 不支持 (无 qga, 走 VZ shared dir 通路推后)")
         }
 
         if result.exitCode != 0 {

@@ -76,22 +76,13 @@ public enum HostLauncher {
            let routing = readRouting(at: resolved, scheme: scheme) {
             displayName = routing.displayName
             vmId = routing.vmId
-            // QEMU-only 转向 (docs/v4/QEMU_ONLY_PIVOT.md P1a): VZ 后端已下线.
-            // vz-sparsebundle 加密 VM 实际从未接入 (一直 qemu-perfile), 防御性拒.
-            if scheme == .vzSparsebundle {
-                throw HVMError.config(.invalidEnum(field: "engine", raw: "vz",
-                    allowed: ["qemu — VZ 后端已下线, 请重建为 QEMU VM"]))
-            }
+            // (加密 VM 恒 qemu-perfile — vz-sparsebundle 已随 VZ 移除)
         } else {
             // 明文 VM: BundleIO.load (一次, 仅取 displayName + id)
             let config = try BundleIO.load(from: resolved)
             displayName = config.displayName
             vmId = config.id
-            // VZ 后端已下线: vz VM 启动报清晰错误, 不进子进程
-            if config.engine == .vz {
-                throw HVMError.config(.invalidEnum(field: "engine", raw: "vz",
-                    allowed: ["qemu — VZ 后端已下线, 请重建为 QEMU VM"]))
-            }
+            // (engine 恒 .qemu — VZ 后端已移除, Engine 单 case)
         }
 
         let proc = Process()
@@ -126,11 +117,8 @@ public enum HostLauncher {
     /// 读 routing JSON (不解密) 拿 displayName + vmId. 失败返 nil.
     private static func readRouting(at bundleURL: URL,
                                      scheme: EncryptionSpec.EncryptionScheme) -> RoutingMetadata? {
-        let url: URL
-        switch scheme {
-        case .vzSparsebundle: url = RoutingJSON.locationForSparsebundle(bundleURL)
-        case .qemuPerfile:    url = RoutingJSON.locationForQemuBundle(bundleURL)
-        }
+        _ = scheme   // QEMU-only: 恒 qemu-perfile
+        let url = RoutingJSON.locationForQemuBundle(bundleURL)
         return try? RoutingJSON.read(from: url)
     }
 

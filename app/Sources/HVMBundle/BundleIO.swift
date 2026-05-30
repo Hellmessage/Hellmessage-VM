@@ -28,14 +28,9 @@ public enum BundleIO {
                                    attributes: [.posixPermissions: 0o755])
             try fm.createDirectory(at: BundleLayout.metaDir(bundleURL), withIntermediateDirectories: true,
                                    attributes: [.posixPermissions: 0o755])
-            switch config.guestOS {
-            case .linux, .windows:
-                try fm.createDirectory(at: BundleLayout.nvramDir(bundleURL), withIntermediateDirectories: true,
-                                       attributes: [.posixPermissions: 0o755])
-            case .macOS:
-                try fm.createDirectory(at: BundleLayout.auxiliaryDir(bundleURL), withIntermediateDirectories: true,
-                                       attributes: [.posixPermissions: 0o755])
-            }
+            // QEMU-only: linux/windows 都建 nvram 目录 (macOS auxiliary 路径已随 VZ 移除)
+            try fm.createDirectory(at: BundleLayout.nvramDir(bundleURL), withIntermediateDirectories: true,
+                                   attributes: [.posixPermissions: 0o755])
         } catch {
             throw HVMError.bundle(.writeFailed(reason: error.localizedDescription, path: bundleURL.path))
         }

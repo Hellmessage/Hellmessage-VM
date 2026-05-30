@@ -17,8 +17,8 @@ struct DetailSharingSection: View {
     @EnvironmentObject private var dialog: HVMUI.DialogPresenter
 
     private var cfg: VMConfig? { vm.config }
-    /// 仅 QEMU + Linux/Windows guest 支持 WebDAV 共享
-    private var supported: Bool { vm.engine == .qemu && vm.guestOS != .macOS }
+    /// WebDAV 共享: QEMU-only 后所有 VM (QEMU + Linux/Windows) 都支持
+    private var supported: Bool { true }
     private var editable: Bool { supported && vm.runState == .stopped }
 
     var body: some View {

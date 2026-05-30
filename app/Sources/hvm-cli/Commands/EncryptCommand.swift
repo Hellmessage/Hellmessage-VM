@@ -56,12 +56,7 @@ struct EncryptCommand: AsyncParsableCommand {
                     allowed: ["qemu (VZ engine VM 加密暂不支持)"]
                 ))
             }
-            guard config.guestOS != .macOS else {
-                throw HVMError.config(.invalidEnum(
-                    field: "guestOS", raw: "macOS",
-                    allowed: ["linux / windows"]
-                ))
-            }
+            // (macOS guest 已随 VZ 移除, GuestOSType 仅 linux/windows)
 
             // 用户警告 + 确认
             if format == .human {

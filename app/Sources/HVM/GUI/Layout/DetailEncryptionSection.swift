@@ -18,8 +18,8 @@ struct DetailEncryptionSection: View {
     @Environment(NewGUIStore.self) private var store
     @EnvironmentObject private var dialog: HVMUI.DialogPresenter
 
-    /// 明文可加密: QEMU + 非 macOS guest
-    private var canEncryptPlaintext: Bool { vm.engine == .qemu && vm.guestOS != .macOS }
+    /// 明文可加密: QEMU-only 后所有 VM 都可加密
+    private var canEncryptPlaintext: Bool { true }
     private var editable: Bool { vm.runState == .stopped }
 
     var body: some View {

@@ -45,15 +45,13 @@ public enum BundleLayout {
     /// 运行时永远从 VMConfig.mainDiskRelPath 读, 不再调用此函数.
     public static func mainDiskFileName(for engine: Engine) -> String {
         switch engine {
-        case .vz:   return "os.img"
-        case .qemu: return "os.qcow2"
+        case .qemu: return "os.qcow2"   // QEMU-only: 恒 qcow2 (VZ raw .img 已移除)
         }
     }
 
     /// 数据盘文件名同上, 仅创建时用. 运行时走 DiskSpec.path.
     public static func dataDiskFileName(uuid8: String, engine: Engine) -> String {
         switch engine {
-        case .vz:   return "data-\(uuid8).img"
         case .qemu: return "data-\(uuid8).qcow2"
         }
     }

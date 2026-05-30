@@ -113,11 +113,8 @@ struct StatusCommand: AsyncParsableCommand {
     /// 加密 VM 走 routing JSON + IPC (running 时拿运行态), 不依赖 BundleIO.load.
     private func printEncryptedStatus(bundleURL: URL,
                                        scheme: EncryptionSpec.EncryptionScheme) throws {
-        let routingURL: URL
-        switch scheme {
-        case .vzSparsebundle: routingURL = RoutingJSON.locationForSparsebundle(bundleURL)
-        case .qemuPerfile:    routingURL = RoutingJSON.locationForQemuBundle(bundleURL)
-        }
+        _ = scheme   // QEMU-only: 恒 qemu-perfile
+        let routingURL = RoutingJSON.locationForQemuBundle(bundleURL)
         let routing = try RoutingJSON.read(from: routingURL)
 
         let busy = BundleLock.isBusy(bundleURL: bundleURL)

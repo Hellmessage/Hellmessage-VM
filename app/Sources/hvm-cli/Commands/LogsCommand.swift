@@ -33,12 +33,9 @@ struct LogsCommand: AsyncParsableCommand {
             // 加密 VM 走 routing JSON 拿 displayName + id, 不解密 (查日志不需要密码)
             let displayName: String
             let vmId: UUID
-            if let scheme = EncryptedBundleIO.detectScheme(at: bundleURL) {
-                let routingURL: URL
-                switch scheme {
-                case .qemuPerfile:    routingURL = RoutingJSON.locationForQemuBundle(bundleURL)
-                case .vzSparsebundle: routingURL = RoutingJSON.locationForSparsebundle(bundleURL)
-                }
+            if EncryptedBundleIO.detectScheme(at: bundleURL) != nil {
+                // QEMU-only: 加密 VM 恒 qemu-perfile
+                let routingURL = RoutingJSON.locationForQemuBundle(bundleURL)
                 let routing = try RoutingJSON.read(from: routingURL)
                 displayName = routing.displayName
                 vmId = routing.vmId

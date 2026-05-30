@@ -62,17 +62,8 @@ struct CreateCommand: AsyncParsableCommand {
     func run() async throws {
         do {
             let os = try parseGuestOS(self.os)
-
-            // QEMU-only 转向 (docs/v4/QEMU_ONLY_PIVOT.md P1a): VZ 后端 + macOS guest 已下线.
-            // macOS guest 唯一通路是 VZ (QEMU 跑不了 macOS); VZ entitlement 未批 + QEMU 已满足.
-            if os == .macOS {
-                throw HVMError.config(.invalidEnum(field: "os", raw: "macOS",
-                    allowed: ["linux", "windows", "(macOS guest 已下线 — VZ 后端移除)"]))
-            }
-            if self.engine == .vz {
-                throw HVMError.config(.invalidEnum(field: "engine", raw: "vz",
-                    allowed: ["qemu", "(VZ 后端已下线)"]))
-            }
+            // QEMU-only: GuestOSType 仅 linux/windows, Engine 仅 qemu — ArgumentParser 解析阶段
+            // 已拒 --os macOS / --engine vz (非法 raw value), 无需再显式拦.
 
             // ---- 导入磁盘镜像分支 (跳过 ISO 装机, 直接 boot) ----
             // 与 --iso / --ipsw 互斥, 仅 --os linux 支持; engine 由镜像格式锁定 (qcow2→qemu, raw→vz)
@@ -102,27 +93,15 @@ struct CreateCommand: AsyncParsableCommand {
 
             // OS 分支专属字段校验 (导入分支已在上面处理, 此处只走 ISO/IPSW)
             var isoPath: String? = nil
-            var ipswPath: String? = nil
+            let ipswPath: String? = nil   // macOS/IPSW 已随 VZ 移除, 恒 nil
             if importInfo == nil {
-                switch os {
-                case .linux, .windows:
-                    guard let p = iso else { throw HVMError.config(.missingField(name: "iso")) }
-                    try ISOValidator.validate(at: p)
-                    isoPath = p
-                    if ipsw != nil {
-                        throw HVMError.config(.invalidEnum(field: "ipsw", raw: "(set)",
-                                                           allowed: ["仅 --os macOS 时使用"]))
-                    }
-                case .macOS:
-                    guard let p = ipsw else { throw HVMError.config(.missingField(name: "ipsw")) }
-                    guard FileManager.default.fileExists(atPath: p) else {
-                        throw HVMError.install(.ipswNotFound(path: p))
-                    }
-                    ipswPath = p
-                    if iso != nil {
-                        throw HVMError.config(.invalidEnum(field: "iso", raw: "(set)",
-                                                           allowed: ["仅 --os linux 时使用"]))
-                    }
+                // QEMU-only: linux/windows 都走 ISO 装机
+                guard let p = iso else { throw HVMError.config(.missingField(name: "iso")) }
+                try ISOValidator.validate(at: p)
+                isoPath = p
+                if ipsw != nil {
+                    throw HVMError.config(.invalidEnum(field: "ipsw", raw: "(set)",
+                                                       allowed: ["(已下线 — macOS guest 随 VZ 移除)"]))
                 }
             }
 
@@ -170,7 +149,7 @@ struct CreateCommand: AsyncParsableCommand {
                 )],
                 installerISO: isoPath,
                 bootFromDiskOnly: importInfo != nil,
-                macOS: os == .macOS ? MacOSSpec(ipsw: ipswPath, autoInstalled: false) : nil,
+                macOS: nil,   // macOS guest 已随 VZ 移除
                 linux: os == .linux ? LinuxSpec() : nil,
                 windows: os == .windows ? WindowsSpec() : nil
             )
@@ -247,12 +226,7 @@ struct CreateCommand: AsyncParsableCommand {
                 if importInfo != nil {
                     print("下一步: hvm-cli start \(name)  (导入磁盘已就绪, 直接 boot)")
                 } else {
-                    switch os {
-                    case .linux, .windows:
-                        print("下一步: hvm-cli start \(name)  (在 guest 内完成安装, 然后 hvm-cli boot-from-disk \(name))")
-                    case .macOS:
-                        print("下一步: hvm-cli install \(name)  (跑 VZMacOSInstaller, 完成后直接 start)")
-                    }
+                    print("下一步: hvm-cli start \(name)  (在 guest 内完成安装, 然后 hvm-cli boot-from-disk \(name))")
                 }
             case .json:
                 printJSON([
@@ -272,17 +246,6 @@ struct CreateCommand: AsyncParsableCommand {
             field: "os", raw: raw,
             allowed: GuestOSType.allCases.map { $0.rawValue }
         ))
-    }
-
-    /// 显式 --engine > 按 guestOS 默认 (linux/macOS=vz, windows=qemu).
-    /// ArgumentParser 已在解析阶段校验 vz/qemu 拼写, explicit 已是 Engine? 不再需要 throw.
-    /// 最终结果由 VMConfig.validate() 在 BundleIO.create 入口处再校验一次.
-    private func resolveEngine(explicit: Engine?, guestOS: GuestOSType) -> Engine {
-        if let v = explicit { return v }
-        switch guestOS {
-        case .linux, .macOS: return .vz
-        case .windows:       return .qemu
-        }
     }
 
     /// 创建加密 QEMU VM. 走 EncryptedBundleIO.create + QcowLuksFactory + OVMFVarsLuksFactory.

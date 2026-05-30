@@ -26,8 +26,7 @@ struct DetailBootSection: View {
     private var editable: Bool { vm.runState == .stopped }
 
     var body: some View {
-        // macOS guest 无 ISO 概念 (走 IPSW), 不显示本 section
-        if let cfg, vm.guestOS != .macOS {
+        if let cfg {
             HVMUI.Section("ISO & 启动",
                           description: editable ? nil : "停止 VM 后可改") {
                 VStack(alignment: .leading, spacing: HVMTheme.space.md) {
