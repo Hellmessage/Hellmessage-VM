@@ -762,6 +762,7 @@ final class QemuHostState {
         case IPCOp.dbgFilePull.rawValue:      return await handleDbgFilePull(req: req)
         case IPCOp.dbgListDir.rawValue:       return await handleDbgListDir(req: req)
         case IPCOp.dbgHelperExec.rawValue:    return await handleDbgHelperExec(req: req)
+        case IPCOp.guestNetInfo.rawValue:     return await handleGuestNetInfo(req: req)
         case IPCOp.displaySetMonitors.rawValue:  return handleDisplaySetMonitors(req: req)
         case IPCOp.clipboardSetEnabled.rawValue: return handleClipboardSetEnabled(req: req)
         case IPCOp.clipboardPasteFiles.rawValue: return await handleClipboardPasteFiles(req: req)
@@ -1118,6 +1119,35 @@ final class QemuHostState {
             return .encoded(id: req.id, payload: payload, kind: "helper exec result")
         } catch {
             return .failure(id: req.id, code: "helper.exec_failed", message: "\(error)")
+        }
+    }
+
+    /// guest.netinfo — qemu-ga guest-network-get-interfaces 拉 guest 网卡 + IP.
+    /// GUI 详情页显 guest IP / hvm-dbg guest-netinfo. 前提 guest 装 qemu-ga (无则 qga socket 在但命令超时/报错).
+    private func handleGuestNetInfo(req: IPCRequest) async -> IPCResponse {
+        guard let configID = config?.id else {
+            return .failure(id: req.id, code: "backend.no_vm", message: "VM config 未就绪")
+        }
+        let qgaSocketPath = HVMPaths.qgaSocketPath(for: configID).path
+        guard FileManager.default.fileExists(atPath: qgaSocketPath) else {
+            return .failure(id: req.id, code: "qga.socket_not_found",
+                            message: "qga socket 缺 (\(qgaSocketPath)); guest 没装 qemu-ga 或 VM 未起 qga chardev")
+        }
+        let timeoutSec = Int(req.args["timeoutSec"] ?? "10") ?? 10
+        do {
+            let ifaces = try await QgaNetInfo.interfaces(socketPath: qgaSocketPath, timeoutSec: timeoutSec)
+            let payload = IPCGuestNetInfoPayload(
+                interfaces: ifaces.map { i in
+                    IPCGuestNetInfoPayload.Interface(
+                        name: i.name, mac: i.hardwareAddress,
+                        ips: i.ipAddresses.map { .init(address: $0.address, type: $0.type, prefix: $0.prefix) }
+                    )
+                },
+                primaryIPv4: QgaNetInfo.primaryIPv4(ifaces)
+            )
+            return .encoded(id: req.id, payload: payload, kind: "guest netinfo")
+        } catch {
+            return .failure(id: req.id, code: "qga.netinfo_failed", message: "\(error)")
         }
     }
 

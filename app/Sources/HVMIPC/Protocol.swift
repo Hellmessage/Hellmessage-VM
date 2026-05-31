@@ -115,6 +115,9 @@ public enum IPCOp: String, Sendable {
     /// args: shell (cmd|powershell), script, timeoutMs? (guest 侧 kill 超时). 用 IPCDbgExecPayload 返回.
     /// 区别意义: 诊断只在 user session 可见的状态 (剪贴板 / window station / 用户环境).
     case dbgHelperExec   = "dbg.helper.exec"
+    /// 拉 guest 网卡 + IP (qemu-ga guest-network-get-interfaces). 用 IPCGuestNetInfoPayload 返回.
+    /// GUI 详情页显 guest IP (SSH/RDP 用) / hvm-dbg guest-netinfo. 前提 guest 装 qemu-ga.
+    case guestNetInfo    = "guest.netinfo"
     /// host (GUI) 通知 VMHost 改 guest 分辨率, args.width/height. VMHost 持久持有 vdagent socket
     /// (single-client, 必须唯一持有), 通过 VDAgentMonitorsConfig 转给 guest spice-vdagent.
     case displaySetMonitors = "display.setMonitors"
@@ -181,6 +184,31 @@ public struct IPCDbgExecPayload: Codable, Sendable {
         self.exitCode = exitCode
         self.stdoutBase64 = stdoutBase64
         self.stderrBase64 = stderrBase64
+    }
+}
+
+/// guest.netinfo payload — guest 网卡 + IP (镜像 QgaNetInfo, HVMIPC 不依赖 HVMQemu 故另立).
+public struct IPCGuestNetInfoPayload: Codable, Sendable {
+    public struct IPAddr: Codable, Sendable {
+        public let address: String
+        public let type: String       // "ipv4" / "ipv6"
+        public let prefix: Int?
+        public init(address: String, type: String, prefix: Int?) {
+            self.address = address; self.type = type; self.prefix = prefix
+        }
+    }
+    public struct Interface: Codable, Sendable {
+        public let name: String
+        public let mac: String?
+        public let ips: [IPAddr]
+        public init(name: String, mac: String?, ips: [IPAddr]) {
+            self.name = name; self.mac = mac; self.ips = ips
+        }
+    }
+    public let interfaces: [Interface]
+    public let primaryIPv4: String?   // GUI 一行展示用 (跳 loopback/link-local 后第一个 IPv4)
+    public init(interfaces: [Interface], primaryIPv4: String?) {
+        self.interfaces = interfaces; self.primaryIPv4 = primaryIPv4
     }
 }
 

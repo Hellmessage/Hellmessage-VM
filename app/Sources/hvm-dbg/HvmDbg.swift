@@ -22,6 +22,7 @@ struct HvmDbg: AsyncParsableCommand {
             ExecCommand.self,
             ExecGuestCommand.self,
             HelperExecCommand.self,
+            GuestNetinfoCommand.self,
             FileCommand.self,
             PasteFilesCommand.self,
             DirCommand.self,

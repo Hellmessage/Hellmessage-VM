@@ -173,6 +173,27 @@ public extension VMControl {
         _ = try? SocketClient.request(socketPath: holder.socketPath, request: req, timeoutSec: 3)
     }
 
+    // MARK: - guest 网络信息 (guest IP, SSH/RDP 用)
+
+    /// 拉 running VM 的 guest 网卡 + IP (走 VMHost IPC guest.netinfo → qemu-ga). 阻塞 IPC, 调用方放后台.
+    /// VM 未运行 / 无 socket → 抛 .busy 反义 (notFound); guest 没装 qemu-ga → 远端报错冒泡.
+    static func guestNetInfo(bundleURL: URL, timeoutSec: Int = 10) throws -> IPCGuestNetInfoPayload {
+        guard let holder = BundleLock.inspect(bundleURL: bundleURL), !holder.socketPath.isEmpty else {
+            throw HVMError.bundle(.notFound(path: "running VM socket (VM 未运行?)"))
+        }
+        let req = IPCRequest(op: IPCOp.guestNetInfo.rawValue, args: ["timeoutSec": "\(timeoutSec)"])
+        let resp = try SocketClient.request(socketPath: holder.socketPath, request: req, timeoutSec: timeoutSec + 5)
+        guard resp.ok else {
+            throw HVMError.ipc(.remoteError(code: resp.error?.code ?? "?",
+                                            message: resp.error?.message ?? "guest.netinfo 失败"))
+        }
+        guard let json = resp.data?["payload"], let data = json.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(IPCGuestNetInfoPayload.self, from: data) else {
+            throw HVMError.ipc(.decodeFailed(reason: "guest.netinfo payload"))
+        }
+        return payload
+    }
+
     // MARK: - 内部
 
     /// requireStopped 时检查 running, 占用抛 .busy. (internal: 同模块文件复用)

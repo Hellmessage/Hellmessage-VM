@@ -12,6 +12,7 @@ import HVMBundle
 import HVMCore
 import HVMEncryption
 import HVMStorage
+import HVMIPC
 
 /// 动作失败时冒泡给 MainLayoutView → dialog.alert 的错误载体.
 /// id 每次新建 (即便 message 相同) 让 .onChange 能识别"又出错了一次".
@@ -464,6 +465,23 @@ public final class NewGUIStore {
             selectedID = result.newID
             return (true, nil)
         } catch { return (false, encErrorMessage(error)) }
+    }
+
+    // MARK: - guest 网络 (guest IP 显示, SSH/RDP 用)
+
+    /// guest 主 IPv4 缓存 (vmID → IP). running + guest 装 qemu-ga 才有值. @Observable 驱动 UI.
+    public private(set) var guestIPs: [UUID: String] = [:]
+
+    /// 拉 guest IP (后台 IPC guest.netinfo → qemu-ga). 仅 running 拉; 非 running 清缓存.
+    /// 失败 (无 qemu-ga / 未配网) silently 清值, 不弹错 (guest IP 非关键)。详情页 onAppear / runState 变更时调.
+    public func refreshGuestIP(_ s: VMSummary) {
+        guard s.runState == .running else { guestIPs[s.id] = nil; return }
+        let url = s.bundleURL
+        let id = s.id
+        Task.detached(priority: .utility) {
+            let ip = (try? VMControl.guestNetInfo(bundleURL: url))?.primaryIPv4
+            await MainActor.run { self.guestIPs[id] = ip }
+        }
     }
 
     /// 给克隆体算一个不与现有 VM 撞的默认名: "<源> 副本" / "<源> 副本 2" / ...

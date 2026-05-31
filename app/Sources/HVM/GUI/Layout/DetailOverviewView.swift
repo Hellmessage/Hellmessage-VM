@@ -4,6 +4,7 @@
 
 
 import SwiftUI
+import AppKit
 import HVMControl
 import HVMBundle
 
@@ -73,10 +74,19 @@ struct DetailOverviewView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onChange(of: store.selectedID) { _, _ in syncDraftIfNeeded(); runningTab = .screen }
+        .onChange(of: store.selectedID) { _, _ in
+            syncDraftIfNeeded(); runningTab = .screen
+            if let cur = store.selected { store.refreshGuestIP(cur) }
+        }
         .onChange(of: store.selected?.config?.cpuCount) { _, _ in syncDraftIfNeeded() }
-        .onChange(of: store.selected?.runState) { _, _ in runningTab = .screen }
-        .onAppear { syncDraftIfNeeded() }
+        .onChange(of: store.selected?.runState) { _, _ in
+            runningTab = .screen
+            if let cur = store.selected { store.refreshGuestIP(cur) }   // 起/停切换时刷 guest IP
+        }
+        .onAppear {
+            syncDraftIfNeeded()
+            if let cur = store.selected { store.refreshGuestIP(cur) }
+        }
     }
 
     /// 画面 / 配置 TAB (running).
@@ -312,7 +322,38 @@ struct DetailOverviewView: View {
                     // 加密 VM 未解锁: config 为 nil
                     infoRow("加密", "🔒 已加密 — 解锁查看完整配置")
                 }
+                if vm.runState == .running {
+                    guestIPRow(vm)
+                }
             }
+        }
+    }
+
+    /// guest IP 行 (running 才显). 走 store.guestIPs 缓存 (IPC guest.netinfo → qemu-ga). 带复制按钮.
+    @ViewBuilder
+    private func guestIPRow(_ vm: VMSummary) -> some View {
+        HStack(alignment: .top, spacing: HVMTheme.space.md) {
+            Text("guest IP")
+                .font(HVMTheme.font.sm)
+                .foregroundStyle(HVMTheme.color.textSecondary)
+                .frame(width: 64, alignment: .leading)
+            if let ip = store.guestIPs[vm.id] {
+                Text(ip)
+                    .font(HVMTheme.font.monoSm)
+                    .foregroundStyle(HVMTheme.color.textPrimary)
+                    .textSelection(.enabled)
+                HVMUI.Button(icon: "doc.on.doc", variant: .icon, size: .sm,
+                             probeID: "detail.guestIP.copy") {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(ip, forType: .string)
+                }
+            } else {
+                Text("获取中…（需 guest 装 qemu-ga）")
+                    .font(HVMTheme.font.sm)
+                    .foregroundStyle(HVMTheme.color.textTertiary)
+            }
+            Spacer(minLength: 0)
         }
     }
 
