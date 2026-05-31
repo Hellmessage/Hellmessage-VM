@@ -211,6 +211,19 @@ QEMU 已满足 Linux/Windows/加密)。下文若仍有 VZ / macOS guest /
 - **ISO NSOpenPanel 测试钩子**: panel 无法被 hvm-dbg gui 驱动, probe 模式 (`HVM_GUI_PROBE`) 下若设 `HVM_TEST_ISO` env 则 `选择 ISO` 直接用它跳过 panel (真人用户无此 env, 不受影响).
 - probeID 命名: `sidebar.button.create` / `dialog.create.{close,cancel,prev,next,complete,step.<i>}` / step1 `dialog.create.{field.name,select.os,select.network,select.bridgedIface}` / step2 `dialog.create.{field.cpu,field.memory,field.disk,iso.select,iso.clear,win.{secureBoot,tpm,bypassChecks,spiceTools,downloadTools}}` / step3 `dialog.create.encrypt.{toggle,password,confirm}`
 
+## Tray 归属约束 **必须遵守** (单一 tray, 见 `docs/TRAY_OWNERSHIP_DESIGN.md`)
+
+**任意时刻最多一个菜单栏 tray** (方案 A — VMHost 选主)。**禁止**每个 VMHost 各显一个 status item (历史死代码 `--gui-embedded` 已废)。
+
+- **协调原语**: `HVMCore/ProcessFileLock.swift` (通用 flock 持有者) + 两把锁 (`HVMPaths.{guiOwnerLockPath,trayLeaderLockPath}`, 落 `run/`):
+  - **GUI 进程**启动即持 `gui-owner.lock` 到退出 (`NewGUIApp`); "GUI 在世" ⟺ 此锁被占。
+  - 无 GUI 时, 抢到 `tray-leader.lock` 的那个 **VMHost** 渲染**唯一聚合 tray** (`HVM/TrayCoordinator.swift`), 列全部运行中 VM (扫 `VMCatalog`) + 各自 Stop/Kill (经各 VM IPC, `VMControl.stop/kill` 跨进程) + 打开主界面 + 停止所有。
+- **裁决**: 每个 VMHost 跑 `TrayCoordinator` (1.5s 轮询 + `DistributedNotificationCenter` 即时唤醒 `gui.up/gui.down/leaderReleased`)。GUI 在 → 撤 tray + 放 leader 锁; 无 GUI → 争 leader, 抢到才显。leader 进程死 → flock 自动释放 → 存活者 ≤1.5s 补位。
+- **GUI 退出语义** (D3): "退出 HVM (VM 后台继续)" 不停 VM, 进程退 → VMHost 回夺 tray (回退 tray 模式); 另有 "停止所有 VM 并退出" 显式全停。
+- **GUI 单例化**: VMHost 也是 HVM.app 实例, 普通 `open HVM.app` 不启 GUI → "打开主界面" 必走 `NSWorkspace.OpenConfiguration.createsNewApplicationInstance=true`; GUI 启动抢 `gui-owner.lock` 失败即判"已有 GUI", 广播 `gui.showWindow` 前置在世 GUI 后自退。**新增"启 GUI"入口都照此**。
+- **`HVM_NO_TRAY=1`**: 硬覆盖永不显 tray (headless / CI)。无图形会话时 NSStatusBar 不可用 → fail-soft (VM 照跑, 无 tray)。
+- **验证**: tray 是 NSMenu 不是 probe 控件, hvm-dbg gui 测不了 → 走 `lsof <lock>` 锁持有者 + `pgrep` 进程 + screenshot 间接验证五条时序 (§4.4); 报告显式标 "tray 菜单点击未自动化测"。
+
 ## 能力边界约束 **必须遵守**
 
 以下能力 **不支持**, 即使用户要求也不得尝试实现, 直接提示用户能力边界:

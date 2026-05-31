@@ -21,6 +21,15 @@ public enum HVMPaths {
         appSupport.appendingPathComponent("run", isDirectory: true)
     }
 
+    /// tray 归属协调锁 (见 TRAY_OWNERSHIP_DESIGN): GUI 进程在世时持有 gui-owner.lock;
+    /// 无 GUI 时某个 VMHost 持有 tray-leader.lock 渲染聚合 tray.
+    public static var guiOwnerLockPath: URL {
+        runDir.appendingPathComponent("gui-owner.lock")
+    }
+    public static var trayLeaderLockPath: URL {
+        runDir.appendingPathComponent("tray-leader.lock")
+    }
+
     /// 全局日志目录. HVM 软件本身的所有 host 侧 .log 都落这里 (顶层 yyyy-MM-dd.log 跨 VM,
     /// 子目录 <displayName>-<uuid8>/ 放该 VM 的 host-/qemu-stderr/swtpm log).
     /// guest 自身串口输出 console-*.log 仍留 bundle/logs/, 不在此处.

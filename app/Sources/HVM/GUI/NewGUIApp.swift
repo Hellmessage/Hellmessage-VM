@@ -6,6 +6,8 @@
 import AppKit
 import SwiftUI
 import HVMGuiProbe
+import HVMCore
+import HVMControl
 
 @MainActor
 final class NewGUIAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -15,10 +17,29 @@ final class NewGUIAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
     private var statusItem: NSStatusItem?
     // 用户从 tray 菜单"退出 HVM"主动退出 → 放行真退出; 否则 Cmd+Q / 点 X 只隐藏到 tray.
     private var userRequestedQuit = false
+    // GUI 在世标记锁: VMHost 探到此锁被占即撤自己的 tray, 由 GUI 统一管 (见 TrayCoordinator).
+    private var guiOwnerLock: ProcessFileLock?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = NSAppearance(named: .darkAqua)
         NSApp.setActivationPolicy(.regular)
+
+        // GUI 单例化: 抢 gui-owner.lock. 抢不到 = 已有 GUI 在世 → 让它前置窗口, 本实例自退.
+        // (VMHost 也是 HVM.app 实例, "打开主界面" 走 createsNewApplicationInstance 起新进程, 单例靠此收口.)
+        guard let lock = ProcessFileLock(path: HVMPaths.guiOwnerLockPath) else {
+            DistributedNotificationCenter.default().postNotificationName(
+                TrayCoordinator.nGuiShowWindow, object: nil, userInfo: nil, deliverImmediately: true)
+            NSApp.terminate(nil)
+            return
+        }
+        guiOwnerLock = lock
+        // 广播 gui.up → 各 VMHost 即时撤自己的 tray, 由 GUI 接管.
+        DistributedNotificationCenter.default().postNotificationName(
+            TrayCoordinator.nGuiUp, object: nil, userInfo: nil, deliverImmediately: true)
+        // 监听第二个 GUI 实例的"显示窗口"请求 (单例前置).
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(onShowWindowSignal),
+            name: TrayCoordinator.nGuiShowWindow, object: nil)
 
         // 锁定最小尺寸三件套 (单写 win.minSize 不够): root view .frame(min) + host.sizingOptions = .minSize
         // + win.contentMinSize. 不用 win.minSize (含 28px 标题栏, content 仍能被压).
@@ -76,6 +97,15 @@ final class NewGUIAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         return .terminateCancel
     }
 
+    /// 真退出前: 广播 gui.down + 放 gui-owner.lock → 仍在跑的 VMHost 即时选主, 把 tray 接回去 (回退 tray 模式).
+    /// 默认退出不停 VM (D3); "停止所有并退出" 由专门菜单项负责.
+    func applicationWillTerminate(_ notification: Notification) {
+        DistributedNotificationCenter.default().postNotificationName(
+            TrayCoordinator.nGuiDown, object: nil, userInfo: nil, deliverImmediately: true)
+        guiOwnerLock?.release()
+        guiOwnerLock = nil
+    }
+
     /// 点 Dock 图标 / Finder 重新打开 → 恢复主窗口 (accessory 态无 Dock 图标, 兜底仍保留).
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showMainWindow()
@@ -119,10 +149,16 @@ final class NewGUIAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         show.target = self
         menu.addItem(show)
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "退出 HVM",
+        // 默认退出: 只关 GUI, VM 后台继续 (tray 回退给 VMHost).
+        let quit = NSMenuItem(title: "退出 HVM (VM 后台继续)",
                               action: #selector(quitAction), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
+        // 显式全停: 停掉所有运行中 VM 再退.
+        let quitAll = NSMenuItem(title: "停止所有 VM 并退出",
+                                 action: #selector(quitAndStopAllAction), keyEquivalent: "")
+        quitAll.target = self
+        menu.addItem(quitAll)
         item.menu = menu
         self.statusItem = item
     }
@@ -176,9 +212,26 @@ final class NewGUIAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         showMainWindow()
     }
 
+    /// 第二个 GUI 实例请求前置 (单例): 本在世 GUI 恢复主窗口.
+    @objc private func onShowWindowSignal() {
+        showMainWindow()
+    }
+
     @objc private func quitAction() {
         userRequestedQuit = true
         NSApp.terminate(nil)
+    }
+
+    /// 停止所有运行中 VM (ACPI) 再退出. VMHost 全停后无人接 tray, 干净退出.
+    @objc private func quitAndStopAllAction() {
+        let running = VMCatalog.list().filter { $0.runState == .running }
+        DispatchQueue.global(qos: .userInitiated).async {
+            for vm in running { try? VMControl.stop(bundleURL: vm.bundleURL) }
+            DispatchQueue.main.async {
+                self.userRequestedQuit = true
+                NSApp.terminate(nil)
+            }
+        }
     }
 }
 

@@ -40,6 +40,7 @@ QEMU 恒用 -display iosurface (server 模式, QEMU bind socket 等客户端)
 - 孤儿回收:`SidecarOrphanReaper.reapByPidFile`
 - console serial 已落 `console-*.log`(`QemuConsoleBridge`)
 - guest 内执行:`hvm-cli exec` / `hvm-dbg exec`(qemu-guest-agent)
+- `HVM_NO_TRAY=1`:VMHost 永不显菜单栏 tray(`TrayCoordinator` 硬覆盖);无图形会话时 NSStatusBar 不可用本就 fail-soft(VM 照跑)。真·纯无头(无 AppKit 绑定)仍待 P1。
 
 ---
 

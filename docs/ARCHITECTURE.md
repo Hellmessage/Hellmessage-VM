@@ -121,6 +121,16 @@ HVM 是 Apple Silicon Mac 上的 QEMU 虚拟机管理器: 一个 SwiftPM 工程�
 7. **bundle 单进程互斥**: 一个 `.hvmz` 同时只能被一个进程打开, `BundleLock` 用 fcntl flock
    (`.runtime` / `.edit` 两 mode). cli/dbg 不持锁, 通过 `BundleLock.inspect` 拿到 host 子进程
    写入 lock 的 socketPath 再发 IPC.
+8. **单一 tray 归属** (`TrayCoordinator` + `ProcessFileLock`, 见 `docs/TRAY_OWNERSHIP_DESIGN.md`):
+   任意时刻最多一个菜单栏 tray。GUI 进程持 `run/gui-owner.lock` 即"GUI 在世", 其余 VMHost 撤 tray;
+   无 GUI 时抢到 `run/tray-leader.lock` 的 VMHost 渲染唯一聚合 tray (列全部运行 VM)。GUI 退出 → VMHost
+   回夺 tray (回退模式); leader 崩溃 → flock 自动释放, 存活者轮询补位。GUI 单例化靠 `gui-owner.lock` +
+   `createsNewApplicationInstance` (VMHost 也是 HVM.app 实例, 普通 open 不启 GUI)。
+
+> **CLI 与 GUI 是同一批 VM 的两个无状态前端** (非两套 VM): VM 真身 = 磁盘 bundle + `BundleLock` flock
+> (运行态) + IPC socket (控制); 两端都经 `HVMControl` (`VMCatalog`/`VMControl`) 读写同一份, 故天然同步、
+> 可互相接管 (CLI 启的 VM, GUI 1Hz 刷新即见并可停; 反之亦然)。不共享的仅进程内瞬态 (GUI 选中态 / 解锁密码
+> 缓存); LUKS keyslot/TPM 是磁盘状态故共享。tray 归属 (上条) 即这套"接管"语义在菜单栏的体现。
 
 ## 控制层单一来源: HVMControl
 

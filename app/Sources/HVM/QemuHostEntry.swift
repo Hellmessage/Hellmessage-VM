@@ -286,10 +286,12 @@ public enum QemuHostEntry {
         QemuHostState.shared.qmpSocketURL = qmpSocketURL
         QemuHostState.shared.lock = lock
         QemuHostState.shared.startedAt = startedAt
-        // GUI 派生场景跳过自家 status item, 避免图标重复.
-        if !embeddedInGUI {
-            QemuHostState.shared.installStatusItem(displayName: config.displayName)
-        }
+        // tray 归属由 TrayCoordinator 动态裁决 (GUI 在世则不显, 无 GUI 则选主出唯一聚合 tray).
+        // 取代老的"每 VMHost 各显一个 status item"; embeddedInGUI 旧静态判定已废 (见 TRAY_OWNERSHIP_DESIGN).
+        _ = embeddedInGUI
+        let trayCoordinator = TrayCoordinator()
+        QemuHostState.shared.trayCoordinator = trayCoordinator
+        trayCoordinator.start()
 
         // 6. QMP 连接 (重试; 同时监控进程 state, 若 QEMU 早退不再重试)
         Task { @MainActor in
@@ -692,51 +694,8 @@ final class QemuHostState {
     /// HVM 自家 guest helper 通路 (文件剪贴板). 仅 Windows guest 启动.
     var fileClipboardBridge: HVMFileClipboardBridge?
 
-    var statusItem: NSStatusItem?
-    var statusMenu: QemuStatusMenuController?
-
-    /// 安装 menu bar 图标 + Stop/Kill/Quit 菜单
-    func installStatusItem(displayName: String) {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let button = item.button {
-            if let img = NSImage(systemSymbolName: "shippingbox.fill",
-                                 accessibilityDescription: "HVM QEMU VM running") {
-                img.isTemplate = true
-                button.image = img
-            } else {
-                button.title = "HVM"
-            }
-        }
-        let controller = QemuStatusMenuController()
-        let menu = NSMenu()
-        let titleItem = NSMenuItem(title: "HVM · \(displayName) (qemu)", action: nil, keyEquivalent: "")
-        titleItem.isEnabled = false
-        menu.addItem(titleItem)
-        menu.addItem(NSMenuItem.separator())
-
-        let stopItem = NSMenuItem(title: "Stop (ACPI)",
-                                  action: #selector(QemuStatusMenuController.stopAction),
-                                  keyEquivalent: "")
-        stopItem.target = controller
-        menu.addItem(stopItem)
-
-        let killItem = NSMenuItem(title: "Kill (Force)",
-                                  action: #selector(QemuStatusMenuController.killAction),
-                                  keyEquivalent: "")
-        killItem.target = controller
-        menu.addItem(killItem)
-
-        menu.addItem(NSMenuItem.separator())
-        let quitItem = NSMenuItem(title: "Quit HVM Host",
-                                  action: #selector(QemuStatusMenuController.quitAction),
-                                  keyEquivalent: "q")
-        quitItem.target = controller
-        menu.addItem(quitItem)
-
-        item.menu = menu
-        self.statusItem = item
-        self.statusMenu = controller
-    }
+    /// tray 归属协调 (取代老的 per-VMHost status item; 见 TrayCoordinator).
+    var trayCoordinator: TrayCoordinator?
 
     /// IPC 请求分派. status / stop / kill / pause / resume 走 QMP / runner;
     /// dbg.* QEMU 后端一期不支持, 返回 ipc.unknown_op.
@@ -1591,28 +1550,5 @@ final class QemuHostState {
         encryptedHandle = nil
         lock?.release()
         exit(exitCode)
-    }
-}
-
-/// menu bar 菜单 action 接收方.
-@MainActor
-final class QemuStatusMenuController: NSObject {
-    @objc func stopAction() {
-        Task { @MainActor in
-            do {
-                try await QemuHostState.shared.qmpClient?.systemPowerdown()
-            } catch {
-                NSLog("HVMHost(qemu): system_powerdown 失败 \(error)")
-            }
-        }
-    }
-
-    @objc func killAction() {
-        QemuHostState.shared.runner?.forceKill()
-    }
-
-    @objc func quitAction() {
-        QemuHostState.shared.runner?.forceKill()
-        QemuHostState.shared.tearDown(exitCode: 0)
     }
 }
