@@ -4,3 +4,9 @@
 #       搭配 patches/qemu/0001-hvm-win11-lowram.patch 让 Win11 ARM64 bootmgfw
 #       的 0x10000000 内存操作能成功.
 0001-armvirt-extra-ram-region-for-win11.patch
+
+# 0002: 自建 (Windows) 固件去掉 VirtioGpuDxe. ramfb 模式最高 1024x768, 但平台
+#       PcdVideoResolution=1280x800 只有 VirtioGpuDxe 能提供 → boot 期切到 1280x800,
+#       而 BootLogoLib 的 logo/进度条已按更早模式布局 → 开机 logo 偏左上.
+#       Windows boot 用 ramfb、OS 期用 viogpudo, 不需要 EDK2 virtio-gpu GOP. (Linux 走 kraxel 固件不受影响)
+0002-armvirt-drop-virtio-gpu-dxe.patch
