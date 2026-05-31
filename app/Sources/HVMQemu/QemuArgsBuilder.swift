@@ -278,7 +278,12 @@ public enum QemuArgsBuilder {
             let deviceOpts = "\(net.deviceModel.qemuDeviceName),netdev=\(netId),mac=\(net.macAddress)\(busOpt)"
             switch net.mode {
             case .user:
-                args += ["-netdev", "user,id=\(netId)"]
+                // user-mode SLIRP NAT + 可选端口转发 (hostfwd). 仅 user 模式有意义.
+                var userOpts = "user,id=\(netId)"
+                for pf in net.portForwards {
+                    userOpts += ",hostfwd=\(pf.qemuHostfwd)"
+                }
+                args += ["-netdev", userOpts]
             case .vmnetShared, .vmnetHost, .vmnetBridged:
                 guard let sock = net.effectiveSocketPath else {
                     throw HVMError.backend(.configInvalid(

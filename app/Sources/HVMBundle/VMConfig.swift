@@ -125,6 +125,32 @@ public enum NICModel: String, Codable, Sendable, CaseIterable {
     }
 }
 
+/// 端口转发规则 (仅 user/NAT 模式有意义; vmnet 模式 guest 有真实 IP 不需要).
+/// 宿主机 <hostIP:hostPort> → guest <guestPort>. 走 QEMU `-netdev user,hostfwd=...`.
+public struct PortForward: Codable, Sendable, Equatable {
+    public enum Proto: String, Codable, Sendable, Equatable, CaseIterable {
+        case tcp, udp
+    }
+    public var proto: Proto
+    public var hostPort: Int
+    public var guestPort: Int
+    /// 宿主机绑定 IP, nil/空 = 所有接口 (QEMU 默认). 想只本机访问填 "127.0.0.1".
+    public var hostIP: String?
+
+    public init(proto: Proto = .tcp, hostPort: Int, guestPort: Int, hostIP: String? = nil) {
+        self.proto = proto
+        self.hostPort = hostPort
+        self.guestPort = guestPort
+        self.hostIP = hostIP
+    }
+
+    /// QEMU hostfwd 片段: `tcp:127.0.0.1:2222-:22` / `tcp::2222-:22` (hostIP 空时省略).
+    public var qemuHostfwd: String {
+        let ip = (hostIP?.isEmpty == false) ? hostIP! : ""
+        return "\(proto.rawValue):\(ip):\(hostPort)-:\(guestPort)"
+    }
+}
+
 public struct NetworkSpec: Codable, Sendable, Equatable {
     public var mode: NetworkMode
     /// MAC 地址 (小写冒号分隔), 缺省时生成时填入, 持久化
@@ -137,9 +163,11 @@ public struct NetworkSpec: Codable, Sendable, Equatable {
     public var deviceModel: NICModel
     /// 是否启用此网卡 — false 时启动不挂, 运行中可 QMP 热插拔. 与删除区别: 禁用保留配置 (MAC/模式).
     public var enabled: Bool
+    /// 端口转发规则 (仅 user/NAT 模式生效, vmnet 模式忽略). 缺省空 (向后兼容老 yaml).
+    public var portForwards: [PortForward]
 
     private enum CodingKeys: String, CodingKey {
-        case mode, macAddress, socketVmnetPath, bridgedInterface, deviceModel, enabled
+        case mode, macAddress, socketVmnetPath, bridgedInterface, deviceModel, enabled, portForwards
     }
 
     public init(
@@ -148,7 +176,8 @@ public struct NetworkSpec: Codable, Sendable, Equatable {
         socketVmnetPath: String? = nil,
         bridgedInterface: String? = nil,
         deviceModel: NICModel = .virtio,
-        enabled: Bool = true
+        enabled: Bool = true,
+        portForwards: [PortForward] = []
     ) {
         self.mode = mode
         self.macAddress = macAddress
@@ -156,6 +185,7 @@ public struct NetworkSpec: Codable, Sendable, Equatable {
         self.bridgedInterface = bridgedInterface
         self.deviceModel = deviceModel
         self.enabled = enabled
+        self.portForwards = portForwards
     }
 
     public init(from decoder: Decoder) throws {
@@ -175,6 +205,7 @@ public struct NetworkSpec: Codable, Sendable, Equatable {
         self.bridgedInterface = try c.decodeIfPresent(String.self, forKey: .bridgedInterface)
         self.deviceModel      = try c.decodeIfPresent(NICModel.self, forKey: .deviceModel) ?? .virtio
         self.enabled          = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        self.portForwards     = try c.decodeIfPresent([PortForward].self, forKey: .portForwards) ?? []
     }
 
     /// vmnetBridged 模式实际桥接接口名 (空时 fallback "en0"); 非 bridged 返 nil.

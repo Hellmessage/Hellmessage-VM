@@ -287,6 +287,7 @@ QEMU 是唯一后端, 承载 Linux arm64 + Windows arm64。
 - **进程模型**: HVM 主进程通过 `Process` 启动包内 `qemu-system-aarch64`, **不**链接 `libqemu`; QMP 控制 socket 仅监听 unix domain socket (`run/<vm-id>.qmp`), **严禁 TCP 监听**
 - **Bundle 互斥**: VM 遵守"单 `.hvmz` 单进程"原则, 复用现有 fcntl flock
 - **首版优先级**: Linux arm64 跑通通路后再做 Windows arm64; Linux QEMU 通路是 Windows 集成的前置验证
+- **端口转发约束** (仅 user/NAT 模式): `NetworkSpec.portForwards: [PortForward]` (proto tcp/udp + hostPort + guestPort + 可选 hostIP), QemuArgsBuilder 在 `-netdev user,id=...` 后追加 `hostfwd=<proto>:<hostIP>:<hostPort>-:<guestPort>`. **仅 user 模式生效** (vmnet 模式 guest 有真实 IP, 端口转发无意义, GUI 仅 user 模式显编辑器). schema v3 兼容 (缺省空数组). 改 netdev 要重启 (requireStopped). GUI 走 DetailNetworkSection 端口转发子编辑器 (probeID `detail.network.<i>.pf.<j>.{proto,hostPort,guestPort,delete}` + `detail.network.<i>.pf.add`).
 - **socket_vmnet 网络约束** (hell-vm 同款 osascript admin Touch ID 方案):
   - macOS `vmnet` 必须 root, 用 `socket_vmnet` 系统级 launchd daemon 把权限闭环
   - **socket_vmnet 二进制不打包入 .app**: 用户机器自己 `brew install socket_vmnet`. `scripts/install-vmnet-daemons.sh` 从 brew 路径 (`/opt/homebrew/opt/socket_vmnet/bin/socket_vmnet`) 拉 binary 写 launchd plist
@@ -348,7 +349,8 @@ QEMU 是唯一后端, 承载 Linux arm64 + Windows arm64。
 - 需要启动/停止 VM 走 `hvm-cli` 或 `hvm-dbg`, 不靠 HVM GUI
 - 需要在 guest 内做操作(看桌面、点按钮、键入命令)走 `hvm-dbg` 子命令
 - 需要 host ↔ guest 复制文件走 `hvm-dbg file push/pull`(QEMU 后端, qemu-guest-agent `guest-file-*` API; 1-10 MB/s; 软警告 100 MiB / 硬上限 4 GiB)
-- 想测 host → guest 文件粘贴 (Cmd+V 通路) 走 `hvm-dbg paste-files <vm> --file ...`(走 SPICE vdagent file_xfer, 落 guest `~/Downloads`; 模拟 GUI Cmd+V 但绕过 NSPasteboard 拦截)
+- 想测 host → guest 文件粘贴 (Cmd+V 通路) 走 `hvm-dbg paste-files <vm> --file ...`(走 SPICE vdagent file_xfer, 落 guest `~/Downloads`; 模拟 GUI Cmd+V 但绕过 NSPasteboard 拦截)。GUI 详情页画面拖拽文件 + Cmd+V 文件粘贴走同一条 `onFilePaste` → IPC `clipboard.paste-files`(FramebufferHostView 已实现 NSDraggingDestination + Cmd+V 拦截, QemuFramebufferView 接线)
+- 需要 guest IP (SSH/RDP) 走 `hvm-dbg guest-netinfo <vm>`(走 qemu-ga `guest-network-get-interfaces`; GUI 详情页概览自动显主 IPv4 + 复制按钮, 同源 IPC `guest.netinfo`; 前提 guest 装 qemu-ga)
 - 需要长期 host ↔ guest 共享 host 目录走"共享目录" (SPICE WebDAV; `hvm-cli shared-folder add` / GUI 详情页 Sharing 区)
 - 调试 WebDAV 协议层走 `hvm-dbg webdav-test` (44 case 离线单测) + `hvm-dbg webdav-serve --listen` (起 server 监听本地 socket 给 curl / Python client 测)
 - `hvm-dbg` 扩展原则: 零新协议实现, 只复用已暴露的公开 QEMU/QMP/HDP API 封装
