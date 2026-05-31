@@ -27,6 +27,8 @@ windows = { version = "0.59", features = [
 # 协议: JSON 编解码
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# exec stdout/stderr + write-file/read-file blob 的 base64 编解码 (helper 自有 crate, 不在 Swift 白名单内)
+base64 = "0.22"
 
 [profile.release]
 # 优化 EXE 大小: 单二进制, 不需要 debug 符号. helper 是常驻进程, 一次启动到 VM 寿命终, 不
@@ -37,14 +39,9 @@ codegen-units = 1      # LTO 友好, 编译慢但体积小
 strip = true           # 不带符号
 panic = "abort"        # 不展开 panic, 体积省一截 (helper 出错直接 abort + 自启重启即可)
 
-# 跨平台编译指引 (从 macOS 编 Windows ARM64):
-#   rustup target add aarch64-pc-windows-gnullvm
-#   cargo build --target aarch64-pc-windows-gnullvm --release
-# 产物: target/aarch64-pc-windows-gnullvm/release/hvm-guest-helper.exe (~500 KB)
-#
-# gnullvm 走 LLVM linker (rust-lld), 不依赖 MSVC / mingw-w64 工具链.
-# macOS 上 rustup 自带 rust-lld, 跨编译开箱即用 — 不需要装其他东西.
-#
-# Windows x64 guest (HVM 暂不支持, Apple Silicon 跑 QEMU x86 TCG 太慢):
-#   rustup target add x86_64-pc-windows-gnullvm
-#   cargo build --target x86_64-pc-windows-gnullvm --release
+# 构建 (从 macOS 编 Windows ARM64): 走 ./build.sh —— 出【无 DLL 单 exe】.
+#   gnullvm 链接需 llvm-mingw 的 aarch64-w64-mingw32-clang 驱动 (rust 自带 rust-lld 不够);
+#   build.sh 用 RUSTFLAGS=-C target-feature=+crt-static 静态链 libunwind.a/libc++.a/ucrt,
+#   产物只依赖 Windows 系统 DLL, 无 libunwind.dll. llvm-mingw 放 third_party/llvm-mingw/
+#   (github.com/mstorsjo/llvm-mingw, ucrt-macos-universal) 或设 HVM_LLVM_MINGW.
+#   build.sh 末尾硬校验"无非系统 DLL", 并拷到 dist/aarch64/ 供 bundle.sh 取.

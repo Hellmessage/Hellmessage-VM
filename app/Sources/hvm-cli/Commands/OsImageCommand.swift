@@ -7,8 +7,6 @@
 //   fetch --url U   下载自定义 URL (无校验)
 //   cache           列已缓存 (~/Library/Application Support/HVM/cache/os-images)
 //   rm <id|all>     删缓存
-//
-// 详见 docs/GUEST_OS_INSTALL.md
 
 import ArgumentParser
 import Foundation

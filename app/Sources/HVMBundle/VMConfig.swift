@@ -1,8 +1,5 @@
 // HVMBundle/VMConfig.swift
-// config.yaml schema v2 的 Codable 映射. schema 见 docs/VM_BUNDLE.md
-// schema 历史:
-//   v1 (.json): 老格式, 已断兼容, 不再读取
-//   v2 (.yaml): 当前. DiskSpec 加 format 字段 (raw/qcow2)
+// config.yaml (schema v3) 的 Codable 映射.
 
 import Foundation
 import HVMCore
@@ -10,18 +7,12 @@ import HVMCore
 public enum GuestOSType: String, Codable, Sendable, CaseIterable {
     case linux
     case windows
-    // macOS guest 已随 VZ 移除 (QEMU-only 转向, docs/v4/QEMU_ONLY_PIVOT.md):
-    // QEMU 无 Apple Silicon macOS 虚拟化路径. 老 config 带 "macOS" 解码会失败 (无此 case),
-    // 该 VM 不加载 — 用户实际无 macOS guest VM, 可接受.
+    // macOS guest 已随 VZ 移除 (QEMU 无 Apple Silicon macOS 虚拟化路径).
 }
 
 public extension GuestOSType {
-    /// 各 guestOS 的默认 framebuffer 尺寸 (px). VZ 离屏 window / QEMU 鼠标 abs 映射 / dbg
-    /// status 都用这个估算; 实际尺寸 guest 内可改, 这只是 host 侧的"假定值".
-    /// 决策:
-    ///   - Linux: 1024x768 — text mode + 早期 X / Wayland session 默认
-    ///   - macOS: 1920x1080 — VZMacGraphicsDisplayConfiguration 我们硬编码 1080p
-    ///   - Windows: 1920x1080 — Win11 推荐最低, 用同 macOS 尺寸保持一致
+    /// 各 guestOS 默认 framebuffer 尺寸 (px) — host 侧"假定值", guest 内可改.
+    /// Linux 1024x768 (text mode); Windows 1920x1080 (Win11 推荐最低).
     var defaultFramebufferSize: (width: Int, height: Int) {
         switch self {
         case .linux:   return (1024, 768)
@@ -30,8 +21,7 @@ public extension GuestOSType {
     }
 }
 
-/// 后端引擎. QEMU-only 转向后只剩 qemu (VZ 已移除). 保留单 case 枚举 + engine 字段避免
-/// schema 结构变更; 老 config 带 "vz" 或缺字段时 init(from:) 兜底为 .qemu.
+/// 后端引擎. 仅 qemu (VZ 已移除); 保留单 case 枚举避免 schema 结构变更, 老 config 由 init(from:) 兜底 .qemu.
 public enum Engine: String, Codable, Sendable, CaseIterable {
     case qemu
 }
@@ -41,14 +31,12 @@ public enum DiskRole: String, Codable, Sendable {
     case data
 }
 
-/// guest framebuffer 显式尺寸 + DPI. 老 yaml 缺该字段时, VMConfig.effectiveDisplaySpec
-/// 兜底到 GuestOSType.defaultFramebufferSize. 加这个字段是为了让 dbg 工具 / hvm-dbg
-/// screenshot 坐标计算 / VZ Linux scanout 共用同一份"权威尺寸", 不再硬编码散落在 ConfigBuilder
-/// 与 DbgOps. 加字段不需 schema 升级 (可选, 老 yaml 兜底).
+/// guest framebuffer 显式尺寸 + DPI — dbg screenshot 坐标 / scanout 共用的权威尺寸.
+/// 老 yaml 缺字段时 VMConfig.effectiveDisplaySpec 兜底到 GuestOSType.defaultFramebufferSize (可选, 不需 schema 升级).
 public struct DisplaySpec: Codable, Sendable, Equatable {
     public var width: Int
     public var height: Int
-    /// PPI 仅 VZMacGraphicsDisplayConfiguration 用; Linux/Windows guest 忽略.
+    /// PPI: Linux/Windows guest 忽略.
     public var ppi: Int
     public init(width: Int, height: Int, ppi: Int = 220) {
         self.width = width
@@ -57,9 +45,9 @@ public struct DisplaySpec: Codable, Sendable, Equatable {
     }
 }
 
-/// 磁盘文件格式. 持久化到 config.yaml, 运行时读 disk.format 不再靠扩展名推断.
-///   - raw   → ftruncate sparse, VZ 后端必走
-///   - qcow2 → qemu-img create / resize, QEMU 后端走
+/// 磁盘文件格式. 持久化到 config.yaml, 运行时读 disk.format 不靠扩展名推断.
+///   - raw   → ftruncate sparse (仅导入的 raw 镜像)
+///   - qcow2 → qemu-img create / resize
 public enum DiskFormat: String, Codable, Sendable, CaseIterable {
     case raw
     case qcow2
@@ -71,7 +59,7 @@ public struct DiskSpec: Codable, Sendable, Equatable {
     public var path: String
     public var sizeGiB: UInt64
     public var readOnly: Bool
-    /// 文件格式. 创建时按 engine 决定 (vz=raw, qemu=qcow2), 持久化到 config.yaml.
+    /// 文件格式, 持久化到 config.yaml.
     public var format: DiskFormat
 
     public init(role: DiskRole, path: String, sizeGiB: UInt64, format: DiskFormat, readOnly: Bool = false) {
@@ -86,11 +74,7 @@ public struct DiskSpec: Codable, Sendable, Equatable {
         case role, path, sizeGiB, format, readOnly
     }
 
-    /// decode 兜底:
-    ///   - readOnly 缺 → false
-    ///   - format 缺 → 按 path 扩展名推断 (.qcow2 → qcow2, 其他 → raw),
-    ///     仅适用 ConfigMigrator v1→v2 临时桥接 (.json 已断兼容,
-    ///     正常情况下 yaml 一定带 format 字段)
+    /// decode 兜底: readOnly 缺 → false; format 缺 → 按 path 扩展名推断 (.qcow2 → qcow2, 其他 → raw).
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.role = try c.decode(DiskRole.self, forKey: .role)
@@ -106,15 +90,14 @@ public struct DiskSpec: Codable, Sendable, Equatable {
     }
 }
 
-/// 网络模式 (与 hell-vm `NetworkConfig.Mode` 一致):
-/// - `.user`         — QEMU 内置 user-mode (SLIRP) NAT / VZ NAT, 零依赖
+/// 网络模式:
+/// - `.user`         — QEMU 内置 user-mode (SLIRP) NAT, 零依赖
 /// - `.vmnetShared`  — socket_vmnet shared (NAT+DHCP, 多 guest 互通)
 /// - `.vmnetHost`    — socket_vmnet host-only (仅 host 与 guest)
 /// - `.vmnetBridged` — socket_vmnet bridged (真二层桥接, 走宿主接口)
 /// - `.none`         — 不挂载网卡 (`-nic none`)
 ///
-/// Codable rawValue = String, 老 yaml 兼容: `nat→user / bridged→vmnetBridged /
-/// shared→vmnetShared` 由 NetworkSpec.init(from:) 拦下做迁移.
+/// 老 yaml 别名迁移 (nat→user / bridged→vmnetBridged / shared→vmnetShared) 由 NetworkSpec.init(from:) 处理.
 public enum NetworkMode: String, Codable, Sendable, Equatable, CaseIterable {
     case user
     case vmnetShared
@@ -125,8 +108,8 @@ public enum NetworkMode: String, Codable, Sendable, Equatable, CaseIterable {
 
 /// QEMU NIC 设备型号
 /// - virtio:  virtio-net-pci, 需 guest 驱动 (Linux 自带, Windows 需装 NetKVM)
-/// - e1000e:  Intel 千兆网卡模拟, Windows ARM / macOS 自带驱动
-/// - rtl8139: Realtek 老网卡, 兼容性最广但性能最差, 老 guest 兜底
+/// - e1000e:  Intel 千兆网卡模拟, Windows ARM 自带驱动
+/// - rtl8139: Realtek 老网卡, 兼容性最广性能最差, 老 guest 兜底
 public enum NICModel: String, Codable, Sendable, CaseIterable {
     case virtio
     case e1000e
@@ -142,6 +125,32 @@ public enum NICModel: String, Codable, Sendable, CaseIterable {
     }
 }
 
+/// 端口转发规则 (仅 user/NAT 模式有意义; vmnet 模式 guest 有真实 IP 不需要).
+/// 宿主机 <hostIP:hostPort> → guest <guestPort>. 走 QEMU `-netdev user,hostfwd=...`.
+public struct PortForward: Codable, Sendable, Equatable {
+    public enum Proto: String, Codable, Sendable, Equatable, CaseIterable {
+        case tcp, udp
+    }
+    public var proto: Proto
+    public var hostPort: Int
+    public var guestPort: Int
+    /// 宿主机绑定 IP, nil/空 = 所有接口 (QEMU 默认). 想只本机访问填 "127.0.0.1".
+    public var hostIP: String?
+
+    public init(proto: Proto = .tcp, hostPort: Int, guestPort: Int, hostIP: String? = nil) {
+        self.proto = proto
+        self.hostPort = hostPort
+        self.guestPort = guestPort
+        self.hostIP = hostIP
+    }
+
+    /// QEMU hostfwd 片段: `tcp:127.0.0.1:2222-:22` / `tcp::2222-:22` (hostIP 空时省略).
+    public var qemuHostfwd: String {
+        let ip = (hostIP?.isEmpty == false) ? hostIP! : ""
+        return "\(proto.rawValue):\(ip):\(hostPort)-:\(guestPort)"
+    }
+}
+
 public struct NetworkSpec: Codable, Sendable, Equatable {
     public var mode: NetworkMode
     /// MAC 地址 (小写冒号分隔), 缺省时生成时填入, 持久化
@@ -150,15 +159,15 @@ public struct NetworkSpec: Codable, Sendable, Equatable {
     public var socketVmnetPath: String?
     /// vmnetBridged 模式要桥接的宿主网卡 (如 "en0"), 其它模式忽略
     public var bridgedInterface: String?
-    /// QEMU NIC 设备型号. Linux 默认 virtio (自带驱动), Windows 默认 e1000e
-    /// (Windows ARM 开箱自带 e1000e 驱动; 装 NetKVM/viogpudo 后可切 virtio 更快).
+    /// QEMU NIC 设备型号. Linux 默认 virtio, Windows 默认 e1000e (开箱自带, 装 NetKVM 后可切 virtio).
     public var deviceModel: NICModel
-    /// 是否启用此网卡 — false 时启动不挂, 运行中可通过 QMP 热插拔 attach/detach.
-    /// 与删除区别: 禁用保留配置 (MAC/模式), 后续再启用恢复同样 NIC 身份.
+    /// 是否启用此网卡 — false 时启动不挂, 运行中可 QMP 热插拔. 与删除区别: 禁用保留配置 (MAC/模式).
     public var enabled: Bool
+    /// 端口转发规则 (仅 user/NAT 模式生效, vmnet 模式忽略). 缺省空 (向后兼容老 yaml).
+    public var portForwards: [PortForward]
 
     private enum CodingKeys: String, CodingKey {
-        case mode, macAddress, socketVmnetPath, bridgedInterface, deviceModel, enabled
+        case mode, macAddress, socketVmnetPath, bridgedInterface, deviceModel, enabled, portForwards
     }
 
     public init(
@@ -167,7 +176,8 @@ public struct NetworkSpec: Codable, Sendable, Equatable {
         socketVmnetPath: String? = nil,
         bridgedInterface: String? = nil,
         deviceModel: NICModel = .virtio,
-        enabled: Bool = true
+        enabled: Bool = true,
+        portForwards: [PortForward] = []
     ) {
         self.mode = mode
         self.macAddress = macAddress
@@ -175,11 +185,12 @@ public struct NetworkSpec: Codable, Sendable, Equatable {
         self.bridgedInterface = bridgedInterface
         self.deviceModel = deviceModel
         self.enabled = enabled
+        self.portForwards = portForwards
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        // 老枚举名兼容: nat → user, bridged → vmnetBridged, shared → vmnetShared
+        // 老枚举名兼容迁移
         let raw = try c.decode(String.self, forKey: .mode)
         switch raw {
         case "user", "nat":             self.mode = .user
@@ -194,19 +205,17 @@ public struct NetworkSpec: Codable, Sendable, Equatable {
         self.bridgedInterface = try c.decodeIfPresent(String.self, forKey: .bridgedInterface)
         self.deviceModel      = try c.decodeIfPresent(NICModel.self, forKey: .deviceModel) ?? .virtio
         self.enabled          = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        self.portForwards     = try c.decodeIfPresent([PortForward].self, forKey: .portForwards) ?? []
     }
 
-    /// 对 vmnetBridged 模式, 推导实际使用的桥接接口名.
-    /// `bridgedInterface` 为空时 fallback 到 "en0" (历史行为, 兼容 hell-vm).
-    /// 非 bridged 模式返回 nil.
+    /// vmnetBridged 模式实际桥接接口名 (空时 fallback "en0"); 非 bridged 返 nil.
     public var effectiveBridgedInterface: String? {
         guard mode == .vmnetBridged else { return nil }
         if let i = bridgedInterface, !i.isEmpty { return i }
         return "en0"
     }
 
-    /// 推导实际使用的 socket 路径 (vmnet* 模式): 用户显式填 socketVmnetPath 优先,
-    /// 否则走 SocketPaths 集中的标准约定. 非 vmnet* 模式返回 nil.
+    /// vmnet* 模式实际 socket 路径: 显式 socketVmnetPath 优先, 否则走 SocketPaths 标准约定. 非 vmnet* 返 nil.
     public var effectiveSocketPath: String? {
         if let p = socketVmnetPath, !p.isEmpty { return p }
         switch mode {
@@ -219,21 +228,18 @@ public struct NetworkSpec: Codable, Sendable, Equatable {
         }
     }
 
-    /// QEMU 侧稳定 ID — 热插拔要求添加/删除时 ID 一致. 用 MAC 去冒号做后缀,
-    /// guest 看到的仍然是 NIC 顺序, 这里只是 host 端 QEMU 的内部句柄名.
+    /// QEMU 侧稳定句柄 ID (用 MAC 去冒号) — 热插拔要求添加/删除时 ID 一致.
     public var qemuStableSuffix: String? {
         guard !macAddress.isEmpty else { return nil }
         return macAddress.replacingOccurrences(of: ":", with: "").lowercased()
     }
 }
 
-/// hell-vm 风格别名: `NetworkConfig` ≡ `NetworkSpec`. 抄过来的 UI / hotplug 代码
-/// 直接用 NetworkConfig 名字也能编译.
+/// 别名: `NetworkConfig` ≡ `NetworkSpec`.
 public typealias NetworkConfig = NetworkSpec
 
 extension NetworkSpec {
-    /// 生成一个 locally-administered + unicast 的随机 MAC 地址.
-    /// OUI 固定用 QEMU 约定前缀 `52:54:00`, 后 3 字节随机.
+    /// 生成随机 MAC: QEMU 约定前缀 `52:54:00` + 后 3 字节随机.
     public static func generateRandomMAC() -> String {
         let tail = (0..<3).map { _ in UInt8.random(in: 0...255) }
         return String(format: "52:54:00:%02x:%02x:%02x", tail[0], tail[1], tail[2])
@@ -243,16 +249,6 @@ extension NetworkSpec {
     public static func isValidMAC(_ s: String) -> Bool {
         let pattern = #"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$"#
         return s.range(of: pattern, options: .regularExpression) != nil
-    }
-}
-
-public struct MacOSSpec: Codable, Sendable, Equatable {
-    public var ipsw: String?
-    public var autoInstalled: Bool
-
-    public init(ipsw: String? = nil, autoInstalled: Bool = false) {
-        self.ipsw = ipsw
-        self.autoInstalled = autoInstalled
     }
 }
 
@@ -272,22 +268,14 @@ public struct WindowsSpec: Codable, Sendable, Equatable {
     /// TPM 2.0 启用 (Win11 强制要求, 默认 true; QEMU 通过 swtpm unix socket 提供)
     public var tpmEnabled: Bool
     /// 跳过 Win11 Setup 硬件检查 (TPM/SecureBoot/RAM/CPU/Storage). 默认 true.
-    /// 实现路径: WindowsUnattend.ensureISO 生成 AutoUnattend.xml + hdiutil makehybrid 打 ISO,
-    /// 启动时挂第二个 cdrom; windowsPE pass 跑 reg add LabConfig\Bypass*Check=1.
-    /// 关掉则不挂 unattend.iso, 用户需要在 Setup 里按 Shift+F10 自己跑命令.
+    /// WindowsUnattend.ensureISO 生成 AutoUnattend.xml 打 ISO, windowsPE pass 跑 reg add LabConfig\Bypass*Check=1.
+    /// 关掉则不挂 unattend.iso, 用户需在 Setup 里 Shift+F10 自己跑命令.
     public var bypassInstallChecks: Bool
-    /// 装完 Windows 后首次登录自动从 virtio-win.iso 静默装 virtio 驱动 (NetKVM/viostor/viogpudo).
-    /// **当前默认 false** — UTM Guest Tools ISO 已含 ARM64 native 驱动 (NetKVM/viostor/viogpudo
-    /// + qemu-ga), virtio-win.iso 不再是 Win VM 装机硬依赖. QemuArgsBuilder 也已禁用 cdrom_vio
-    /// 挂载 (即便此字段为 true). 后续若要恢复老 virtio-win.iso 通路, 同时改这里 default + 解除
-    /// QemuArgsBuilder 的 `if false` + 重新打开 CreateVMDialog 的 startVirtioWinFetch 触发.
-    /// 走 oobeSystem pass 的 FirstLogonCommands 跑 certutil + pnputil /add-driver /subdirs /install.
+    /// 首次登录自动从 virtio-win.iso 静默装 virtio 驱动. **当前默认 false** —
+    /// UTM Guest Tools ISO 已含 ARM64 native 驱动, virtio-win.iso 不再是装机硬依赖 (QemuArgsBuilder 也已禁用 cdrom_vio).
     public var autoInstallVirtioWin: Bool
-    /// 装完 Windows 后首次登录自动 NSIS /S 静默装 spice-guest-tools.exe (含 spice-vdagent 服务).
-    /// 默认 true. 走 oobeSystem pass FirstLogonCommands 找 unattend ISO 上的 .exe 跑 /S 装.
-    /// 装完后 host 拖 HVM 主窗口 → guest 自动改分辨率 (vdagent 响应 monitor config 协议).
-    /// 关掉则 user 需进系统后手动跑 spice-guest-tools-latest.exe.
-    /// 依赖 UtmGuestToolsCache 已下载到全局缓存; 缓存缺失时 ensureISO fail-soft 跳过 (warn).
+    /// 首次登录自动 NSIS /S 静默装 spice-guest-tools.exe (含 spice-vdagent). 默认 true.
+    /// 走 oobeSystem pass FirstLogonCommands. 依赖 UtmGuestToolsCache 缓存; 缺失时 ensureISO fail-soft 跳过.
     public var autoInstallSpiceTools: Bool
 
     public init(secureBoot: Bool = true, tpmEnabled: Bool = true,
@@ -304,9 +292,7 @@ public struct WindowsSpec: Codable, Sendable, Equatable {
         case secureBoot, tpmEnabled, bypassInstallChecks, autoInstallVirtioWin, autoInstallSpiceTools
     }
 
-    /// 老 config (新增字段前) 缺字段 → 默认 true 兜底.
-    /// 例外: autoInstallVirtioWin 缺字段 → false (UTM Guest Tools 已替代 virtio-win.iso,
-    /// 老 VM 也无须再走 pnputil 段).
+    /// 老 config 缺字段 → 默认 true 兜底; 例外: autoInstallVirtioWin → false.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.secureBoot = try c.decodeIfPresent(Bool.self, forKey: .secureBoot) ?? true
@@ -317,17 +303,15 @@ public struct WindowsSpec: Codable, Sendable, Equatable {
     }
 }
 
-/// host ↔ guest 共享目录 (SPICE WebDAV). 一个 VM 可挂多条, v1 单条.
-/// 仅 QEMU 后端 + Linux/Windows guest 生效. 设计稿 docs/v3/SHARED_FOLDER.md.
+/// host ↔ guest 共享目录 (SPICE WebDAV). 仅 QEMU 后端 + Linux/Windows guest 生效.
 public struct SharedFolderSpec: Codable, Sendable, Equatable {
     /// host 端绝对路径. 不允许相对路径 / symlink 越界 (CLI/GUI 入口校验).
     public var hostPath: String
-    /// 用户友好名, 影响 guest WebDAV root 列表. 必须是 ASCII alnum + `-_`, 单 root v1
-    /// 固定 "code" 也行, 但留字段允许多 root 时区分.
+    /// 用户友好名, 影响 guest WebDAV root 列表. 必须 ASCII alnum + `-_`.
     public var name: String
-    /// 默认 true. dialog 可勾改成 false (RW).
+    /// 默认 true (RO); dialog 可改 false (RW).
     public var readOnly: Bool
-    /// 默认 true, v1 不暴露 (留字段供未来"挂但不自动 mount").
+    /// 默认 true. 留字段供未来"挂但不自动 mount".
     public var autoMount: Bool
 
     public init(hostPath: String, name: String, readOnly: Bool = true, autoMount: Bool = true) {
@@ -345,13 +329,12 @@ public struct SharedFolderSpec: Codable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.hostPath = try c.decode(String.self, forKey: .hostPath)
         self.name = try c.decode(String.self, forKey: .name)
-        // 老 yaml 缺 readOnly → 默认 true (保守安全)
+        // 老 yaml 缺 readOnly → 默认 true (保守)
         self.readOnly = try c.decodeIfPresent(Bool.self, forKey: .readOnly) ?? true
         self.autoMount = try c.decodeIfPresent(Bool.self, forKey: .autoMount) ?? true
     }
 
-    /// 把任意字符串 sanitize 成 [a-zA-Z0-9_-]{1,32}: 非允许字符替换成 `_`, 截断到 32, 空 → "share".
-    /// CLI / GUI 给 host 路径 basename 自动派生 name 时用, 防 WebDAV URL 注入.
+    /// sanitize 成 [a-zA-Z0-9_-]{1,32} (非允许字符 → `_`, 截断 32, 空 → "share"), 防 WebDAV URL 注入.
     public static func sanitizeName(_ raw: String) -> String {
         let allowed: Set<Character> = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
         var s = String(raw.map { allowed.contains($0) ? $0 : "_" })
@@ -361,25 +344,20 @@ public struct SharedFolderSpec: Codable, Sendable, Equatable {
     }
 }
 
-/// 整 VM 加密元信息 (schema v3 加). 设计稿 docs/v3/ENCRYPTION.md.
-/// 明文 VM 缺该字段或 enabled=false. 真正加密 VM 加密形态见 scheme.
-/// 注: KDF 参数 (salt / iterations) **不**在这里 — 它们在 routing JSON (`meta/encryption.json` /
-/// `<bundle>.encryption.json`), 因为 config 自身可能加密了 (QEMU per-file 路径), 解开 config 才能
-/// 读 KDF 参数会陷死循环. routing JSON 是明文外部元数据, 跨机器 portable 入口.
+/// 整 VM 加密元信息 (schema v3). 明文 VM 缺该字段或 enabled=false.
+/// 注: KDF 参数 (salt/iterations) **不**在此 — 在明文 routing JSON, 因为 config 自身可能加密了
+/// (解开 config 才能读 KDF 会陷死循环). routing JSON 是跨机器 portable 入口.
 public struct EncryptionSpec: Codable, Sendable, Equatable {
-    /// 是否启用加密. 明文 VM 这里是 false (或字段缺省, init(from:) 兜底)
+    /// 是否启用加密. 明文 VM = false.
     public var enabled: Bool
-    /// 加密形态. 仅 enabled=true 时有效:
-    ///   - vz-sparsebundle  整 bundle 套加密 sparsebundle (VZ 路径)
-    ///   - qemu-perfile     每文件独立加密 (QEMU 路径; qcow2 LUKS / OVMF LUKS / swtpm key / config AES-GCM)
+    /// 加密形态 (仅 enabled=true 有效). qemu-perfile: 每文件独立加密 (qcow2 LUKS / OVMF LUKS / swtpm key / config AES-GCM).
     public var scheme: EncryptionScheme?
     /// 创建时间, 仅展示
     public var createdAt: Date?
 
     public enum EncryptionScheme: String, Codable, Sendable, CaseIterable {
         case qemuPerfile    = "qemu-perfile"
-        // vz-sparsebundle 已随 VZ 移除 (QEMU-only); 加密 VM 恒 qemu-perfile.
-        // 老 routing JSON 带 "vz-sparsebundle" 解码会失败 — 用户实际无此类 VM.
+        // vz-sparsebundle 已随 VZ 移除; 加密 VM 恒 qemu-perfile.
     }
 
     public init(enabled: Bool = false,
@@ -394,10 +372,7 @@ public struct EncryptionSpec: Codable, Sendable, Equatable {
         case enabled, scheme, createdAt
     }
 
-    /// 老 yaml 缺字段兜底:
-    ///   - enabled 缺 → false
-    ///   - scheme  缺 → nil
-    ///   - createdAt 缺 → nil
+    /// 老 yaml 缺字段兜底: enabled → false, scheme/createdAt → nil.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
@@ -407,9 +382,7 @@ public struct EncryptionSpec: Codable, Sendable, Equatable {
 }
 
 public struct VMConfig: Codable, Sendable, Equatable {
-    /// schema v1: JSON, DiskSpec 无 format 字段 (已断兼容, 不再读)
-    /// schema v2: YAML, DiskSpec 加 format (raw / qcow2)
-    /// schema v3: 加 encryption 顶层字段 (EncryptionSpec)
+    /// v1 (JSON, 已断兼容) → v2 (YAML, 加 DiskSpec.format) → v3 (加顶层 encryption).
     public static let currentSchemaVersion = 3
 
     public var schemaVersion: Int
@@ -417,7 +390,7 @@ public struct VMConfig: Codable, Sendable, Equatable {
     public var createdAt: Date
     public var displayName: String
     public var guestOS: GuestOSType
-    /// 后端引擎. 老 v1 config 缺该字段时由 init(from:) 兜底 .vz, 不需要 schema 迁移
+    /// 后端引擎. 老 config 缺字段由 init(from:) 兜底 .qemu.
     public var engine: Engine
     public var cpuCount: Int
     public var memoryMiB: UInt64
@@ -426,32 +399,21 @@ public struct VMConfig: Codable, Sendable, Equatable {
     /// ISO 绝对路径 (不复制进 bundle). bootFromDiskOnly=true 时忽略
     public var installerISO: String?
     public var bootFromDiskOnly: Bool
-    /// Windows 三态切换: 仅 Windows + bootFromDiskOnly=true 才生效, 装完 OS 还没装 viogpudo 时
-    /// false → QemuArgsBuilder 仍挂 ramfb 单设备; 用户在 guest 内装完驱动手动切 true →
-    /// 改挂 hvm-gpu-ramfb-pci 让 viogpudo 接管 virtio-gpu 通路 (dynamic resize / vdagent).
-    /// Linux/macOS 字段忽略.
+    /// Windows 驱动三态切换 (仅 Windows + bootFromDiskOnly=true 生效): false 挂 ramfb 单设备;
+    /// 装完 viogpudo 后切 true → 改挂 hvm-gpu-ramfb-pci 让其接管 virtio-gpu (dynamic resize / vdagent).
     public var windowsDriversInstalled: Bool
-    /// host ↔ guest 剪贴板共享开关 (UTF-8 文本, 双向). 默认 true.
-    /// 仅 QEMU 后端生效 (走 vdagent virtio-serial chardev); VZ 后端的 macOS guest VZ 框架
-    /// 自带剪贴板, 这字段忽略. 运行中可通过 IPC `clipboard.setEnabled` 即时切换 (不必重启 VM).
+    /// host ↔ guest 剪贴板共享 (UTF-8 双向). 默认 true. 走 vdagent; 运行中可 IPC `clipboard.setEnabled` 即时切换.
     public var clipboardSharingEnabled: Bool
-    /// macOS 风格快捷键: host `cmd` 当 guest `ctrl` 转发 (cmd+c → ctrl+c 等). 默认 true.
-    /// 仅 QEMU 后端 (Win/Linux guest) 生效, VZ macOS guest 忽略此字段.
-    /// 副作用: 开启后失去发 Win/super 键的能力 (用鼠标点开始菜单代替).
-    /// 关闭后行为退回老逻辑: cmd → meta_l (Win 键), 用户用 control+c 复制.
-    /// GUI 进程内 view-instance 级开关, 不持久化到 host 子进程 — 改完无须重启 VM, 关掉编辑面板生效.
+    /// macOS 风格快捷键: host `cmd` 当 guest `ctrl` 转发 (cmd+c → ctrl+c). 默认 true.
+    /// 副作用: 失去发 Win/super 键能力. 关闭则 cmd → meta_l. GUI view-instance 级, 不持久化到 host 子进程.
     public var macStyleShortcuts: Bool
-    /// guest framebuffer 显式尺寸. nil 表示走 GuestOSType.defaultFramebufferSize 兜底.
-    /// 加可选字段不变 schema 版本; 老 yaml decode 时缺该字段视为 nil, init(from:) 已兜底.
+    /// guest framebuffer 显式尺寸. nil → GuestOSType.defaultFramebufferSize 兜底 (可选, 不变 schema).
     public var displaySpec: DisplaySpec?
-    public var macOS: MacOSSpec?
     public var linux: LinuxSpec?
     public var windows: WindowsSpec?
-    /// 加密元信息 (schema v3 加). nil 或 enabled=false → 明文 VM. 详见 EncryptionSpec.
+    /// 加密元信息 (schema v3). nil 或 enabled=false → 明文 VM.
     public var encryption: EncryptionSpec?
-    /// host ↔ guest 共享目录 (SPICE WebDAV). 仅 QEMU 后端 + Linux/Windows guest 生效;
-    /// VZ 后端 / macOS guest 启动期 warn + 忽略 (推后单独 VZSharedDirectory 提案).
-    /// 老 yaml 缺该字段 → 解码 []. 加字段不需 schema 升级.
+    /// host ↔ guest 共享目录 (SPICE WebDAV). 仅 QEMU + Linux/Windows guest 生效. 老 yaml 缺 → [] (不需 schema 升级).
     public var sharedFolders: [SharedFolderSpec]
 
     public init(
@@ -470,7 +432,6 @@ public struct VMConfig: Codable, Sendable, Equatable {
         clipboardSharingEnabled: Bool = true,
         macStyleShortcuts: Bool = true,
         displaySpec: DisplaySpec? = nil,
-        macOS: MacOSSpec? = nil,
         linux: LinuxSpec? = nil,
         windows: WindowsSpec? = nil,
         encryption: EncryptionSpec? = nil,
@@ -492,7 +453,6 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.clipboardSharingEnabled = clipboardSharingEnabled
         self.macStyleShortcuts = macStyleShortcuts
         self.displaySpec = displaySpec
-        self.macOS = macOS
         self.linux = linux
         self.windows = windows
         self.encryption = encryption
@@ -503,12 +463,11 @@ public struct VMConfig: Codable, Sendable, Equatable {
         case schemaVersion, id, createdAt, displayName, guestOS, engine,
              cpuCount, memoryMiB, disks, networks, installerISO,
              bootFromDiskOnly, windowsDriversInstalled, clipboardSharingEnabled,
-             macStyleShortcuts, displaySpec, macOS, linux, windows, encryption,
+             macStyleShortcuts, displaySpec, linux, windows, encryption,
              sharedFolders
     }
 
-    /// 自定义 decode: 仅为 engine 字段提供"缺省 .vz"兜底, 其他字段沿用合成默认行为
-    /// (老 v1 config.json 没有 engine 字段, 直接 decode 出 .vz; encode 时正常写出)
+    /// 自定义 decode: 给可选 / 老缺字段提供兜底默认.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
@@ -516,7 +475,7 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.createdAt = try c.decode(Date.self, forKey: .createdAt)
         self.displayName = try c.decode(String.self, forKey: .displayName)
         self.guestOS = try c.decode(GuestOSType.self, forKey: .guestOS)
-        // 老 config 带 "vz" (无此 case 会抛) 或缺字段 → 兜底 .qemu (VZ 移除)
+        // 老 config 带 "vz" 或缺字段 → 兜底 .qemu
         self.engine = (try? c.decodeIfPresent(Engine.self, forKey: .engine) ?? .qemu) ?? .qemu
         self.cpuCount = try c.decode(Int.self, forKey: .cpuCount)
         self.memoryMiB = try c.decode(UInt64.self, forKey: .memoryMiB)
@@ -524,53 +483,43 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.networks = try c.decodeIfPresent([NetworkSpec].self, forKey: .networks) ?? []
         self.installerISO = try c.decodeIfPresent(String.self, forKey: .installerISO)
         self.bootFromDiskOnly = try c.decodeIfPresent(Bool.self, forKey: .bootFromDiskOnly) ?? false
-        // 老存量 yaml 没该字段时按 bootFromDiskOnly 兜底:
-        //   - 老 Windows VM 已经在 hvm-gpu-ramfb-pci 跑 (bootFromDiskOnly=true) → 默认 true 不回退到 ramfb
-        //   - 装机阶段 (false) → 默认 false 跟新建 VM 一致
+        // 缺字段按 bootFromDiskOnly 兜底: 老 Win VM (已在 hvm-gpu-ramfb-pci 跑) → true; 装机阶段 → false
         self.windowsDriversInstalled = try c.decodeIfPresent(Bool.self, forKey: .windowsDriversInstalled) ?? self.bootFromDiskOnly
-        // 老 yaml 缺字段 → 默认 true (符合"开箱可用, 用户没显式关就开"的预期)
         self.clipboardSharingEnabled = try c.decodeIfPresent(Bool.self, forKey: .clipboardSharingEnabled) ?? true
         self.macStyleShortcuts = try c.decodeIfPresent(Bool.self, forKey: .macStyleShortcuts) ?? true
-        // 老 yaml 缺 displaySpec → nil, effectiveDisplaySpec 计算属性兜底到 GuestOSType 默认
         self.displaySpec = try c.decodeIfPresent(DisplaySpec.self, forKey: .displaySpec)
-        self.macOS = try c.decodeIfPresent(MacOSSpec.self, forKey: .macOS)
         self.linux = try c.decodeIfPresent(LinuxSpec.self, forKey: .linux)
         self.windows = try c.decodeIfPresent(WindowsSpec.self, forKey: .windows)
-        // 老 v2 yaml 缺 encryption → nil. 走 ConfigMigrator v2→v3 后会写入 enabled=false.
+        // 老 v2 yaml 缺 encryption → nil; ConfigMigrator v2→v3 会写入 enabled=false
         self.encryption = try c.decodeIfPresent(EncryptionSpec.self, forKey: .encryption)
-        // 老 yaml 缺 sharedFolders → []. 加字段不需 schema 升级 (空数组无破坏).
         self.sharedFolders = try c.decodeIfPresent([SharedFolderSpec].self, forKey: .sharedFolders) ?? []
     }
 
     // MARK: - 显示尺寸权威读取
 
-    /// 权威 framebuffer 尺寸: 优先 displaySpec 字段, 否则按 guestOS 兜底.
-    /// 所有需要 framebuffer 尺寸的地方 (DbgOps screenshot 坐标计算 / 鼠标 abs 映射 / VZ
-    /// scanout 配置) 都应走这, 不再硬编码或单独 grep guestOS.defaultFramebufferSize.
+    /// 权威 framebuffer 尺寸: 优先 displaySpec, 否则按 guestOS 兜底.
+    /// 所有需要 framebuffer 尺寸的地方都应走这, 不硬编码.
     public var effectiveDisplaySpec: DisplaySpec {
         if let s = displaySpec { return s }
         let fb = guestOS.defaultFramebufferSize
-        // ppi 默认 220 (跟 macOS 1080p Retina 一致). Linux/Windows guest 不消费 ppi.
         return DisplaySpec(width: fb.width, height: fb.height, ppi: 220)
     }
 
-    // MARK: - 主盘路径 helper (运行时不要用 BundleLayout.mainDiskName 之类常量推断)
+    // MARK: - 主盘路径 helper (运行时不靠 BundleLayout 常量推断)
 
-    /// 主盘 (role=.main) 的 path (相对 bundle 根的路径). 不存在时返 nil.
+    /// 主盘 (role=.main) 相对 bundle 根的 path. 不存在返 nil.
     public var mainDiskRelPath: String? {
         disks.first(where: { $0.role == .main })?.path
     }
 
-    /// 主盘绝对 URL (从 config 读, 不依赖 BundleLayout 常量).
+    /// 主盘绝对 URL (从 config 读).
     public func mainDiskURL(in bundle: URL) -> URL? {
         guard let rel = mainDiskRelPath else { return nil }
         return bundle.appendingPathComponent(rel)
     }
 
-    /// 校验 engine 与 guestOS 的合法组合 (CLAUDE.md「支持的 Guest OS 约束」).
-    /// BundleIO.save 与 hvm-cli create 应主动调用; Codable 本身不强制以保持容错.
+    /// 校验 engine 合法 (仅 qemu). BundleIO.save 与 hvm-cli create 主动调; Codable 不强制以保持容错.
     public func validate() throws {
-        // QEMU-only: Linux + Windows 都只允许 qemu (唯一后端)
         let allowed: [Engine] = [.qemu]
         guard allowed.contains(engine) else {
             throw HVMError.config(.invalidEnum(

@@ -1,17 +1,11 @@
 // EncryptCommand.swift
-// hvm-cli encrypt <vm> — 把现有明文 QEMU VM 转成加密 VM (冷迁移 in-place).
-//
-// 设计稿 docs/v3/ENCRYPTION.md v2.4 PR-10a.
-//
-// 限制 (实现层面):
-//   - 仅 QEMU engine. VZ engine VM 拒绝 (raw → LUKS qcow2 切引擎需独立 PR)
-//   - VM 必须 stopped (.edit lock 抢)
-//   - Win VM TPM state 重置 (现有 swtpm state 是明文, 用新 swtpm-key 启动 swtpm 解不开)
-//   - 不可中断 (转换中失败 → 临时文件清, 主 bundle 不动; 替换阶段失败 → 部分破坏)
+// hvm-cli encrypt <vm> — 明文 QEMU VM 转加密 (冷迁移 in-place). 必须 stopped.
+// Win VM TPM state 会重置 (明文 swtpm state 用新 swtpm-key 解不开).
 
 import ArgumentParser
 import Foundation
 import HVMBundle
+import HVMControl
 import HVMCore
 import HVMEncryption
 import HVMQemu
@@ -48,7 +42,7 @@ struct EncryptCommand: AsyncParsableCommand {
                 throw HVMError.encryption(.parseFailed(reason: "VM 已是加密形态"))
             }
 
-            // 读 config 看 engine + guestOS (报错前置)
+            // 读 config 看 engine (报错前置)
             let config = try BundleIO.load(from: bundleURL)
             guard config.engine == .qemu else {
                 throw HVMError.config(.invalidEnum(
@@ -56,7 +50,6 @@ struct EncryptCommand: AsyncParsableCommand {
                     allowed: ["qemu (VZ engine VM 加密暂不支持)"]
                 ))
             }
-            // (macOS guest 已随 VZ 移除, GuestOSType 仅 linux/windows)
 
             // 用户警告 + 确认
             if format == .human {
@@ -102,6 +95,8 @@ struct EncryptCommand: AsyncParsableCommand {
                     print("  \(msg)")
                 }
             }
+            // 动磁盘前 reap 残留孤儿 qemu/swtpm (占着 qcow2 锁会让 qemu-img 拿不到锁)
+            VMControl.reapBundleOrphans(bundleURL: bundleURL)
             let result = try EncryptVMOperation.encrypt(
                 bundleURL: bundleURL,
                 password: password,

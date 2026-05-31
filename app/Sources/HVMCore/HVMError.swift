@@ -1,6 +1,5 @@
 // HVMCore/HVMError.swift
 // 错误根类型 + 各子错误具体 case + UserFacing 映射
-// 完整设计见 docs/ERROR_MODEL.md
 
 import Foundation
 
@@ -44,9 +43,11 @@ public enum StorageError: Error, Sendable {
     case volumeSpaceInsufficient(requiredBytes: UInt64, availableBytes: UInt64)
     /// 导入磁盘镜像时的所有防呆错误 (格式不支持 / qemu-img 解析失败 / 越界缩容 / 文件不可读)
     case importInvalid(reason: String, path: String)
-    /// CloneManager: 源 bundle 与目标父目录分别在不同 APFS 卷, clonefile(2) 跨卷会被
-    /// 内核拒 (EXDEV); 提前 statfs 探测到差异时直接抛, 而非让底层报模糊错
+    /// CloneManager: 源与目标在不同 APFS 卷, clonefile(2) 跨卷会被内核拒 (EXDEV); 提前 statfs 探测到差异时抛
     case crossVolumeNotAllowed(source: String, target: String)
+    /// SnapshotManager: 恢复一个加密态快照会让 VM 失去 routing (kdf_salt) → 列表消失 + 永久解不开;
+    /// pre-flight 探测到 (老快照无 encryption.json 且当前 bundle 也无 routing) 时拒绝, 防数据孤立.
+    case snapshotRestoreUnsafe(reason: String)
 }
 
 // MARK: - Backend
@@ -58,32 +59,23 @@ public enum BackendError: Error, Sendable {
     case diskNotFound(path: String)
     case diskBusy(path: String)
     case unsupportedGuestOS(raw: String)
-    case rosettaUnavailable
-    case bridgedNotEntitled
-    case ipswInvalid(reason: String)
     case invalidTransition(from: String, to: String)
     case vzInternal(description: String)
-    /// GUI 已拉起 `--host-mode-bundle` 子进程, 在时限内未观测到其持有 BundleLock (通常表示子进程已退出或极慢)
+    /// `--host-mode-bundle` 子进程在时限内未持有 BundleLock (通常已退出或极慢)
     case qemuHostStartupTimeout(waitedSeconds: Int, logPath: String)
 }
 
 // MARK: - Install
 
 public enum InstallError: Error, Sendable {
-    case ipswNotFound(path: String)
-    case ipswUnsupported(reason: String)
     case ipswDownloadFailed(reason: String)
-    case auxiliaryCreationFailed(reason: String)
     case diskSpaceInsufficient(requiredBytes: UInt64, availableBytes: UInt64)
-    case installerFailed(reason: String)
-    case rosettaNotInstalled
     case isoNotFound(path: String)
 }
 
 // MARK: - Net
 
 public enum NetError: Error, Sendable {
-    case bridgedNotEntitled
     case bridgedInterfaceNotFound(requested: String, available: [String])
     case macInvalid(String)
     case macNotLocallyAdministered(String)
@@ -103,33 +95,30 @@ public enum IPCError: Error, Sendable {
     case serverBindFailed(path: String, errno: Int32)
 }
 
-// MARK: - Encryption (整 VM 加密, sparsebundle + Keychain, docs/v3/ENCRYPTION.md)
+// MARK: - Encryption
 
 public enum EncryptionError: Error, Sendable {
     /// hdiutil 子命令以非 0 退出. verb 指 create/attach/detach/chpass/info 等
     case hdiutilFailed(verb: String, exitCode: Int32, stderr: String)
-    /// sparsebundle 已存在, create 拒绝覆盖
-    case sparsebundleAlreadyExists(path: String)
     /// 密码错 (attach / chpass 时 hdiutil 报 "Authentication error" 等)
     case wrongPassword
     /// 挂载点已有挂载或不可用
     case mountpointInUse(path: String)
-    /// hdiutil 输出 plist 解析失败 (理论上 hdiutil 有变动才会触发)
+    /// hdiutil 输出 plist 解析失败
     case parseFailed(reason: String)
     /// master KEK 长度不对 (固定 32 字节 = 256 bit)
     case invalidKeyLength(got: Int, expected: Int)
-    /// SecRandomCopyBytes 等系统 crypto 调用失败 (用户级几乎不会触发)
+    /// SecRandomCopyBytes 等系统 crypto 调用失败
     case randomGenerationFailed(status: Int32)
     /// PBKDF2 派生失败 (CommonCrypto / CryptoKit 报错)
     case kdfFailed(reason: String)
     /// qemu-img 子命令失败 (create / amend / resize / info 等)
     case qemuImgFailed(verb: String, exitCode: Int32, stderr: String)
-    /// LUKS 改密 step 1 (add new keyslot) 成功但 step 2 (remove old) 失败 — 此时 qcow2 处于"老 + 新都激活"中间态
-    /// 用户可重跑 rekey 或手工销毁老 keyslot. 数据不丢, 但需修复.
+    /// LUKS 改密: 加新 keyslot 成功但删老 keyslot 失败, qcow2 处于"老+新都激活"中间态. 重跑 rekey 即可修复, 数据不丢
     case luksRekeyHalfDone(reason: String)
 }
 
-// MARK: - Config (手动编辑 config.json 产生的语义错)
+// MARK: - Config (手动编辑 config.yaml 产生的语义错)
 
 public enum ConfigError: Error, Sendable {
     case missingField(name: String)
@@ -140,7 +129,7 @@ public enum ConfigError: Error, Sendable {
 
 // MARK: - UserFacing 映射
 
-/// 面向用户的错误呈现, GUI ErrorDialog / CLI json / hvm-dbg 共用
+/// 面向用户的错误呈现, GUI ErrorDialog / CLI / hvm-dbg 共用
 public struct UserFacingError: Sendable, Equatable, Codable {
     public let code: String
     public let message: String
@@ -269,6 +258,11 @@ public extension StorageError {
                          message: "克隆要求源与目标在同一卷",
                          details: ["source": src, "target": tgt],
                          hint: "APFS clonefile 不能跨卷; 把目标位置选在与源同卷的目录")
+        case .snapshotRestoreUnsafe(let reason):
+            return .init(code: "storage.snapshot_restore_unsafe",
+                         message: "恢复此快照会使加密 VM 数据孤立, 已拒绝",
+                         details: ["reason": reason],
+                         hint: "删除此老快照重新创建; 或保持 VM 加密态 (未解密) 再恢复")
         }
     }
 }
@@ -301,18 +295,6 @@ public extension BackendError {
             return .init(code: HVMErrorCode.backendUnsupportedGuestOS.rawValue,
                          message: "不支持的 guest OS",
                          details: ["raw": raw])
-        case .rosettaUnavailable:
-            return .init(code: HVMErrorCode.backendRosettaUnavailable.rawValue,
-                         message: "Rosetta 2 不可用",
-                         hint: "执行: softwareupdate --install-rosetta --agree-to-license")
-        case .bridgedNotEntitled:
-            return .init(code: HVMErrorCode.backendBridgedNotEntitled.rawValue,
-                         message: "桥接网络 entitlement 未启用",
-                         hint: "详见 docs/ENTITLEMENT.md")
-        case .ipswInvalid(let r):
-            return .init(code: HVMErrorCode.backendIPSWInvalid.rawValue,
-                         message: "IPSW 文件无效或不被支持",
-                         details: ["reason": r])
         case .invalidTransition(let from, let to):
             return .init(code: "backend.invalid_transition",
                          message: "VM 状态不允许当前操作",
@@ -333,34 +315,14 @@ public extension BackendError {
 public extension InstallError {
     var userFacing: UserFacingError {
         switch self {
-        case .ipswNotFound(let p):
-            return .init(code: HVMErrorCode.installIPSWNotFound.rawValue,
-                         message: "IPSW 文件未找到",
-                         details: ["path": p])
-        case .ipswUnsupported(let r):
-            return .init(code: HVMErrorCode.installIPSWUnsupported.rawValue,
-                         message: "IPSW 版本不受 VZ 支持",
-                         details: ["reason": r])
         case .ipswDownloadFailed(let r):
             return .init(code: HVMErrorCode.installIPSWDownloadFailed.rawValue,
                          message: "IPSW 下载失败",
-                         details: ["reason": r])
-        case .auxiliaryCreationFailed(let r):
-            return .init(code: HVMErrorCode.installAuxCreationFailed.rawValue,
-                         message: "创建 auxiliary 数据失败",
                          details: ["reason": r])
         case .diskSpaceInsufficient(let req, let avail):
             return .init(code: HVMErrorCode.installDiskSpaceInsufficient.rawValue,
                          message: "磁盘空间不足以安装",
                          details: ["required": "\(req)", "available": "\(avail)"])
-        case .installerFailed(let r):
-            return .init(code: HVMErrorCode.installInstallerFailed.rawValue,
-                         message: "装机流程失败",
-                         details: ["reason": r])
-        case .rosettaNotInstalled:
-            return .init(code: HVMErrorCode.installRosettaNotInstalled.rawValue,
-                         message: "系统未安装 Rosetta 2",
-                         hint: "执行: softwareupdate --install-rosetta --agree-to-license")
         case .isoNotFound(let p):
             return .init(code: HVMErrorCode.installISONotFound.rawValue,
                          message: "ISO 文件未找到",
@@ -372,10 +334,6 @@ public extension InstallError {
 public extension NetError {
     var userFacing: UserFacingError {
         switch self {
-        case .bridgedNotEntitled:
-            return .init(code: HVMErrorCode.netBridgedNotEntitled.rawValue,
-                         message: "桥接网络 entitlement 未启用",
-                         hint: "详见 docs/ENTITLEMENT.md")
         case .bridgedInterfaceNotFound(let req, let avail):
             return .init(code: HVMErrorCode.netBridgedInterfaceNotFound.rawValue,
                          message: "指定的桥接接口不存在",
@@ -443,11 +401,6 @@ public extension EncryptionError {
             return .init(code: HVMErrorCode.encryptionHdiutilFailed.rawValue,
                          message: "磁盘镜像操作失败 (hdiutil \(verb))",
                          details: ["verb": verb, "exitCode": "\(code)", "stderr": stderr.prefix(400).trimmingCharacters(in: .whitespacesAndNewlines)])
-        case .sparsebundleAlreadyExists(let p):
-            return .init(code: HVMErrorCode.encryptionSparsebundleAlreadyExists.rawValue,
-                         message: "加密容器已存在",
-                         details: ["path": p],
-                         hint: "换个名称或先删除已有 sparsebundle")
         case .wrongPassword:
             return .init(code: HVMErrorCode.encryptionWrongPassword.rawValue,
                          message: "密码错误",

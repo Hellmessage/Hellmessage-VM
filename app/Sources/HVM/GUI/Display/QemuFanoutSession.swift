@@ -1,26 +1,14 @@
-// QemuFanoutSession.swift
+// QemuFanoutSession.swift — 把 QEMU host 子进程的 HDP socket 接到多消费者扇出器:
+// 一个 channel + N 个 subscriber view (主窗口嵌入 + 任意数量独立窗口) 共存, weak subscriber 列表.
 //
-// 把 QEMU host 子进程暴露的 HDP socket 接到一个**多消费者**扇出器:
-// 一个 channel + N 个 subscriber view (主窗口嵌入 + 任意数量独立窗口) 共存.
+// SURFACE_NEW 拿到的 shm fd 通过 dup() 分发给每个 subscriber 各自 mmap (POSIX shm 同物理页可多次映射,
+// zero-copy 不冲突). 缓存最近 SurfaceNew info + fd + LED + cursor, 让"晚来"的 subscriber 立即拿当前画面.
 //
-// 跟旧的单消费者 QemuEmbeddedSession 的关键差异:
-//   1. fanout 不再 own 单一 view, 改成 weak subscriber 列表
-//   2. SURFACE_NEW 拿到的 shm fd 通过 dup() 分发给每个 subscriber 各自 mmap
-//      (POSIX shm 同一物理页可多次映射, 跨 view 共享 zero-copy 不冲突)
-//   3. 缓存最近一次 SurfaceNew info + 缓存 fd, 让"晚来"的 subscriber (例如用户
-//      点 detach 弹出独立窗口时) 立即拿到当前 framebuffer 不等下一帧
-//   4. 缓存最近一次 LED 状态, 新 subscriber 即时同步 caps lock 等指示灯
+// **fd 生命周期**: SURFACE_NEW 的 fd 由 fanout 接管, 每个 subscriber 各 dup 一份 (mmap + close),
+// fanout 自留一份 cachedSurfaceFD 供后续新 subscriber dup; 换帧 / 销毁时关旧 fd.
 //
-// **fd 生命周期**:
-//   - SURFACE_NEW 携带的 fd 由 fanout 接管: 第一个活跃 subscriber 拿原 fd
-//     (它 mmap + close), 其余 subscriber 拿 dup 的 fd (各自 mmap + close)
-//   - fanout 自己 dup 一份保活 (cachedSurfaceFD), 用于以后新 subscriber 加入
-//     时再次 dup 给它. 收到下一个 SURFACE_NEW 时关掉旧的 cachedSurfaceFD
-//   - fanout 销毁时关掉 cachedSurfaceFD
-//
-// 输入 (键鼠) 不在 fanout 处理: 每个 FramebufferHostView 自带 InputForwarder,
-// 各自连同一个 QMP input socket. macOS NSEvent 默认只送 key window 的 first
-// responder, 双 view 共存不会双发事件.
+// 输入 (键鼠) 不在 fanout 处理: 每个 view 自带 InputForwarder 连同一 QMP input socket;
+// macOS NSEvent 只送 key window first responder, 双 view 共存不双发.
 
 import Foundation
 import AppKit
@@ -44,14 +32,10 @@ final class QemuFanoutSession {
 
     // MARK: - 内部资源
 
-    /// var 而非 let: channel 可在 disconnected 时重建 (例如 guest reset 触发
-    /// QEMU iosurface backend 短暂关闭 socket, host 子进程仍在运行 — 这时不该
-    /// tearDown fanout, 应当重连 channel 让 view 订阅持续有效).
+    /// var 而非 let: channel 可在 disconnected 时重建 (guest reset 时 iosurface backend 短暂关 socket,
+    /// host 子进程仍在跑 — 不该 tearDown fanout, 应重连 channel 让 view 订阅持续有效).
     private var channel: DisplayChannel
-    /// 同 VM 唯一的 InputForwarder (QMP socket 单 client 限制, 不能多 client 并发连).
-    /// fanout 启动时 connect 一次, 停止时 disconnect; 多 view (主嵌入 + detached)
-    /// 共享同一个实例, 通过 weak 引用注入 view (FramebufferHostView.forwarder).
-    /// 每个 view 在 viewCoords 调用前先 setViewSize 同步 view 自己的 size,
+    /// 同 VM 唯一的 InputForwarder (QMP socket 单 client 限制). 多 view 共享同一实例 (weak 注入 view),
     /// NSEvent 一时刻只送一个 view, 序列化无竞争.
     private let forwarder: InputForwarder
 
@@ -69,26 +53,19 @@ final class QemuFanoutSession {
     /// 当前 LED 状态. 新 subscriber 加入立即下发, 防止 caps 指示灯滞后一拍.
     private var cachedLED: HDP.LedState?
 
-    /// 最近一次 hardware cursor 数据 (viogpudo / virtio-gpu cursor virtqueue 推过来的).
-    /// 新 subscriber 加入时 replay 一次, 防止 detached 窗口拉起后光标隐形.
-    /// CURSOR_DEFINE 推 BGRA pixels + hot spot; CURSOR_POS 推 visible flag (x/y 不用,
-    /// host 鼠标 ↔ guest tablet 已 1:1, 位置由 macOS 自己跟踪 host 鼠标).
+    /// 最近 hardware cursor 数据, 新 subscriber 加入时 replay 防 detached 窗口光标隐形.
+    /// CURSOR_DEFINE 推 BGRA pixels + hot spot; CURSOR_POS 推 visible flag (x/y 不用, host↔guest tablet 1:1).
     private var cachedCursorDefine: HDP.CursorDefine?
     private var cachedCursorPos: HDP.CursorPos?
 
-    /// channel 收到 disconnected 事件 (QEMU host 子进程退出 / GOODBYE / 网络错误)
-    /// 时回调. 上层 (AppModel) 用这个回调及时拆 fanout + 关 detached + refresh
-    /// list, 否则 detached 窗口会停在最后一帧、主嵌入会黑屏不响应, 直到下次
-    /// refreshList 兜底探测 BundleLock. AppModel.ensureQemuFanout 设置该 hook.
+    /// channel disconnected (子进程退出 / GOODBYE / 网络错误) 回调. 上层及时拆 fanout + 关 detached + refresh.
     var onDisconnected: (@MainActor () -> Void)?
 
     private var eventLoopTask: Task<Void, Never>?
     private var connectTask: Task<Void, Never>?
     private var thumbnailTimer: Timer?
 
-    /// resize debounce: master view 拖动过程中 drawableSizeWillChange 高频触发,
-    /// 不立即下发给 guest — 新尺寸来就 cancel 旧 workItem, 用户停 300ms 后真正
-    /// 推一次 RESIZE_REQUEST + MonitorsConfig. 防 Win guest 一边拖一边反复改分辨率.
+    /// resize debounce: 拖动期间高频触发不立即下发, 用户停 300ms 后才推一次 RESIZE_REQUEST + MonitorsConfig.
     private var pendingResizeWorkItem: DispatchWorkItem?
     private static let resizeDebounceSeconds: Double = 0.3
 
@@ -103,9 +80,8 @@ final class QemuFanoutSession {
         self.forwarder = InputForwarder(qmpSocketPath: qmpInputPath)
     }
 
-    /// 启动连接 + 事件循环. 不阻塞调用线程. 多次调用安全 (第二次无效).
-    /// vdagent socket 由 VMHost 进程持久 own (single-client 限制), GUI 不直连; 拖窗口 resize
-    /// 走 IPC `display.setMonitors` 让 VMHost 内的 vdagent.sendMonitorsConfig 转 guest.
+    /// 启动连接 + 事件循环. 不阻塞调用线程, 多次调用安全.
+    /// vdagent socket 由 VMHost 持久 own (single-client), GUI 不直连; resize 走 IPC display.setMonitors.
     func start() {
         guard connectTask == nil else { return }
         log.info("start: retry connecting HDP channel for vm=\(self.vmID.uuidString)")
@@ -114,9 +90,8 @@ final class QemuFanoutSession {
         runConnectLoop()
     }
 
-    /// HDP channel 重连: guest reset 让 QEMU iosurface backend 短暂关 socket 时,
-    /// 不能 tearDown fanout (view 订阅会丢, 主嵌入永久黑屏); 应当新建 DisplayChannel
-    /// 重新连同一个 socket 路径, view 订阅原样保留, 等新 SURFACE_NEW 到达自然恢复画面.
+    /// HDP channel 重连: guest reset 时不 tearDown fanout (会丢 view 订阅 → 主嵌入永久黑屏),
+    /// 而是新建 DisplayChannel 重连同一 socket, view 订阅保留, 等新 SURFACE_NEW 自然恢复.
     private func reconnectChannel() {
         log.info("reconnectChannel: rebuilding channel for vm=\(self.vmID.uuidString)")
         connectTask?.cancel(); connectTask = nil
@@ -126,13 +101,8 @@ final class QemuFanoutSession {
         runConnectLoop()
     }
 
-    /// 异步 connect 重试 (最多 60 秒). 成功后启动 eventLoop. start() / reconnectChannel()
-    /// 共用. 相同 socket 路径; eventLoop 重启时 self.channel 已是新实例.
-    /// 60s 窗口 (600 × 100ms): 加密 VM 子进程从 BundleLock 拿到 (GUI 据此判 running
-    /// 触发 fanout.start) 到 QEMU iosurface backend 真正 listen, 加上 PBKDF2 解锁 +
-    /// LUKS keyslot + secret file + swtpm + unattend regen + QEMU init, 通常 5-10s,
-    /// 冷启动可能 20s+. 老 5s 窗口对加密 VM 不够 → 永远黑屏不恢复. 明文 VM 通常 1-2s
-    /// 内连上, 不受窗口扩大影响. Task.cancel 让 stop / refreshList 中途打断.
+    /// 异步 connect 重试 (最多 60 秒, 600 × 100ms), 成功后启动 eventLoop. start() / reconnectChannel() 共用.
+    /// 60s 窗口给加密 VM 冷启动 (PBKDF2 解锁 + LUKS + swtpm + QEMU init 可能 20s+); 明文 VM 通常 1-2s.
     private func runConnectLoop() {
         let channel = self.channel
         connectTask = Task.detached(priority: .userInitiated) { [weak self] in
@@ -184,11 +154,8 @@ final class QemuFanoutSession {
 
     // MARK: - subscriber 管理
 
-    /// 注册一个 view. 若 fanout 已经收到过 SurfaceNew, 立即把当前 surface dup 一份
-    /// 喂给这个 view; 同时把当前 LED 状态同步过去.
-    /// `isResizeMaster=true` 时 view 的 drawable size 变化会通过 HDP 请求 guest
-    /// 改分辨率; false 时忽略 (例如独立窗口 view 拖大不应改 guest 分辨率,
-    /// 避免主窗口嵌入 view 跟 detached view 之间反复 resize 拉锯).
+    /// 注册一个 view. 若已收过 SurfaceNew, 立即 dup 当前 surface + replay LED/cursor 给它.
+    /// isResizeMaster 字段保留 (语义: 当前 view 是否 resize 决策者), 实际 resize 走 windowDidEndLiveResize.
     func addSubscriber(_ view: FramebufferHostView, isResizeMaster: Bool) {
         subscribers.removeAll { $0.view == nil || $0.view === view }
         subscribers.append(WeakBox(view))
@@ -196,22 +163,8 @@ final class QemuFanoutSession {
         // 注入唯一的 forwarder (weak), view 走 NSEvent → forwarder.mouseMove 等.
         view.forwarder = self.forwarder
 
-        // resize master 把自己的 drawable size 推给 guest:
-        //   1. channel.requestResize → QEMU patch 0002 RESIZE_REQUEST handler →
-        //      dpy_set_ui_info (Linux/Asahi guest 内核 virtio-gpu driver 收 EDID 改分辨率)
-        //   2. vdagent.sendMonitorsConfig → 直接通过 vdagent chardev 发
-        //      VDAgentMonitorsConfig (Win guest spice-vdagent 服务收 → SetDisplayConfig).
-        //      Win 的 ramfb / virtio-gpu driver 不响应 EDID, 必须走这条 spice 协议.
-        // 两路并发, guest 哪条 work 哪条生效 (Linux 用 #1, Win 用 #2).
-        // **debounce**: 拖动过程中高频 drawableSizeWillChange 不直接下发, 用户停
-        // resizeDebounceSeconds 后才真正推一次, 防 Win guest 反复改分辨率刷屏.
-        // **不**绑 view.onDrawableSizeChange = scheduleResize: 那样 mtkView 任何
-        // drawableSizeWillChange (window setContentSize / 主嵌入 ↔ detached 切换 / chrome
-        // 估算误差导致的 layout 微调) 都会盲发 resize 请求, 用户没拖窗口 guest 也被改
-        // 分辨率. 现在只在用户真正拖窗口结束 (NSWindow live resize) 时才发, 由
-        // DetachedVMWindowController.windowDidEndLiveResize 主动调 fanout.scheduleResize.
-        // isResizeMaster 字段保留 (语义: 当前 view 是否是 resize 决策者, 调用方据此决定
-        // 是否监听 windowDidEndLiveResize). 主嵌入永远 false.
+        // resize 不绑 view.onDrawableSizeChange (任何 layout 微调都会盲发 resize 请求改 guest 分辨率);
+        // 只在用户真正拖窗口结束 (windowDidEndLiveResize) 时由调用方主动调 fanout.scheduleResize.
         view.onDrawableSizeChange = nil
         _ = isResizeMaster
 
@@ -250,16 +203,11 @@ final class QemuFanoutSession {
         scheduleResize(width: width, height: height)
     }
 
-    /// resize 防抖入口. 拖动过程中高频被调 (live resize 期间 windowDidResize),
-    /// 真正下发由 main queue timer 触发.
-    /// 双通路:
-    ///   1) HDP RESIZE_REQUEST — GUI 自家直连 iosurface socket (Linux virtio-gpu 走这条)
+    /// resize 防抖入口. 真正下发由 main queue timer 触发, 双通路:
+    ///   1) HDP RESIZE_REQUEST — 直连 iosurface socket (Linux virtio-gpu 走这条)
     ///   2) IPC display.setMonitors → VMHost vdagent.sendMonitorsConfig (Win spice-vdagent 走这条)
-    /// IPC 走 background queue 防 main 阻塞; 失败 silent (vdagent 通道挂了不该卡 UI).
-    ///
-    /// **dedup**: 跟 guest 当前 framebuffer (cachedSurfaceInfo) 一致就跳过, 双保险防
-    /// 用户"拖动结束但 size 没真的变" 的边界情况. 没收过 SURFACE_NEW 也跳过 (不知
-    /// guest 状态不盲发).
+    /// IPC 走 background queue 防 main 阻塞; 失败 silent.
+    /// dedup: 跟 cachedSurfaceInfo 一致 / 没收过 SURFACE_NEW 都跳过 (不知 guest 状态不盲发).
     @MainActor
     private func scheduleResize(width: UInt32, height: UInt32) {
         // dedup: 跟当前 guest framebuffer 一致 → 跳过
@@ -309,8 +257,39 @@ final class QemuFanoutSession {
         }
     }
 
-    /// 当前活跃 subscriber 数 (compaction 后). 上层 (AppModel) 用这个判断
-    /// 是否还需要保留 fanout: 0 时 + VM 仍 running 时 → tearDown 节省资源.
+    /// framebuffer view 的 Cmd+V / drag-drop 文件 → IPC clipboard.paste-files (走 vdagent file_xfer,
+    /// 落 guest ~/Downloads). 长事务后台跑不阻 UI. 复用 setMonitors 同款 BundleLock.inspect → SocketClient.
+    /// nonisolated: onFilePaste 闭包从 AppKit 主线程调, 读 let bundleURL (Sendable) 后甩到后台队列.
+    nonisolated func sendPasteFiles(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        let bundleURL = self.bundleURL
+        DispatchQueue.global(qos: .userInitiated).async {
+            Self.ipcPasteFiles(bundleURL: bundleURL, urls: urls)
+        }
+    }
+
+    nonisolated private static func ipcPasteFiles(bundleURL: URL, urls: [URL]) {
+        guard let holder = BundleLock.inspect(bundleURL: bundleURL), !holder.socketPath.isEmpty else {
+            log.warning("FanoutSession pasteFiles: BundleLock.inspect 失败, 跳过 IPC")
+            return
+        }
+        let paths = urls.map { $0.path }
+        guard let data = try? JSONEncoder().encode(paths),
+              let json = String(data: data, encoding: .utf8) else {
+            log.warning("FanoutSession pasteFiles: paths JSON 编码失败")
+            return
+        }
+        let req = IPCRequest(op: IPCOp.clipboardPasteFiles.rawValue, args: ["paths": json])
+        do {
+            // 长事务 (文件上传, 单文件 4 GiB 上限): timeout 给足, 同 CLAUDE.md clipboard.paste-files ≥600s
+            let resp = try SocketClient.request(socketPath: holder.socketPath, request: req, timeoutSec: 600)
+            if !resp.ok { log.warning("FanoutSession pasteFiles IPC failed: \(resp.error?.message ?? "?")") }
+        } catch {
+            log.warning("FanoutSession pasteFiles IPC error: \(String(describing: error))")
+        }
+    }
+
+    /// 当前活跃 subscriber 数 (compaction 后). 上层据此判断是否保留 fanout (0 + running → tearDown 省资源).
     var activeSubscriberCount: Int {
         subscribers.removeAll { $0.view == nil }
         return subscribers.compactMap { $0.view }.count
@@ -337,11 +316,9 @@ final class QemuFanoutSession {
         }
     }
 
-    /// 借用任意一个 alive subscriber 的 renderer 抓 CGImage; 全部空时跳过本 tick.
-    /// 各 subscriber 的 renderer 内容相同 (映射同一份 shm), 借任一个均可.
+    /// 借任一 alive subscriber 的 renderer 抓 CGImage (各 renderer 映射同一份 shm, 内容相同); 全空跳过本 tick.
     private func captureThumbnail() {
-        // 缩略图开关关闭 → 跳过 capture, 不写 bundle/meta/thumbnail.png.
-        // 每 tick 读 (而非启动时拍板), 用户切换 toggle 立即生效.
+        // 缩略图开关关闭 → 跳过. 每 tick 读 (非启动时拍板), 切换 toggle 立即生效.
         guard ThumbnailPreferences.readEnabledFromDefaults() else { return }
         guard let view = subscribers.lazy.compactMap({ $0.view }).first,
               let cg = view.renderer.snapshotCGImage() else { return }
@@ -358,8 +335,8 @@ final class QemuFanoutSession {
 
     private func startEventLoop() {
         let stream = channel.events
-        // 高频 surfaceDamage 不能在 MainActor 上吃, 否则 30Hz draw 调度会被 starve.
-        // 跟旧实现一致: 事件循环跑在默认 actor, 状态更新切回 MainActor.
+        // 事件循环跑在默认 actor (高频 surfaceDamage 不能在 MainActor 上吃, 否则 starve 30Hz draw),
+        // 状态更新切回 MainActor.
         eventLoopTask = Task { [weak self] in
             log.info("event loop started")
             for await event in stream {
@@ -391,12 +368,8 @@ final class QemuFanoutSession {
                     }
                 case .disconnected(let reason):
                     log.info("event disconnected reason=\(String(describing: reason))")
-                    // 关键判断: host 子进程是否仍持 BundleLock.
-                    //   busy=true: QEMU 进程还在跑 (例如 Win guest 触发 ACPI reset,
-                    //     iosurface backend 短暂关 socket 重新初始化) — 重连 channel,
-                    //     view 订阅保留, 等新 SURFACE_NEW 自然恢复, 不 tearDown.
-                    //   busy=false: host 子进程退出 (QEMU exit / panic) — 真 stopped,
-                    //     onDisconnected 走 AppModel.tearDownQemuFanout + refreshList.
+                    // 按 BundleLock.isBusy 分流: busy=true (QEMU 还在跑, 如 ACPI reset) → 重连 channel 保留订阅;
+                    // busy=false (子进程退出) → 真 stopped, onDisconnected 走 tearDown + refreshList.
                     await MainActor.run {
                         let stillBusy = BundleLock.isBusy(bundleURL: self.bundleURL)
                         log.info("disconnected: BundleLock.isBusy=\(stillBusy)")
@@ -414,11 +387,8 @@ final class QemuFanoutSession {
     }
 
     /// 把新到达的 SurfaceArrival fan-out 给所有 alive subscriber.
-    /// **先一次性 dup 出所有需要的 fd, 再分发** — 之前用"第一个 subscriber 拿原 fd, 其余
-    /// dup" 的写法有 bug: 第一个 subscriber 的 FramebufferRenderer.bindShm 内 mmap 后
-    /// 立即 close(fd), close 完后续循环再 dup(arrival.shmFD) 全部 EBADF, detached 窗口
-    /// 等任何 idx>0 的 subscriber 永远收不到新 surface, 卡在 resize 前那一帧.
-    /// 现在统一: cache + 每个 subscriber 各 dup 一份, 最后再 close 原 fd, 顺序无歧义.
+    /// 必须先一次性 dup 出所有 fd 再分发: 否则第一个 view.bindSurface 内 mmap 后 close 原 fd,
+    /// 后续 dup(arrival.shmFD) 全部 EBADF. 统一: cache + 每 subscriber 各 dup, 最后 close 原 fd.
     private func broadcastSurface(_ arrival: DisplayChannel.SurfaceArrival) {
         let alive = subscribers.compactMap { $0.view }
 
@@ -435,8 +405,7 @@ final class QemuFanoutSession {
             cachedSurfaceInfo = nil
         }
 
-        // 给每个 subscriber 提前 dup 一份独立 fd. 必须在分发前全部 dup 完, 否则
-        // 第一个 view.bindSurface 内 close 原 fd 后, 后续 dup 失败.
+        // 给每个 subscriber 提前 dup 一份独立 fd (分发前全部 dup 完)
         var subFds: [Int32] = []
         subFds.reserveCapacity(alive.count)
         for _ in alive {

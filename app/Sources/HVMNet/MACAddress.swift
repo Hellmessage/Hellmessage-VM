@@ -1,6 +1,5 @@
 // HVMNet/MACAddress.swift
 // MAC 地址生成与校验. 始终使用 locally-administered 前缀 (第一字节低两位 = xx10)
-// 详见 docs/NETWORK.md "MAC 地址"
 
 import Foundation
 import HVMCore

@@ -1,7 +1,4 @@
-// hvm-dbg/Commands/BootProgressCommand.swift
-// hvm-dbg boot-progress — 启发式判断 guest 启动阶段, 给 AI agent 做粗分支决策.
-// 阶段: bios / boot-logo / ready-tty / ready-gui / unknown.
-// 详细启发式规则见 docs/DEBUG_PROBE.md boot-progress 章节.
+// hvm-dbg boot-progress — 启发式判断 guest 启动阶段 (bios / boot-logo / ready-tty / ready-gui / unknown).
 
 import ArgumentParser
 import Foundation

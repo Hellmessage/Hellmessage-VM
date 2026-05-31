@@ -1,14 +1,6 @@
 // HVMQemu/SidecarProcessRunner.swift
-// 公共 sidecar 子进程编排. QemuProcessRunner / SwtpmRunner 都是
-// 它的 thin wrapper (保留各自 public API, 内部转发到这里).
-//
-// 抽出原因: 多个 Runner 状态机 / lifecycle / stderr 落盘 / observer 几乎逐字相同 (>75%
-// 复制); bug 修一处忘另一处的风险高. 抽到一个 class 后, 通过 Config 控制差异化行为
-// (是否走 sudo, 是否带 socket-ready poll), 不同业务都跑同一份代码.
-//
-// 注: 老的 vmnet fd 透传路径 (extraFdConnections + posix_spawn) 已下线 — socket_vmnet
-//     桥接逻辑切到 hell-vm 风格新方案后, QEMU 直接 -netdev stream 连 daemon, 不需要
-//     父进程 socket()+connect() 把 fd 透传给子进程. 老路径 + posix_spawn 整段删除.
+// 公共 sidecar 子进程编排. QemuProcessRunner / SwtpmRunner 是它的 thin wrapper.
+// 差异化行为通过 Config 控制 (是否走 sudo, 是否带 socket-ready poll).
 //
 // 状态机: .idle → .running(pid) → .exited(code) | .crashed(signal)
 
@@ -43,9 +35,7 @@ public final class SidecarProcessRunner: @unchecked Sendable {
         /// 非 nil → waitForSocketReady 会 poll 此路径出现 + 进程未早退;
         /// nil → waitForSocketReady 立即返 false (业务方未提供, 不应调)
         public let socketPathForReadyWait: String?
-        /// 非 nil → 设 process.standardInput = handle (子进程 stdin = fd=0).
-        /// 用于给 swtpm 透传 LUKS 加密 key (HVMEncryption.SwtpmKeyHelper).
-        /// nil → 默认行为 (子进程继承父进程 stdin / 由 Foundation 处理)
+        /// 非 nil → 设 process.standardInput (给 swtpm 透传 LUKS key). nil → 默认 stdin 行为
         public let stdinHandle: FileHandle?
 
         public init(
@@ -121,14 +111,14 @@ public final class SidecarProcessRunner: @unchecked Sendable {
         }
         process.standardOutput = FileHandle(forWritingAtPath: "/dev/null")
         process.standardError = stderrPipe
-        // stdin 透传 (swtpm --key fd=0 用): config.stdinHandle 非 nil 时设, 否则默认
+        // stdin 透传 (swtpm --key fd=0 用)
         if let stdin = config.stdinHandle {
             process.standardInput = stdin
         }
 
-        // stderr 异步 read → 落盘. write 与 terminationHandler 的 close 在同把 lock 下序列化:
-        // 不加锁时, readability 回调中途 write 与 termination 路径 close+nil 可能交错,
-        // 导致写关闭的 fd (理论上 EBADF) 或 stderrFileHandle 引用 nil 后再 deref.
+        // stderr 异步 read → 落盘. fh 快照与 close+nil 走同把 lock 序列化, 防 nil deref.
+        // (write 不包进 lock: 写 stderr 偶尔慢会卡住 termination; 抢到的 fh 被 close 后 write
+        //  抛 EBADF 已 try? 吞掉, 可接受)
         stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             if data.isEmpty {
@@ -139,9 +129,6 @@ public final class SidecarProcessRunner: @unchecked Sendable {
             self.lock.lock()
             let fh = self.stderrFileHandle
             self.lock.unlock()
-            // 拿快照后 write — 跟 close 同一锁保护下抢到的 fh 可能在 unlock 后被 close;
-            // 不致命 (write 抛 EBADF 我们也 try?), 但避免 nil deref. 完整原子需把 write
-            // 也包在 lock 里, 写 stderr 偶尔慢 (磁盘 fsync) 会卡住 termination — tradeoff 取后者
             try? fh?.write(contentsOf: data)
         }
 
@@ -157,9 +144,7 @@ public final class SidecarProcessRunner: @unchecked Sendable {
             self.lock.lock()
             self._state = newState
             let cbs = self.observers
-            // 显式清 stderr readabilityHandler — 老逻辑只靠 availableData.isEmpty (EOF)
-            // 触发 self-clear, 但 SIGKILL 路径 kernel 可能不送干净 EOF, 读线程会陷入轮询.
-            // 进程 termination 是确定性信号, 在这里清最稳.
+            // 显式清 readabilityHandler: SIGKILL 路径 kernel 可能不送干净 EOF, 不清读线程会轮询.
             self.stderrPipe.fileHandleForReading.readabilityHandler = nil
             try? self.stderrFileHandle?.close()
             self.stderrFileHandle = nil
@@ -205,16 +190,9 @@ public final class SidecarProcessRunner: @unchecked Sendable {
         if pid > 0 { _ = kill(pid, SIGTERM) }
     }
 
-    /// 强制结束子进程. runAsRoot=true 时 SIGKILL 不能被 sudo forward, 走 pkill -P
-    /// 杀 sudo 的真正 binary 子进程.
-    ///
-    /// 双段杀策略 (修 swtpm NVRAM 腰斩 race, 见 docs/v2/01-P0-immediate.md #3):
-    ///   1. pkill -15 (SIGTERM) 给 swtpm 100ms 关 NVRAM + flush
-    ///   2. pkill -9 (SIGKILL) 兜底
-    ///   3. 最后 process.waitUntilExit 等 sudo wrapper 真退 — 此时 kernel 已 reap
-    ///      子进程, NVRAM fd 已关, 调用方可放心 release lock.
-    /// pkill 命令本身只发信号不等子进程死, 所以 pkill.waitUntilExit 不能保证 swtpm
-    /// 已 reap; 只有 process.waitUntilExit (等 sudo 自己死) 才能.
+    /// 强制结束子进程. runAsRoot=true 时 SIGKILL 不能被 sudo forward, 走 pkill -P 杀真正子进程.
+    /// 双段杀 (防 swtpm NVRAM 腰斩): pkill -15 给 100ms 关 NVRAM → pkill -9 兜底 →
+    /// process.waitUntilExit 等 sudo wrapper 真退 (此时 kernel 已 reap 子进程, 调用方可 release lock).
     public func forceKill() {
         let pid = process.processIdentifier
         guard pid > 0 else { return }
@@ -224,8 +202,7 @@ public final class SidecarProcessRunner: @unchecked Sendable {
             runSudoPkill(parentPid: pid, signal: 9)
         }
         _ = kill(pid, SIGKILL)
-        // 等 sudo wrapper 真退. 此时 swtpm 已被 kernel reap, NVRAM 写完成或丢弃,
-        // 调用方 lock.release() 后不会再有 swtpm 写一帧腰斩 NVRAM 数据的风险.
+        // 等 sudo wrapper 真退 (swtpm 已被 kernel reap, NVRAM 写完成或丢弃)
         process.waitUntilExit()
     }
 

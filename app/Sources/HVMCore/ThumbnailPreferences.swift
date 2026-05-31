@@ -1,23 +1,7 @@
 // HVMCore/ThumbnailPreferences.swift
-// 全局缩略图开关. 持久化到 com.hellmessage.vm 的 UserDefaults
-// (key: com.hellmessage.vm.thumbnail.enabled), 进程启动时读取, GUI / 子进程共享.
-//
-// 关闭时:
-//   - VZ / QEMU 路径的 thumbnail 抓帧定时器内部 short-circuit, 不调
-//     ThumbnailGenerator.capture / ThumbnailWriter.writeAtomic, 不写
-//     <bundle>/meta/thumbnail.png
-//   - 状态栏 popover (HVMApp.thumbnailForVM) 直接返 nil, 显示占位图标
-//   - 已有的 thumbnail.png 不主动删除 (用户克隆 / 备份场景仍可能依赖), 仅停止刷新
-//
-// 不影响:
-//   - 其他截图通路 (hvm-dbg screenshot 调试命令 / 用户主动截图)
-//
-// 切换路径: GUI 状态栏 toggle → ThumbnailPreferences.shared.setEnabled(_:) →
-// 同步刷 UserDefaults. 抓帧 timer 每个 tick 重新读 readEnabledFromDefaults(),
-// 即时生效 — 不需要 NotificationCenter 广播给运行中的 session.
-//
-// 跨进程共享: 显式 UserDefaults(suiteName: "com.hellmessage.vm"), 与
-// LoggingPreferences 同一 suite, 走 ~/Library/Preferences/com.hellmessage.vm.plist.
+// 全局缩略图开关, 持久化到 com.hellmessage.vm UserDefaults, GUI / 子进程共享 (同 LoggingPreferences suite).
+// 关闭时抓帧 timer short-circuit 不写 thumbnail.png + popover 返 nil, 已有 png 不删.
+// 抓帧 timer 每 tick 重读 readEnabledFromDefaults() 即时生效, 不走 NotificationCenter.
 
 import Foundation
 

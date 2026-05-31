@@ -4,11 +4,11 @@
 #       裁剪 + 嵌 swtpm → 写 LICENSE/MANIFEST → 直接落 third_party/qemu-stage/
 # 该 stage 即 bundle.sh 输入 (无中间 vendor 层, "编译后直接裁减进 .app").
 # 仅打包者跑; 最终用户机器不需要 (HVM.app 包内已带产物)
-# 详见 docs/QEMU_INTEGRATION.md 与 CLAUDE.md「QEMU 后端约束」
+# 详见 CLAUDE.md「QEMU 后端约束」
 
 set -euo pipefail
 
-# ---- 锁定参数 (修改必须同步 docs/QEMU_INTEGRATION.md 与 CLAUDE.md) ----
+# ---- 锁定参数 (修改必须同步 CLAUDE.md) ----
 QEMU_TAG="v10.2.0"
 QEMU_REPO="https://gitlab.com/qemu-project/qemu.git"
 # EDK2 aarch64 UEFI 预编译固件 (Win11 / Linux arm64 启动必需)

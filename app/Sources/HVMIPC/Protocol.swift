@@ -1,22 +1,11 @@
 // HVMIPC/Protocol.swift
 // hvm-cli / hvm-dbg / HVMHost 共享的 JSON 协议定义.
-//   M1: status / stop / kill
-//   M5: dbg.screenshot / dbg.status (hvm-dbg 走的子集)
 //
-// === 协议版本 ===
-//
-// 期望全家桶同版本编译 (hvm-cli + hvm-dbg + HVM 来自同一次 swift build), 但用户可能从老
-// .app 启动 VMHost, 又用新装好的 hvm-cli 调用 — 此时版本错位会让请求语义模糊.
-//
-// 协议:
-//   - 客户端 (SocketClient) 自动在 IPCRequest 里填 protoVersion = IPCProtocol.version
-//   - 服务端 (SocketServer 调 handler) 在 dispatcher 之前校验 protoVersion:
-//     - nil (老客户端发的请求, 没有这个字段) → 视作 legacy, 接受 (向后兼容)
-//     - != current → 返 ipc.protocol_mismatch 错误, 让客户端清晰报错
-//   - 未知 op 由 handler 兜底 (HVMHostEntry.handle default 分支), 返 ipc.unknown_op
-//
-// JSONDecoder 默认忽略未知字段, 所以 "新客户端 → 老服务端" 不会因为 protoVersion 字段失败.
-// "老客户端 → 新服务端" 因为 nil 走 legacy 分支也接受. 真正错位需双方都 != current 才会拦下.
+// 协议版本: 用户可能从老 .app 启动 VMHost 又用新 hvm-cli 调用, 版本错位需检测.
+//   - 客户端在 IPCRequest 填 protoVersion = IPCProtocol.version
+//   - 服务端校验: nil (老客户端) 视作 legacy 接受; != current 返 ipc.protocol_mismatch
+//   - 未知 op 由 handler 兜底返 ipc.unknown_op
+// JSONDecoder 忽略未知字段, 所以新→老 / 老→新 都兼容; 真正错位需双方都 != current 才拦下.
 
 import Foundation
 
@@ -61,10 +50,8 @@ public struct IPCResponse: Codable, Sendable {
                     error: IPCErrorPayload(code: code, message: message, details: details))
     }
 
-    /// 把 Codable payload 编码为 JSON, 包成 success 响应; 编码失败返 failure(ipc.encode_failed).
-    /// 替代调用方 14 处重复的 `try? JSONEncoder().encode + guard + .success/.failure` 模式.
-    /// kind: 用于失败 message, 例 "screenshot" / "ocr" / "find_text" 让客户端定位是哪类响应失败.
-    /// dateStrategy: 默认 .iso8601 (与 hvm-cli status 等业务约定一致); 调用方需要别的可显式传.
+    /// 把 Codable payload 编码为 JSON 包成 success 响应; 失败返 failure(ipc.encode_failed).
+    /// kind: 失败 message 用, 让客户端定位哪类响应失败. dateStrategy 默认 .iso8601.
     public static func encoded<T: Encodable>(
         id: String,
         payload: T,
@@ -107,57 +94,44 @@ public enum IPCOp: String, Sendable {
     case dbgBootProgress = "dbg.boot_progress"
     case dbgConsoleRead  = "dbg.console.read"
     case dbgConsoleWrite = "dbg.console.write"
-    /// hvm-dbg display-info — 通过 QMP screendump 拿 guest 真实当前 framebuffer 尺寸
-    /// (PPM header). 用于验证 spice-vdagent dynamic resize 是否真生效 (resize 触发前后
-    /// 两次 display-info 对比 widthPx/heightPx 是否变化).
+    /// hvm-dbg display-info — QMP screendump 拿 guest 真实 framebuffer 尺寸. 验证 dynamic resize 是否生效.
     case dbgDisplayInfo  = "dbg.display.info"
-    /// hvm-dbg display-resize — 模拟 GUI 拖窗口触发 host → guest resize. 在 host 进程
-    /// 内 spawn 临时 DisplayChannel + VdagentClient, 走两条通路:
-    ///   A. HDP RESIZE_REQUEST (适用 Linux virtio-gpu, ramfb 不消费)
-    ///   B. vdagent MONITORS_CONFIG (适用 Win spice-vdagent → SetDisplayConfig)
-    /// 测试规约: 调用此 op 时 GUI **不能**同时 attach (iosurface/vdagent chardev 单 client).
+    /// hvm-dbg display-resize — 模拟 GUI 拖窗口触发 host → guest resize, 走两条通路:
+    ///   A. HDP RESIZE_REQUEST (Linux virtio-gpu)  B. vdagent MONITORS_CONFIG (Win spice-vdagent)
+    /// 测试规约: 调用此 op 时 GUI 不能同时 attach (iosurface/vdagent chardev 单 client).
     case dbgDisplayResize = "dbg.display.resize"
-    /// 通过 qemu-guest-agent (qga) 在 guest 内跑 process, 拿 stdout/stderr/exit_code.
-    /// 给 hvm-dbg exec-guest 用. 配套 guest 内 qemu-ga.exe 服务 + argv 挂的
-    /// virtio-serial port org.qemu.guest_agent.0 (chardev qga). 不依赖 keyboard typing
-    /// (避 IME 字符替换) / OCR (避识别误差) / GUI mouse (避 USB tablet 坐标问题).
+    /// qemu-guest-agent (qga) 在 guest 内跑 process 拿 stdout/stderr/exit_code (给 hvm-dbg exec-guest).
+    /// 不依赖 keyboard typing / OCR / GUI mouse, 避字符替换 / 识别误差 / 坐标问题.
     case dbgExecGuest    = "dbg.exec.guest"
-    /// host → guest 单文件 push (复制本地文件到 guest 内). args: localPath, remotePath,
-    /// timeoutSec? (默认 600). 走 qemu-guest-agent guest-file-* API, 不依赖 9p / virtiofs.
-    /// VMHost 直接 open(2) localPath (HVM 是 sandboxless app, 子进程同样可读用户文件) →
-    /// 1 MiB chunk base64 经 qga unix socket → guest qemu-ga 写入 remotePath.
-    /// 设计稿: docs/v3/FILE_COPY.md
+    /// host → guest 单文件 push. args: localPath, remotePath, timeoutSec? (默认 600).
+    /// 走 qga guest-file-* API: VMHost open(2) localPath → 1 MiB chunk base64 → guest qemu-ga 写 remotePath.
     case dbgFilePush     = "dbg.file.push"
-    /// guest → host 单文件 pull. args: remotePath, localPath, timeoutSec? (默认 600).
-    /// 与 dbgFilePush 反向, 同款协议. 本地走 .hvm-tmp + atomic rename 防中断半成品.
+    /// guest → host 单文件 pull (与 push 反向, 同款协议). 本地走 .hvm-tmp + atomic rename 防半成品.
     case dbgFilePull     = "dbg.file.pull"
-    /// 列 guest 内目录 — 给 GUI "从 VM 取文件" 浏览器 + hvm-dbg dir ls 用. args: path,
-    /// timeoutSec? (默认 30). 走 qemu-guest-agent guest-exec PowerShell (Win) / find (Linux),
-    /// 返 IPCDbgListDirPayload (entries 排好: 目录在前, 名字字母序).
+    /// 列 guest 内目录 (GUI "从 VM 取文件" 浏览器 + hvm-dbg dir ls). args: path, timeoutSec? (默认 30).
+    /// 走 qga guest-exec PowerShell (Win) / find (Linux). entries 排序: 目录在前, 名字字母序.
     case dbgListDir      = "dbg.dir.list"
-    /// host (GUI) 通知 VMHost 改 guest 显示分辨率, args.width/height. VMHost 持有
-    /// 持久 vdagent socket, 通过 vdagent VDAgentMonitorsConfig 转给 guest spice-vdagent.
-    /// 取代老的"GUI 直连 vdagent socket"路径 — vdagent socket 是 single-client,
-    /// 必须由 VMHost 唯一持有 (PasteboardBridge 也用同一 socket).
+    /// 通过 HVM guest helper RPC 在 guest【登录用户会话】跑命令 (vs dbg.exec.guest 走 QGA = SYSTEM 会话).
+    /// args: shell (cmd|powershell), script, timeoutMs? (guest 侧 kill 超时). 用 IPCDbgExecPayload 返回.
+    /// 区别意义: 诊断只在 user session 可见的状态 (剪贴板 / window station / 用户环境).
+    case dbgHelperExec   = "dbg.helper.exec"
+    /// 拉 guest 网卡 + IP (qemu-ga guest-network-get-interfaces). 用 IPCGuestNetInfoPayload 返回.
+    /// GUI 详情页显 guest IP (SSH/RDP 用) / hvm-dbg guest-netinfo. 前提 guest 装 qemu-ga.
+    case guestNetInfo    = "guest.netinfo"
+    /// host (GUI) 通知 VMHost 改 guest 分辨率, args.width/height. VMHost 持久持有 vdagent socket
+    /// (single-client, 必须唯一持有), 通过 VDAgentMonitorsConfig 转给 guest spice-vdagent.
     case displaySetMonitors = "display.setMonitors"
-    /// host (GUI) 通知 VMHost 切换剪贴板共享 enabled, args.enabled = "1" / "0".
-    /// 立即生效 (不必重启 VM). 持久化由 GUI 侧负责 (改 yaml).
+    /// host (GUI) 切剪贴板共享, args.enabled = "1"/"0". 立即生效 (不必重启). 持久化由 GUI 侧改 yaml.
     case clipboardSetEnabled = "clipboard.setEnabled"
-    /// host (GUI) 把用户 Cmd+V 选中的 host 文件 list 推给 VMHost,
-    /// VMHost 走 SPICE vdagent VD_AGENT_FILE_XFER_* 流式传给 guest spice-vdagent,
-    /// guest 落 ~/Downloads. args.paths = JSON 编码的 host 绝对路径数组.
-    /// 设计稿 docs/v3/HOST_FILE_PASTE.md. 仅 QEMU 后端 + Linux/Windows guest.
-    /// 长事务: GUI 侧 timeoutSec 应 ≥ 600 (跟 FileTransferDialog 一致).
+    /// host (GUI) 把 Cmd+V 选中的 host 文件 list 推给 VMHost, 走 vdagent VD_AGENT_FILE_XFER_* 流给 guest,
+    /// 落 ~/Downloads. args.paths = JSON host 绝对路径数组. 仅 QEMU + Linux/Windows. 长事务 timeoutSec ≥ 600.
     case clipboardPasteFiles = "clipboard.paste-files"
-    /// host (GUI) 触发"一键装 helper": 走 QGA 推 EXE + 注册 schtasks ONLOGON HIGHEST
-    /// + 立即拉起. 仅 QEMU + Windows guest. args.force = "1" 时跳过 marker 检测强制重装.
-    /// 详见 docs/v3/HOST_FILE_CLIPBOARD.md §4.5 + GuestHelperInstaller.
+    /// host (GUI) "一键装 helper": QGA 推 EXE + 注册 schtasks ONLOGON HIGHEST + 立即拉起.
+    /// 仅 QEMU + Windows. args.force = "1" 跳过 marker 强制重装. 详见 GuestHelperInstaller.
     case clipboardInstallHelper = "clipboard.install-helper"
 }
 
-/// clipboard.paste-files 响应. 三分桶 (成功 / 跳过 / 失败).
-/// GUI 侧成功 → UNUserNotification "已传 N 个文件到 ~/Downloads",
-/// 跳过 + 失败合并 → ErrorDialog 列出原因.
+/// clipboard.paste-files 响应. 三分桶 (成功 / 跳过 / 失败); GUI 侧成功走通知, 跳过+失败走 ErrorDialog.
 public struct IPCClipboardPasteFilesPayload: Codable, Sendable {
     public struct Item: Codable, Sendable {
         public let path: String
@@ -213,8 +187,32 @@ public struct IPCDbgExecPayload: Codable, Sendable {
     }
 }
 
-/// dbg.file.push / dbg.file.pull 响应 — 文件传输结果摘要. 进度反馈走 client 端
-/// 字节计数 (v1 不走 IPC stream, 见 docs/v3/FILE_COPY.md D4).
+/// guest.netinfo payload — guest 网卡 + IP (镜像 QgaNetInfo, HVMIPC 不依赖 HVMQemu 故另立).
+public struct IPCGuestNetInfoPayload: Codable, Sendable {
+    public struct IPAddr: Codable, Sendable {
+        public let address: String
+        public let type: String       // "ipv4" / "ipv6"
+        public let prefix: Int?
+        public init(address: String, type: String, prefix: Int?) {
+            self.address = address; self.type = type; self.prefix = prefix
+        }
+    }
+    public struct Interface: Codable, Sendable {
+        public let name: String
+        public let mac: String?
+        public let ips: [IPAddr]
+        public init(name: String, mac: String?, ips: [IPAddr]) {
+            self.name = name; self.mac = mac; self.ips = ips
+        }
+    }
+    public let interfaces: [Interface]
+    public let primaryIPv4: String?   // GUI 一行展示用 (跳 loopback/link-local 后第一个 IPv4)
+    public init(interfaces: [Interface], primaryIPv4: String?) {
+        self.interfaces = interfaces; self.primaryIPv4 = primaryIPv4
+    }
+}
+
+/// dbg.file.push / dbg.file.pull 响应 — 文件传输结果摘要 (进度反馈走 client 端字节计数).
 public struct IPCDbgFileTransferPayload: Codable, Sendable {
     public let bytesTransferred: Int64
     public let durationMs: Int64
@@ -243,12 +241,9 @@ public struct IPCDbgListDirPayload: Codable, Sendable {
     }
 }
 
-// MARK: - Status payload (JSON-stringified for `data` values)
+// MARK: - hvm-dbg payloads
 
-// MARK: - hvm-dbg payloads (M5)
-
-/// dbg.screenshot 响应. PNG 二进制 base64 编码 (Unix socket 单帧最大 4GB, 1080p PNG 约 0.2-0.5MB,
-/// base64 后约 0.7MB, 完全够用)
+/// dbg.screenshot 响应. PNG 二进制 base64 编码.
 public struct IPCDbgScreenshotPayload: Codable, Sendable {
     public var pngBase64: String
     public var widthPx: Int
@@ -310,14 +305,13 @@ public struct IPCDbgFindTextPayload: Codable, Sendable {
     }
 }
 
-/// dbg.status 响应. 偏 guest 视角 (区别于 hvm-cli status 的 host 视角).
-/// 给 AI agent 判断 "画面变化没" / "VM 还活着没"
+/// dbg.status 响应. 偏 guest 视角 (区别于 hvm-cli status 的 host 视角), 给 agent 判断画面/存活.
 public struct IPCDbgStatusPayload: Codable, Sendable {
     public var state: String                     // RunState string
     public var guestWidthPx: Int                 // guest framebuffer 宽
     public var guestHeightPx: Int                // guest framebuffer 高
     public var lastFrameSha256: String?          // 最近一次截图 hash, 没截过 = nil
-    public var consoleAgentOnline: Bool          // M5 phase 5 console 通道接入后 = true
+    public var consoleAgentOnline: Bool
 
     public init(state: String, guestWidthPx: Int, guestHeightPx: Int,
                 lastFrameSha256: String?, consoleAgentOnline: Bool) {
@@ -344,7 +338,7 @@ public struct IPCDbgConsoleReadPayload: Codable, Sendable {
 }
 
 /// dbg.boot_progress 响应. 启发式判断 guest 启动阶段, confidence < 0.5 时 phase=unknown.
-/// 阶段定义见 docs/DEBUG_PROBE.md 的 boot-progress 章节.
+/// 阶段定义见 boot-progress 实现.
 public struct IPCDbgBootProgressPayload: Codable, Sendable {
     public var phase: String          // bios | boot-logo | ready-tty | ready-gui | unknown
     public var confidence: Float      // [0, 1]

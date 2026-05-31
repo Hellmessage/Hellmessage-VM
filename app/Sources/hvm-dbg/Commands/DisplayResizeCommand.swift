@@ -1,18 +1,11 @@
-// hvm-dbg/Commands/DisplayResizeCommand.swift
 // hvm-dbg display-resize — 模拟 GUI 拖窗口触发 host → guest resize.
 //
-// 走 IPC 让 host 子进程 spawn 临时 DisplayChannel + VdagentClient, 走两条通路:
-//   A. HDP RESIZE_REQUEST  (Linux virtio-gpu 走这条; ramfb 不消费, 只用于诊断信号到达 QEMU)
+// 走 IPC 让 host 子进程 spawn 临时 DisplayChannel + VdagentClient, 两条通路:
+//   A. HDP RESIZE_REQUEST  (Linux virtio-gpu 走这条; ramfb 不消费, 仅诊断信号到达 QEMU)
 //   B. vdagent MONITORS_CONFIG  (Win spice-vdagent → SetDisplayConfig)
 //
-// **测试规约**: 调用此命令时 GUI 不能同时 attach 该 VM (iosurface / vdagent chardev
-// 都是 single-client). 推荐流程: hvm-cli start <vm> 起 host 子进程后立即跑此命令.
-//
-// 验证 resize 是否生效: 配合 hvm-dbg display-info 前后对比 framebuffer 尺寸.
-//   1. hvm-dbg display-info Win
-//   2. hvm-dbg display-resize Win --width 1280 --height 720
-//   3. sleep 2
-//   4. hvm-dbg display-info Win
+// 测试规约: 调用时 GUI 不能同时 attach 该 VM (iosurface / vdagent chardev 都 single-client).
+// 验证生效: 配合 display-info 前后对比 framebuffer 尺寸.
 
 import ArgumentParser
 import Foundation

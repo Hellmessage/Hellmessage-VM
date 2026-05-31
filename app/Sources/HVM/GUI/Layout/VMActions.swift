@@ -1,8 +1,6 @@
 // VMActions.swift — sidebar context menu + detail 按钮共用的 VM 动作 (含 dialog 流程).
-// docs/v4/NEW_GUI_MAIN_LAYOUT.md M4/M5.
 //
-// 启动加密 VM / 删除 需要弹 dialog (密码 / 确认), store 本身不弹 (保持纯数据); 这里把
-// dialog 流程 + store 调用粘起来, 供 sidebar 右键菜单与 detail 按钮复用, 不重复两份.
+// store 本身不弹 dialog (保持纯数据); 这里把 dialog 流程 + store 调用粘起来供两端复用.
 
 
 import SwiftUI
@@ -74,7 +72,7 @@ enum VMActions {
         }
     }
 
-    // MARK: - 磁盘 (V4)
+    // MARK: - 磁盘
 
     /// 添加数据盘: 弹大小输入 → store.addDisk
     static func addDisk(_ vm: VMSummary, store: NewGUIStore, dialog: HVMUI.DialogPresenter) {

@@ -1,7 +1,5 @@
-// HVMRadius.swift — 新 GUI 圆角 token (Linear 风)
-//
-// 业务侧禁止 .cornerRadius(8) 硬数字, 一律走 HVMTheme.radius.<name>.
-// 档位: sm (小按钮/badge) → md (普通按钮/字段) → lg (Section card) → xl (Dialog).
+// HVMRadius.swift — 新 GUI 圆角 token. 业务侧禁硬数字, 走 HVMTheme.radius.<name>.
+// 档位: sm (badge) / md (按钮/字段) / lg (Section card) / xl (Dialog).
 
 
 import CoreGraphics

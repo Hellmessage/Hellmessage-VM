@@ -1,14 +1,10 @@
 // HVMQemu/QemuPaths.swift
 // 解析 QEMU 二进制 + 固件 + share 目录的实际路径.
 //
-// 严格只走 .app 包内, 不再 fallback 到 third_party/qemu-stage / brew (CLAUDE.md 第三方二进制约束):
-//   1. 环境变量 HVM_QEMU_ROOT - CI / 调试显式覆盖
-//   2. Bundle.main/Contents/Resources/QEMU - 当前进程 .app 包内
-//      a) dev: open build/HVM.app → Bundle.main = build/HVM.app
-//      b) prod: open /Applications/HVM.app → Bundle.main = /Applications/HVM.app
-//
-// 不再支持 swift run / swift test 直接跑 QEMU 路径 (测试用 env override 覆盖).
-// 决策记录见 docs/QEMU_INTEGRATION.md + CLAUDE.md "第三方二进制 / Helper 脚本约束".
+// 严格只走 .app 包内, 不 fallback 到 third_party / brew (CLAUDE.md 第三方二进制约束):
+//   1. 环境变量 HVM_QEMU_ROOT (CI / 调试显式覆盖)
+//   2. Bundle.main/Resources/QEMU (dev = build/HVM.app, prod = /Applications/HVM.app)
+// 测试走 env override 覆盖.
 
 import Foundation
 
@@ -35,9 +31,7 @@ public enum QemuPaths {
             if isValidRoot(url) { return url }
         }
 
-        // 2. Bundle.main 资源 (打包后 .app: dev = build/HVM.app, prod = /Applications/HVM.app)
-        // 不再 fallback 到 third_party/qemu-stage — 见 CLAUDE.md "第三方二进制 / Helper 脚本约束".
-        // swift run / swift test 须用 HVM_QEMU_ROOT env 显式指定 root.
+        // 2. Bundle.main 资源 (.app 包内; swift run/test 须用 HVM_QEMU_ROOT env 指定)
         if let resURL = Bundle.main.resourceURL {
             let candidate = resURL.appendingPathComponent("QEMU", isDirectory: true)
             searched.append("Bundle.main/QEMU at \(candidate.path)")
@@ -56,8 +50,7 @@ public enum QemuPaths {
         return bin
     }
 
-    /// qemu-img 绝对路径. QEMU 后端创建 / 扩容 qcow2 必经.
-    /// 已经随 QEMU 一起打包进 .app/Contents/Resources/QEMU/bin/.
+    /// qemu-img 绝对路径 (创建 / 扩容 qcow2 必经, 随 QEMU 打包入 .app).
     public static func qemuImgBinary() throws -> URL {
         let bin = try resolveRoot().appendingPathComponent("bin/qemu-img")
         guard FileManager.default.isExecutableFile(atPath: bin.path) else {
@@ -66,13 +59,9 @@ public enum QemuPaths {
         return bin
     }
 
-    // 注: 不提供 socket_vmnet locator — 该二进制**不入 .app**, 由用户 brew install,
-    // 系统级 launchd daemon (label `com.hellmessage.hvm.vmnet.*`) 拉起, 监听固定路径
-    // `/var/run/socket_vmnet[.host|.bridged.<iface>]`. QEMU argv 直接
-    // `-netdev stream,addr.type=unix,addr.path=...` 连 daemon — daemon 协议 (4-byte
-    // length-prefix framing) 跟 QEMU `-netdev stream` 兼容, 不需要 socket_vmnet_client
-    // wrapper, 不需要父进程透传 fd (老 sidecar fd-passing 路径已下线).
-    // 详见 CLAUDE.md "socket_vmnet 网络约束" 与 docs/v1/NETWORK.md.
+    // 注: 不提供 socket_vmnet locator — 该二进制**不入 .app**, 由用户 brew install + 系统级
+    // launchd daemon 拉起, QEMU argv 直接 `-netdev stream` 连固定路径 socket.
+    // 详见 CLAUDE.md "socket_vmnet 网络约束".
 
     /// EDK2 aarch64 UEFI firmware (Linux + Windows arm64 启动必需)
     public static func edk2Firmware() throws -> URL {

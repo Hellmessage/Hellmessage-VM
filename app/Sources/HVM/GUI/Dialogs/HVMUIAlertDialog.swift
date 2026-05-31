@@ -1,50 +1,9 @@
-// HVMUIAlertDialog.swift — 新 GUI 信息/警告/错误/成功提示 dialog (PR-D3)
+// HVMUIAlertDialog.swift — 新 GUI 信息/警告/错误/成功提示 dialog.
 //
-// 用法:
+// 4 level (info/warn/error/success), 各带 level icon + 主色. 视觉跟 Section.elevated 同体系.
+// 业务侧首选 async API: await dialog.alert(level:title:message:hint:probeID:), await 用户关闭.
 //
-//   1. 直接构造 + present (高级用法, 业务侧自管 handle):
-//      dialog.present { handle in
-//          HVMUI.AlertDialog(
-//              level: .error,
-//              title: "启动失败",
-//              message: "无法连接到 vmnet daemon.",
-//              hint: "检查 socket_vmnet 是否安装",
-//              probeID: "dialog.error.startVM",
-//              onClose: { handle.close() }
-//          )
-//      }
-//
-//   2. async API (推荐, 业务侧最常用; await 用户关闭):
-//      await dialog.alert(
-//          level: .error,
-//          title: "启动失败",
-//          message: "无法连接到 vmnet daemon.",
-//          hint: "检查 socket_vmnet 是否安装",
-//          probeID: "dialog.error.startVM"
-//      )
-//      print("alert closed, continue 后续流程")
-//
-// AlertLevel:
-//   .info     — 蓝色 info.circle.fill, 普通信息
-//   .warn     — 黄色 exclamationmark.triangle.fill, 警告
-//   .error    — 红色 xmark.circle.fill, 错误
-//   .success  — 绿色 checkmark.circle.fill, 成功
-//
-// 视觉 (跟 SimpleDialogCard / Section.elevated 同体系):
-//   - bg: bgOverlay + borderEmphasis (Linear 风深色卡片)
-//   - 圆角 xl, layered shadow (主层 + 近层) 强调"飘起"
-//   - icon: xl (24pt), 顶部左侧, level 主色
-//   - title: lg semibold, icon 右
-//   - X close: 右上角 ghost icon button
-//   - message: base regular textSecondary, 主体
-//   - hint: xs textTertiary, 可选, message 下方
-//   - footer: 单 "确定" 主按钮右侧
-//
-// Probe id:
-//   - 业务侧传 probeID (例 "dialog.error.startVM"); AlertDialog 内派生:
-//     <probeID>.confirm — 主按钮
-//     <probeID>.close   — X 关闭按钮
-//   - 业务侧不需要自己传子按钮 probeID
+// Probe id 派生: <probeID>.confirm (主按钮) / <probeID>.close (X). 业务侧只传 base probeID.
 
 
 import SwiftUI
@@ -141,8 +100,7 @@ struct AlertDialog: View {
                 .foregroundStyle(HVMTheme.color.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                // icon 是 xl (24pt) 加 medium weight 高出 lg font 一档,
-                // title 顶部对齐 icon 时视觉差不齐, 微调 4pt 让 title 视觉居中
+                // 微调 4pt 让 title 跟 xl icon 视觉居中
                 .padding(.top, HVMTheme.space.xs)
 
             HVMUI.Button(icon: "xmark", variant: .icon, size: .sm,
@@ -152,8 +110,7 @@ struct AlertDialog: View {
         }
     }
 
-    /// 卡片背景: bgOverlay fill + borderEmphasis stroke + layered shadow.
-    /// 跟 SimpleDialogCard / Section.elevated 同套, 保持 dialog 体系视觉统一.
+    /// 卡片背景: bgOverlay fill + borderEmphasis stroke + layered shadow (dialog 体系统一).
     private var cardBackground: some View {
         RoundedRectangle(cornerRadius: HVMTheme.radius.xl)
             .fill(HVMTheme.color.bgOverlay)
@@ -172,14 +129,8 @@ struct AlertDialog: View {
 // MARK: - DialogPresenter async API
 
 extension HVMUI.DialogPresenter {
-    /// 便利 async API — 弹 alert dialog + await 用户关闭. 业务侧首选.
-    ///
-    /// 实现细节: present 一个 AlertDialog 进 dialog 栈, 用 CheckedContinuation
-    /// 把 closure 转 async. 用户点"确定" / X / Esc 任一种关闭路径都 resume,
-    /// 业务侧 await 后才继续执行.
-    ///
-    /// **不会被 task cancel** — alert 是同步用户响应, 没有取消语义. 业务侧
-    /// 想取消应该用 .confirm (D4) 给用户选 "取消".
+    /// 便利 async API — present AlertDialog + await 用户关闭 (确定 / X / Esc 任一路径都 resume).
+    /// 无取消语义 (想取消用 .confirm).
     func alert(level: HVMUI.AlertLevel,
                title: String,
                message: String,
@@ -187,9 +138,7 @@ extension HVMUI.DialogPresenter {
                confirmLabel: String = "确定",
                probeID: String) async {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            // onDismiss 路径: present 的 onDismiss 在 dialog 关闭后 (任何路径:
-            // X / 主按钮 handle.close() / Esc / dismissAll) 触发一次, cont.resume
-            // 在那执行, 防止 Esc 关 dialog 时业务 await 永远卡住.
+            // onDismiss 在任何关闭路径 (X / 主按钮 / Esc / dismissAll) 触发一次, 防 await 卡住.
             present(
                 { handle in
                     HVMUI.AlertDialog(

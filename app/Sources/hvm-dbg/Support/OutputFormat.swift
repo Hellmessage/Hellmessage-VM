@@ -1,6 +1,5 @@
 // hvm-dbg/Support/OutputFormat.swift
-// CLI 通用输出格式 (human / json). bail/bailJSON/printJSON 共用实现在 HVMUtils,
-// 本文件保留 hvm-dbg 专属退出码映射 (含 dbg.* 系 20-23) + 调用 wrapper.
+// CLI 通用输出格式 (human / json). 共用实现在 HVMUtils, 本文件保留 hvm-dbg 专属退出码映射 + wrapper.
 
 import ArgumentParser
 import Foundation
@@ -12,7 +11,7 @@ public enum OutputFormat: String, ExpressibleByArgument, Sendable {
     case json
 }
 
-/// docs/DEBUG_PROBE.md 退出码: 与 hvm-cli 一致, + 20/21/22/23 给 hvm-dbg 专属.
+/// 退出码: 与 hvm-cli 一致, + 20/21/22/23 给 hvm-dbg 专属.
 public func exitCode(for code: String) -> Int32 {
     if code.hasPrefix("dbg.vm_not_running") { return 20 }
     if code.hasPrefix("ipc.socket_not_found") || code.hasPrefix("ipc.connection_refused") { return 21 }

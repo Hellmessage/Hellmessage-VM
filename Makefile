@@ -17,15 +17,18 @@ SIGN_IDENTITY := $(MACOS_CODESIGN_IDENTITY)
 endif
 endif
 
-# GUI: 老 GUI (app/Sources/HVM/UI/**) 已随 QEMU-only 转向退役删除
-# (docs/v4/QEMU_ONLY_PIVOT.md). 唯一 GUI 走 app/Sources/HVM/GUI/** (NewGUIAppLauncher).
+# GUI: 老 GUI (app/Sources/HVM/UI/**) 已随 QEMU-only 转向退役删除.
+# 唯一 GUI 走 app/Sources/HVM/GUI/** (NewGUIAppLauncher).
 # 老的 `#if NEW_GUI` 条件编译 guards 已全部去除 (GUI/** 无条件编译), 不再需要 -DNEW_GUI.
 SWIFT_DEFINES :=
-# QEMU 后端产物 (由 scripts/qemu-build.sh 生成, 仓库 ignore, 详见 docs/QEMU_INTEGRATION.md)
+# QEMU 后端产物 (由 scripts/qemu-build.sh 生成, 仓库 ignore)
 # stage 即裁剪 + 签名 + LICENSE/MANIFEST 后的最终成品, bundle.sh 直接拷进 .app
 # 不再有 third_party/qemu/ 中间 vendor 层
 QEMU_STAGE    := third_party/qemu-stage
 QEMU_BIN      := $(QEMU_STAGE)/bin/qemu-system-aarch64
+EDK2_BIN := third_party/edk2-stage/edk2-aarch64-code.fd
+# Windows guest helper EXE (由 make guest-helper / build.sh 生成, 仓库 ignore)
+HELPER_BIN    := patches/guest/helper-win/dist/aarch64/hvm-guest-helper.exe
 
 # SwiftPM 产物路径 (CONFIGURATION 决定 release / debug 子目录).
 # 让 bundle stamp 依赖三个 binary mtime —— SwiftPM no-op 时 mtime 不变, 整个 bundle 跳过.
@@ -36,7 +39,7 @@ HVM_CLI_BIN     := $(SWIFT_BUILD_DIR)/hvm-cli
 HVM_DBG_BIN     := $(SWIFT_BUILD_DIR)/hvm-dbg
 BUNDLE_STAMP    := $(BUILD_DIR)/.bundle-stamp
 
-.PHONY: all build bundle compile dev verify clean help icon register-types qemu qemu-clean edk2 edk2-clean build-all xed install uninstall run-app open dev-open
+.PHONY: all build bundle compile dev verify clean help icon register-types qemu qemu-clean edk2 edk2-clean guest-helper guest-helper-clean build-all xed xcode-gen open-xcode install uninstall run-app open dev-open
 
 # 默认: release 模式 + 完整 .app 签名
 all: build
@@ -50,6 +53,8 @@ help:
 	@echo "  make verify     — smoke test, 验证 .app 可启动"
 	@echo "  make icon       — 从 app/Resources/AppIcon-src.png 生成 AppIcon.icns"
 	@echo "  make xed        — Xcode 打开 SwiftPM 包 (开发期辅助, 非权威构建路径)"
+	@echo "  make xcode-gen  — 生成 app/HVM.xcodeproj (XcodeGen; team ID 走 makefile.local APPLE_DEV_TEAM; DerivedData → app/.build/xcode)"
+	@echo "  make open-xcode — 生成并用 Xcode 打开工程"
 	@echo "  make install    — 把 build/HVM.app 安装到 /Applications/ (覆盖旧版)"
 	@echo "  make uninstall  — 从 /Applications/ 卸载 HVM.app"
 	@echo "  make run-app    — build + 重启 build/HVM.app GUI 主进程 (release; 不动 host 子进程; 不写 /Applications/)"
@@ -58,12 +63,13 @@ help:
 	@echo "                    注: open / dev-open 不再同步 /Applications/HVM.app, 想测 hvm-cli start 先 make install"
 	@echo "  make clean      — 清除 build/ 和 app/.build/"
 	@echo
-	@echo "QEMU 后端 (Win arm64 / 可选 Linux arm64; 详见 docs/QEMU_INTEGRATION.md):"
+	@echo "QEMU 后端 (Win arm64 / 可选 Linux arm64):"
 	@echo "  make edk2       — 拉 EDK2 + apply Win11 patch + 编译 (~5 分钟; 仅打包者跑; Win11 ARM64 装机必需)"
 	@echo "  make edk2-clean — 清除 third_party/edk2-src/, third_party/edk2-stage/"
 	@echo "  make qemu       — 装 brew 依赖 + 拉源码 + 编译 QEMU (10-30 分钟; 仅打包者跑)"
 	@echo "  make qemu-clean — 清除 third_party/qemu-src/, third_party/qemu-stage/"
-	@echo "  make build-all  — make edk2 + make qemu + make build (发布完整流程)"
+	@echo "  make guest-helper — 编 Windows guest helper 成无 DLL 单 exe (缺 llvm-mingw 自动下载; 仅打包者跑)"
+	@echo "  make build-all  — make edk2 + qemu + guest-helper + build (发布完整流程)"
 
 # 1. SwiftPM 编译全部 executable
 # $(SWIFT_DEFINES) 现为空 (GUI guards 已去, 不再需要条件编译 flag); 保留变量占位以防未来需要
@@ -124,7 +130,7 @@ edk2-clean:
 	rm -rf third_party/edk2-src third_party/edk2-stage
 	@echo "✔ 已清除 third_party/edk2-src/, third_party/edk2-stage/"
 
-# QEMU 后端构建 (仅打包者跑; 详见 scripts/qemu-build.sh 与 docs/QEMU_INTEGRATION.md)
+# QEMU 后端构建 (仅打包者跑; 详见 scripts/qemu-build.sh)
 # 第一次跑会自动装 Homebrew + 一组锁定 brew 依赖, 拉 v10.2.0 源码, 编译 ~10-30 分钟
 # 优先用 third_party/edk2-stage/ 里的 patched firmware (给 Win11 ARM64); 没有则降级 QEMU 自带
 qemu:
@@ -135,8 +141,18 @@ qemu-clean:
 	rm -rf third_party/qemu-src third_party/qemu-stage
 	@echo "✔ 已清除 third_party/qemu-src/, third_party/qemu-stage/"
 
-# 完整发布: 确保 EDK2 + QEMU 已就绪 (不存在则触发 make edk2 + make qemu) + 组装 .app 嵌入 QEMU
-EDK2_BIN := third_party/edk2-stage/edk2-aarch64-code.fd
+# Windows guest helper EXE 构建 (仅打包者跑; 详见 patches/guest/helper-win/build.sh)
+# 出【无 DLL 单 exe】到 dist/aarch64/; 缺 llvm-mingw 自动下载锁定版本到 third_party/llvm-mingw/.
+# 产物随 bundle.sh 入 .app/Contents/Resources/GuestHelper/. 改 helper Rust 源后跑此 + make install.
+guest-helper:
+	@bash patches/guest/helper-win/build.sh
+
+# 仅清 helper 构建产物 (不删 llvm-mingw 工具链, 重编快)
+guest-helper-clean:
+	rm -rf patches/guest/helper-win/target
+	@echo "✔ 已清除 patches/guest/helper-win/target/"
+
+# 完整发布: 确保 EDK2 + QEMU + guest helper 已就绪 (缺则触发 make edk2 / qemu / guest-helper) + 组装 .app
 build-all:
 	@if [ ! -f "$(EDK2_BIN)" ]; then \
 		echo "ℹ EDK2 产物不存在 ($(EDK2_BIN)), 先跑 make edk2"; \
@@ -146,11 +162,39 @@ build-all:
 		echo "ℹ QEMU 产物不存在 ($(QEMU_BIN)), 先跑 make qemu"; \
 		$(MAKE) qemu; \
 	fi
+	@if [ ! -f "$(HELPER_BIN)" ]; then \
+		echo "ℹ guest helper 产物不存在 ($(HELPER_BIN)), 先跑 make guest-helper"; \
+		$(MAKE) guest-helper; \
+	fi
 	@$(MAKE) build
 
 # Xcode 打开 SwiftPM 包 (开发期编辑/补全用, 产物无 entitlement 不签名; 真实运行仍走 make build)
 xed:
 	xed $(PKG_DIR)/Package.swift
+
+# 生成 Xcode 工程 app/HVM.xcodeproj (XcodeGen, 开发期辅助; 非权威构建, 仍走 make build).
+# team ID 从 makefile.local 的 APPLE_DEV_TEAM 注入 DEVELOPMENT_TEAM; 不硬编码进提交文件.
+xcode-gen:
+	@command -v xcodegen >/dev/null 2>&1 || { echo "✗ 需要 xcodegen (brew install xcodegen)"; exit 1; }
+	@if [ -z "$(strip $(APPLE_DEV_TEAM))" ]; then \
+		echo "✗ 未设置 APPLE_DEV_TEAM. 请在 makefile.local (git-ignore) 写入:"; \
+		echo "      APPLE_DEV_TEAM := <你的 Apple 开发者 Team ID>"; \
+		exit 1; \
+	fi
+	@cd $(PKG_DIR) && DEVELOPMENT_TEAM="$(APPLE_DEV_TEAM)" xcodegen generate
+	@# GUI 的 DerivedData 重定向到 app/.build/xcode — 写 per-user IDEWorkspaceUserSettings.
+	@# (仅 Xcode.app GUI 读; xcodebuild 不读此设置, 只认 -derivedDataPath)
+	@USERD="$(PKG_DIR)/HVM.xcodeproj/project.xcworkspace/xcuserdata/$$(id -un).xcuserdatad"; \
+		mkdir -p "$$USERD"; \
+		sed 's|__DERIVED_DATA_ABS__|$(abspath $(PKG_DIR))/.build/xcode|' \
+			$(PKG_DIR)/xcode-support/WorkspaceSettings.xcsettings > "$$USERD/WorkspaceSettings.xcsettings"
+	@echo "✔ 已生成 $(PKG_DIR)/HVM.xcodeproj (DEVELOPMENT_TEAM 已注入)"
+	@echo "  GUI DerivedData → $(PKG_DIR)/.build/xcode (Xcode.app 生效; 首次请确认)"
+	@echo "  打开: make open-xcode"
+
+# 生成 (确保 team / DerivedData 注入) 并用 Xcode 打开工程.
+open-xcode: xcode-gen
+	open $(PKG_DIR)/HVM.xcodeproj
 
 # 安装到 /Applications/ (覆盖旧版). admin 用户对 /Applications 有写权限, 不需 sudo;
 # /Applications/HVM.app 若存在则先删 (.app 是 directory, 不能直接 cp 覆盖).
@@ -193,7 +237,7 @@ open: run-app
 # debug 模式 dev loop: 跳过 release 全模块优化 (~14s → ~3-5s).
 # debug / release 各自走 .build/debug / .build/release 子目录, BUNDLE_STAMP 在 build/
 # 顶层只一份, 切 CONFIGURATION 会 invalidate stamp 重 bundle — 跟 swift build 同步.
-# AMFI + entitlement 在 debug 签名也走 com.apple.security.virtualization, VZ guest 能正常起.
+# QEMU-only: 主进程不带 virtualization entitlement, HVF 由 QEMU 子进程 (QEMU.entitlements hypervisor) 承载.
 # 想要 release 性能测试或发布走 `make open` / `make build`.
 dev-open:
 	@$(MAKE) open CONFIGURATION=debug

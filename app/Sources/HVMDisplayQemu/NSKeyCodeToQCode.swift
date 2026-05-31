@@ -1,13 +1,7 @@
 // NSKeyCodeToQCode.swift
 //
-// macOS NSEvent.keyCode → QEMU QMP `qcode` 字符串 静态映射.
-//
-// QEMU 端的 qcode 名字定义在 qapi/ui.json 的 `QKeyCode` enum (上游标准, 不需自定义).
-// 客户端通过 QMP `input-send-event` 命令发送, payload 形如:
-//   { "type": "key", "data": { "down": <bool>,
-//                                "key": { "type": "qcode", "data": "<qcode>" } } }
-//
-// macOS keyCode 来自 Carbon HIToolbox `Events.h` 的 kVK_* 常量, 数值固定.
+// macOS NSEvent.keyCode → QEMU QMP `qcode` 字符串静态映射.
+// qcode 名定义在 qapi/ui.json 的 QKeyCode enum; keyCode 来自 Carbon Events.h 的 kVK_* 常量.
 
 import Foundation
 
@@ -20,8 +14,6 @@ public enum HVMQCode {
     }
 
     /// 主映射表 (US ANSI 键盘布局; 修饰键 / 功能键 / 小键盘全覆盖).
-    /// 如发现 guest 内某键无响应, 优先确认: (a) NSEvent 实际 keyCode 是否在表里;
-    /// (b) QEMU 是否在 InputKeyEvent 字段加了新 qcode.
     private static let mapping: [UInt16: String] = [
         // ANSI 字母 (kVK_ANSI_*)
         0x00: "a",  0x0B: "b",  0x08: "c",  0x02: "d",  0x0E: "e",

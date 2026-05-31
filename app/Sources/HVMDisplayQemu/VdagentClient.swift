@@ -1,40 +1,24 @@
 // HVMDisplayQemu/VdagentClient.swift
 //
-// spice-vdagent client. Host 端通过 QEMU 的 virtio-serial chardev unix socket
-// (path=com.redhat.spice.0) 跟 guest 内的 spice-vdagent 服务双向通话.
+// spice-vdagent client. Host 通过 QEMU virtio-serial chardev unix socket
+// (path=com.redhat.spice.0) 跟 guest 内 spice-vdagent 双向通话.
 //
-// 当前承载两条业务:
-//   1) MONITORS_CONFIG  — host 拖窗口 → 通知 guest 改分辨率
-//      (guest 内 spice-vdagent 服务收到 → SetDisplayConfig / xrandr → 改分辨率)
-//   2) CLIPBOARD 双向同步 — host ↔ guest 剪贴板桥, UTF-8 文本 (PasteboardBridge 用)
+// 承载: MONITORS_CONFIG (改分辨率) + CLIPBOARD 双向同步 + FILE_XFER (host→guest 文件传输).
+// 不链 spice-gtk / 不起 -spice server (显示走 patch 0002 iosurface), vdagent 协议本身
+// 公开对称, 直接在 Swift 层实现 client.
 //
-// 为啥不接 SPICE GTK:
-//   - HVM 主进程不链接 spice-gtk, 也没起 -spice server, 显示走 patch 0002 iosurface
-//   - vdagent 协议本身公开且对称, 直接在 Swift 层实现 client 即可
-//
-// 协议规范 (spice-protocol/spice/vd_agent.h):
+// 协议 (spice-protocol/spice/vd_agent.h):
 //   chunk header (8B): { port: u32 = VDP_CLIENT_PORT(1), size: u32 }
 //   message header (20B): { protocol: u32=1, type: u32, opaque: u64=0, size: u32 }
-//   data 视 type 而定. 已实现的 type:
-//     - VD_AGENT_MONITORS_CONFIG (2)        — 改分辨率
-//     - VD_AGENT_ANNOUNCE_CAPABILITIES (6)  — caps 协商 (启动握手必发)
-//     - VD_AGENT_CLIPBOARD_GRAB (7)         — "我有这些 mime 类型"
-//     - VD_AGENT_CLIPBOARD_REQUEST (8)      — "把那个 mime 内容发我"
-//     - VD_AGENT_CLIPBOARD (4)              — 实际数据
-//     - VD_AGENT_CLIPBOARD_RELEASE (9)      — "我的剪贴板没了"
-//     - VD_AGENT_FILE_XFER_START (10)       — host → guest 起文件传输
-//     - VD_AGENT_FILE_XFER_STATUS (11)      — 双向状态码 (CAN_SEND_DATA / SUCCESS / 错误)
-//     - VD_AGENT_FILE_XFER_DATA (12)        — chunk 数据
+//   已实现 type: MONITORS_CONFIG(2) / CLIPBOARD(4) / ANNOUNCE_CAPABILITIES(6) /
+//   CLIPBOARD_GRAB(7) / REQUEST(8) / RELEASE(9) / FILE_XFER_START(10) / STATUS(11) / DATA(12).
 //
-// 协商 caps:
-//   CLIPBOARD_BY_DEMAND (5) + CLIPBOARD_SELECTION (6).
-//   不协商基础 CLIPBOARD (3) — 那条是无 GRAB/REQUEST 的 push, 跟我们 pull 模式冲突.
-//   FILE_XFER 无单独 enable cap, 只看 guest 是否置 CAP_FILE_XFER_DISABLED (8); 置位即禁用.
+// 协商 caps: CLIPBOARD_BY_DEMAND (5) + CLIPBOARD_SELECTION (6). 不协商基础 CLIPBOARD (3)
+//   (无 GRAB/REQUEST 的 push, 跟 pull 模式冲突). FILE_XFER 无 enable cap, 只看 guest 是否
+//   置 CAP_FILE_XFER_DISABLED.
 //
-// 失败策略:
-//   - socket / write 错误 silently swallow + log.warn — vdagent 通道挂了不能阻塞
-//     主路径 (拖窗口 / 剪贴板)
-//   - 已 connect 后 read loop 收到 EOF / read 错误 → close + lazy 重连等下次 send
+// 失败策略: socket / write 错误 silently swallow + log.warn (不阻主路径);
+//   read loop EOF / 错误 → close + lazy 重连等下次 send.
 
 import Foundation
 import Darwin
@@ -56,10 +40,7 @@ public final class VdagentClient: @unchecked Sendable {
     private static let VD_AGENT_CLIPBOARD_GRAB: UInt32           = 7
     private static let VD_AGENT_CLIPBOARD_REQUEST: UInt32        = 8
     private static let VD_AGENT_CLIPBOARD_RELEASE: UInt32        = 9
-    // 注: 这些 type 编号严格按 spice-protocol/spice/vd_agent.h enum 顺序, 不是 12/13/14.
-    // 之前我把 START/STATUS/DATA 编错成 12/13/14, 与 CLIPBOARD_RELEASE=9 之后下一个 START=10
-    // 错位 2, guest vdagent 收到未知 type 静默丢弃, host 等 CAN_SEND_DATA 永远不来 → 30s
-    // timeout. 正确顺序: START=10, STATUS=11, DATA=12.
+    // type 编号严格按 vd_agent.h enum 顺序: START=10, STATUS=11, DATA=12 (不是 12/13/14).
     private static let VD_AGENT_FILE_XFER_START: UInt32          = 10
     private static let VD_AGENT_FILE_XFER_STATUS: UInt32         = 11
     private static let VD_AGENT_FILE_XFER_DATA: UInt32           = 12
@@ -67,7 +48,6 @@ public final class VdagentClient: @unchecked Sendable {
     // capabilities 位编号 (见 vd_agent.h enum VDAgentCap)
     private static let VD_AGENT_CAP_CLIPBOARD_BY_DEMAND: UInt32  = 5
     private static let VD_AGENT_CAP_CLIPBOARD_SELECTION: UInt32  = 6
-    // 注: cap 位号也错过 — 之前写 8 (那是 GUEST_LINEEND_LF). 正确 13.
     private static let VD_AGENT_CAP_FILE_XFER_DISABLED: UInt32   = 13
 
     /// FILE_XFER DATA chunk payload 上限 (字节). SPICE upstream VD_AGENT_MAX_DATA = 2048,
@@ -99,12 +79,9 @@ public final class VdagentClient: @unchecked Sendable {
     private var remoteCaps: UInt32 = 0
     private var capsNegotiated = false
 
-    /// useSelectionPrefix: spice 协议要求双方都 advertise CAP_CLIPBOARD_SELECTION 时,
-    /// GRAB/REQUEST/CLIPBOARD/RELEASE 数据带 1 byte selection + 3 byte pad 前缀.
-    /// host 永远 advertise (sendCapabilitiesLocked 写死), 实际是否启用看 remoteCaps.
-    ///
-    /// 实测 UTM Guest Tools 的 vdagent.exe (Win 版): caps=0x46B7, bit 6 (SELECTION) 缺,
-    /// 它发的 GRAB 数据 = 4 bytes (单 mime, 无 prefix). 严格按 cap 协商即可.
+    /// useSelectionPrefix: 双方都 advertise CAP_CLIPBOARD_SELECTION 时, GRAB/REQUEST/
+    /// CLIPBOARD/RELEASE 数据带 1 byte selection + 3 byte pad 前缀. host 永远 advertise,
+    /// 实际是否启用看 remoteCaps (UTM Win vdagent 不带 SELECTION, 走无 prefix).
     private var useSelectionPrefix: Bool {
         return (remoteCaps & (UInt32(1) << VdagentClient.VD_AGENT_CAP_CLIPBOARD_SELECTION)) != 0
     }
@@ -198,12 +175,8 @@ public final class VdagentClient: @unchecked Sendable {
         }
     }
 
-    /// host pasteboard 变化时调: GRAB 广告所有有内容的 mime (text / image PNG / ...) →
-    /// 等 guest REQUEST → 发 CLIPBOARD 数据. 实现简化: 我们直接把 GRAB + 所有 mime DATA
-    /// 缓存在 client 内, 收 REQUEST 时按 mime 翻出.
-    /// 没收 REQUEST 也不重发 (每次新内容覆盖旧的).
-    ///
-    /// 老 sendClipboardText(_:) 接口废弃, 改 sendClipboardData(text:image:); 两者 nil
+    /// host pasteboard 变化时调: GRAB 广告所有有内容的 mime → 等 guest REQUEST → 发 CLIPBOARD.
+    /// pending 内容缓存在 client 内, 收 REQUEST 时按 mime 翻出; 没收也不重发. text/image 均 nil
     /// 等于 release.
     public func sendClipboardData(text: String?, image: Data?) {
         queue.async { [weak self] in
@@ -249,18 +222,16 @@ public final class VdagentClient: @unchecked Sendable {
         sendMessageLocked(type: VdagentClient.VD_AGENT_CLIPBOARD_RELEASE, payload: body)
     }
 
-    /// 仅 queue 内访问: host 这边正在持有 (尚未发送 / 等 guest REQUEST) 的内容.
-    /// text + image + file_list 三轨, GRAB 同时广告所有 mime, guest 自己挑 REQUEST 哪个.
+    /// 仅 queue 内访问: host 持有 (尚未发送 / 等 guest REQUEST) 的内容. text + image +
+    /// file_list 三轨, GRAB 同时广告所有 mime, guest 自己挑 REQUEST 哪个.
     private var pendingHostText: String?
     private var pendingHostImage: Data?      // PNG bytes
-    /// pendingHostFileList: 已上传到 guest 的文件路径列表 (guest 视角绝对路径). 例:
-    /// ["C:\\Users\\Public\\hvm-clipboard\\foo.png"]. 真正 CLIPBOARD 应答时打成 text/uri-list
-    /// (file:/// CRLF 分隔) 发给 guest, guest vdagent 把 CF_HDROP 推到 Windows clipboard.
+    /// 已上传到 guest 的文件路径列表 (guest 视角绝对路径). CLIPBOARD 应答时打成 text/uri-list
+    /// (file:// CRLF 分隔), guest vdagent 把 CF_HDROP 推到 Windows clipboard.
     private var pendingHostFileList: [String]?
 
-    /// (实验/探针 / UTM-style 文件剪贴板) 设置 guest 端文件列表 (guest 视角的绝对路径).
-    /// 调用方上传文件到 guest 之后调本方法, 触发 GRAB 广告 mime=6.
-    /// 传空数组等同 release.
+    /// (实验, UTM-style 文件剪贴板) 设置 guest 端文件列表. 上传完文件后调, 触发 GRAB 广告
+    /// mime=6. 空数组等同 release.
     public func sendClipboardFileList(_ guestPaths: [String]) {
         queue.async { [weak self] in
             guard let self else { return }
@@ -277,19 +248,16 @@ public final class VdagentClient: @unchecked Sendable {
 
     // MARK: - FILE_XFER 公共 API
 
-    /// 分配一个新 transfer id 并发 FILE_XFER_START 给 guest.
-    /// START body = id(u32) + GKeyFile-style ASCII text ("[vdagent-file-xfer]\nname=<basename>\nsize=<bytes>\n").
-    /// 返回的 id 用于后续 sendFileXferData / onFileXferStatus 关联.
-    /// guest 在 caps 里置 CAP_FILE_XFER_DISABLED 时, caller 应先查 isFileXferDisabledByGuest
-    /// 跳过, 但这里允许写 — guest 自己会回 DISABLED status, 路径仍走得通.
+    /// 分配新 transfer id 并发 FILE_XFER_START. body = id(u32) + GKeyFile-style ASCII
+    /// ("[vdagent-file-xfer]\nname=<basename>\nsize=<bytes>\n"). 返回 id 关联后续
+    /// sendFileXferData / onFileXferStatus.
     @discardableResult
     public func sendFileXferStart(name: String, size: UInt64) -> UInt32 {
-        // id 分配走 queue.sync 取原子值, 避免外部 caller 拿不到 id (queue.async 是 fire-and-forget).
+        // id 分配走 queue.sync 取原子值 (queue.async 是 fire-and-forget 拿不到 id).
         var tmp: UInt32 = 0
         queue.sync { [weak self] in
             guard let self else { return }
             tmp = self.nextTransferId
-            // wrap-around 防御: u32 在 4G transfers 后回卷; 我们到不了那一步, 但留兜底.
             self.nextTransferId = (self.nextTransferId == UInt32.max) ? 1 : (self.nextTransferId + 1)
         }
         let assignedId = tmp   // immutable 重绑, 让 @Sendable closure 安全捕获
@@ -300,8 +268,7 @@ public final class VdagentClient: @unchecked Sendable {
                 log.warning("vdagent FILE_XFER_START dropped: not connected (id=\(assignedId, privacy: .public) name=\(name, privacy: .public))")
                 return
             }
-            // GKeyFile body: 简单 INI-style 文本, name 不含路径 (caller 应已取 basename).
-            // size 用十进制字符串; spice-vdagent 端用 g_key_file_parse_data_from_data 解析.
+            // GKeyFile body (INI-style), name 不含路径; spice-vdagent 端 g_key_file 解析.
             let meta = "[vdagent-file-xfer]\nname=\(name)\nsize=\(size)\n"
             var body = Data(capacity: 4 + meta.utf8.count)
             VdagentClient.appendU32(assignedId, to: &body)
@@ -388,8 +355,8 @@ public final class VdagentClient: @unchecked Sendable {
         readThread = t
         t.start()
 
-        // 主动握手 — 即便 guest vdagent 还没起来, QEMU chardev 是 server, 写入会 buffer
-        // 等 guest 连上时 flush. caps_negotiated 仍由收到对端的 ANNOUNCE 触发置 true.
+        // 主动握手 — guest vdagent 没起来时 QEMU chardev (server) 会 buffer 等连上 flush.
+        // caps_negotiated 仍由收到对端 ANNOUNCE 触发置 true.
         sendCapabilitiesLocked(request: 1)
     }
 
@@ -414,17 +381,13 @@ public final class VdagentClient: @unchecked Sendable {
 
     // MARK: - 内部: 写消息
 
-    /// SPICE 单 chunk body 上限 (VD_AGENT_MAX_DATA). 超过 → 切多 chunk.
-    /// 跟 fileXferChunkSize (2000, 用于 DATA chunk 内 payload) 不同 — 这个是 chunk
-    /// body 整体上限 (含 message header 20B + payload 字节数).
+    /// SPICE 单 chunk body 上限 (VD_AGENT_MAX_DATA). 超过 → 切多 chunk. 跟 fileXferChunkSize
+    /// (2000, DATA chunk 内 payload) 不同 — 这个是 chunk body 整体上限 (含 msg header 20B).
     private static let chunkBodyMaxBytes: Int = 2048
 
-    /// queue 内调用. 把 message 切多 chunk 发出去 (chunk body ≤ 2048).
-    /// chunk 1 = chunk_hdr(8B) + msg_hdr(20B) + payload[0..maxFirstChunkData)
-    /// chunk N = chunk_hdr(8B) + payload[next..next+maxChunkData)
-    /// msg_hdr.size = 整个 payload 长度 (不是 chunk 长度); chunk_hdr.size = 本 chunk body 长.
-    /// 接收端 (runReadLoop) 已支持多 chunk reassembly, 这里 send 路径补齐.
-    /// 失败 → close + 下次 lazy 重连.
+    /// queue 内调用. 把 message 切多 chunk 发 (chunk body ≤ 2048):
+    ///   chunk 1 = chunk_hdr(8B) + msg_hdr(20B) + payload 首段; chunk N = chunk_hdr(8B) + payload 续段.
+    ///   msg_hdr.size = 整 payload 长; chunk_hdr.size = 本 chunk body 长. 失败 → close + lazy 重连.
     private func sendMessageLocked(type: UInt32, payload: Data) {
         let msgHeaderSize = 20
         let maxFirstChunkData = VdagentClient.chunkBodyMaxBytes - msgHeaderSize  // 2028
@@ -483,12 +446,9 @@ public final class VdagentClient: @unchecked Sendable {
         log.info("vdagent ANNOUNCE_CAPABILITIES sent caps=0x\(String(caps, radix: 16), privacy: .public) request=\(request, privacy: .public)")
     }
 
-    /// queue 内调用. 发 GRAB 声明 host 端有 UTF-8 文本.
-    /// useSelectionPrefix=true 数据布局: selection(1B) + pad(3B) + N × uint32 mime types
-    /// useSelectionPrefix=false 直接: N × uint32 mime types (Win 版 vdagent 走这条)
-    /// queue 内调用. 发 GRAB 声明 host 端有哪些 mime 可用. 同时广告 text + image PNG +
-    /// (实验) FILE_LIST, guest 按需 REQUEST 哪条 mime (Telegram 优先 image, Notepad 优先 text,
-    /// Explorer 优先 FILE_LIST).
+    /// queue 内调用. 发 GRAB 声明 host 端有哪些 mime 可用 (text + image PNG + 实验 FILE_LIST),
+    /// guest 按需 REQUEST. 数据布局: useSelectionPrefix=true 时 selection(1B)+pad(3B)+N×mime(4B);
+    /// false 时直接 N×mime(4B) (Win vdagent 走这条).
     private func sendGrabLocked() {
         var mimes: [UInt32] = []
         if pendingHostText  != nil { mimes.append(VdagentClient.MIME_UTF8_TEXT) }
@@ -573,12 +533,9 @@ public final class VdagentClient: @unchecked Sendable {
         let fd = sockFD  // snapshot — 断开后 fd 会被关闭, read 立即返 0/-1 退出
         guard fd >= 0 else { return }
 
-        // chunk-reassembly state machine (readThread own, 不跨线程).
-        // spice vdagent 协议: 长 message 分多 chunk 发送.
-        //   - 第一 chunk 的 body = VDAgentMessage header (20B) + 部分 data
-        //   - 后续 chunk 的 body = 继续 data (no message header)
-        //   - 每个 chunk 独立有 chunk header (port(4) + size(4))
-        //   - 通过 message header.size 字段总长判定何时拼完
+        // chunk-reassembly state machine (readThread own). 长 message 分多 chunk:
+        //   第一 chunk body = msg header (20B) + 部分 data; 后续 chunk body = 续 data;
+        //   每个 chunk 有独立 chunk header; 按 msg header.size 总长判定拼完.
         var rolling = Data()
         var inMessage = false
         var curMsgType: UInt32 = 0
@@ -684,11 +641,8 @@ public final class VdagentClient: @unchecked Sendable {
         remoteCaps = caps
         capsNegotiated = true
         log.info("vdagent guest caps=0x\(String(caps, radix: 16), privacy: .public) request=\(request, privacy: .public) selPrefix=\(self.useSelectionPrefix, privacy: .public)")
-        // spice 协议规定: 收到 request=1 的 ANNOUNCE 必须回 ANNOUNCE with request=0,
-        // 否则对端 (guest spice-vdagent) 视为握手未完成, 拒收 GRAB/REQUEST/CLIPBOARD.
-        // 之前 doConnect 主动发过 (with request=1) 是 host 端 initiator; 但 guest 可能
-        // 在我们 send 之前已经发过自己的 ANNOUNCE, 我们也必须回应它的 request=1.
-        // 用 request=0 防 ping-pong 死循环 (对端收到 request=0 不再回, 链路收敛).
+        // spice 协议: 收到 request=1 的 ANNOUNCE 必须回 ANNOUNCE with request=0, 否则对端
+        // 视为握手未完成拒收 GRAB/REQUEST/CLIPBOARD. 回 request=0 防 ping-pong 死循环.
         if request == 1 {
             sendCapabilitiesLocked(request: 0)
         }
@@ -753,10 +707,8 @@ public final class VdagentClient: @unchecked Sendable {
             log.info("vdagent guest REQUEST IMAGE_PNG sel=\(selection, privacy: .public) → 发 CLIPBOARD (\(img.count, privacy: .public) bytes PNG)")
             sendClipboardImageLocked(image: img, selection: selection)
         case VdagentClient.MIME_FILE_LIST:
-            // 注: 探针实验 (2026-05-28) 实测 UTM Guest Tools vdagent.exe 不实现 FILE_LIST,
-            // 永远不会走到这里. 留代码备用 — 万一未来 vdagent 升级支持了能直接用.
-            // 真正的 UTM-style 文件剪贴板走 HVMFileClipboardBridge + 自家 helper EXE
-            // (docs/v3/HOST_FILE_CLIPBOARD.md), 跟 vdagent 完全独立通路.
+            // UTM Guest Tools vdagent.exe 不实现 FILE_LIST, 永远不会走到这里; 留代码备用.
+            // 真正的文件剪贴板走 HVMFileClipboardBridge + 自家 helper EXE (独立通路).
             guard let paths = pendingHostFileList, !paths.isEmpty else {
                 log.info("vdagent guest REQUEST FILE_LIST sel=\(selection, privacy: .public) 但 pendingHostFileList 为空, skip")
                 return
@@ -805,8 +757,8 @@ public final class VdagentClient: @unchecked Sendable {
         onClipboardTextReceived?(text)
     }
 
-    /// guest → host FILE_XFER_STATUS 解析. payload = id(u32) + result(u32) [+ detail bytes...].
-    /// detail 部分目前忽略 (spice-vdagent 几乎不带 detail; 即使有也是 text 给用户看).
+    /// guest → host FILE_XFER_STATUS 解析. payload = id(u32) + result(u32) [+ detail].
+    /// detail 忽略 (spice-vdagent 几乎不带).
     private func handleFileXferStatusLocked(_ payload: Data) {
         guard payload.count >= 8 else {
             log.warning("vdagent FILE_XFER_STATUS payload 太短 \(payload.count, privacy: .public)")
@@ -820,15 +772,10 @@ public final class VdagentClient: @unchecked Sendable {
         onFileXferStatus?(id, result)
     }
 
-    /// 按 useSelectionPrefix 解析 payload 头. 返回 (selection, mime 起始 offset).
-    /// 没有 selection prefix 时, selection 默认 0 (CLIPBOARD), mime offset = 0.
-    /// **兼容性**: 即便协商 useSelectionPrefix=true, 仍允许对端发不带 prefix 的短消息
-    /// (UTM Win vdagent 即便 host advertise SELECTION 它自己也不带 prefix). 通过 payload
-    /// 长度推断: 无 prefix 时 payload 是 N*4 (mime entries) 或 0+data; 带 prefix 时 4+...
+    /// 按 useSelectionPrefix 解析 payload 头, 返回 (selection, mime 起始 offset).
+    /// 无 prefix 时 selection 默认 0 (CLIPBOARD), offset = 0; payload 太短也兜底当无 prefix.
     private func parseSelectionPrefix(_ payload: Data) -> (UInt8, Int) {
-        // 严格无 prefix: 直接 mime 起始
         if !useSelectionPrefix { return (VdagentClient.SELECTION_CLIPBOARD, 0) }
-        // 协商有 prefix 但 payload 太短不够 4 字节前缀, 兜底当无 prefix
         guard payload.count >= 4 else { return (VdagentClient.SELECTION_CLIPBOARD, 0) }
         let sel = payload[payload.startIndex]
         return (sel, 4)

@@ -1,7 +1,5 @@
 // HVMUtils/Hashing.swift
 // 跨模块共用的 hash 工具.
-// 收纳前散点: HVMDisplay/ScreenCapture (VZ 截图) + HVMQemu/QemuScreenshot (QEMU 截图)
-// 同一份 SHA256 → hex 编码复制粘贴 2 份.
 
 import Foundation
 import CryptoKit

@@ -21,30 +21,18 @@ public enum HVMPaths {
         appSupport.appendingPathComponent("run", isDirectory: true)
     }
 
-    /// 加密 VM (VZ 路径) sparsebundle attach 后的挂载点根目录,
-    /// ~/Library/Application Support/HVM/mounts.
-    /// 设计稿 docs/v3/ENCRYPTION.md v2.3.
-    public static var mountsRoot: URL {
-        appSupport.appendingPathComponent("mounts", isDirectory: true)
+    /// tray 归属协调锁 (见 TRAY_OWNERSHIP_DESIGN): GUI 进程在世时持有 gui-owner.lock;
+    /// 无 GUI 时某个 VMHost 持有 tray-leader.lock 渲染聚合 tray.
+    public static var guiOwnerLockPath: URL {
+        runDir.appendingPathComponent("gui-owner.lock")
+    }
+    public static var trayLeaderLockPath: URL {
+        runDir.appendingPathComponent("tray-leader.lock")
     }
 
-    /// 给定 VM uuid 的 sparsebundle 挂载点 (mountsRoot/<uuid8>/).
-    /// 用 uuid 前 8 位避免中文 / 特殊字符 / 同名 VM 冲突, 同时控制路径长度
-    /// (Unix domain socket sun_path 限 104 字符, 但 socket 走 runDir 不走 mount, 这里
-    /// 主要是防文件名冲突).
-    public static func mountpointFor(uuid: UUID) -> URL {
-        let uuid8 = uuid.uuidString.lowercased().prefix(8)
-        return mountsRoot.appendingPathComponent(String(uuid8), isDirectory: true)
-    }
-
-    /// 全局日志目录. HVM 软件本身的所有 host 侧 .log 都落这里:
-    ///   - 顶层 yyyy-MM-dd.log: LogSink mirror 的 os.Logger 输出 (跨 VM)
-    ///   - 子目录 <displayName>-<uuid8>/: 该 VM 的 host 侧 .log
-    ///       host-<date>.log     ← VMHost (HVM 进程) stdout/stderr
-    ///       qemu-stderr.log     ← QEMU host 进程 stderr
-    ///       swtpm.log           ← swtpm 自身 log
-    ///       swtpm-stderr.log    ← swtpm 进程 stderr
-    /// guest 自身串口输出 (console-*.log) 仍留 bundle/logs/, 不在此处.
+    /// 全局日志目录. HVM 软件本身的所有 host 侧 .log 都落这里 (顶层 yyyy-MM-dd.log 跨 VM,
+    /// 子目录 <displayName>-<uuid8>/ 放该 VM 的 host-/qemu-stderr/swtpm log).
+    /// guest 自身串口输出 console-*.log 仍留 bundle/logs/, 不在此处.
     public static var logsDir: URL {
         appSupport.appendingPathComponent("logs", isDirectory: true)
     }
@@ -67,28 +55,17 @@ public enum HVMPaths {
         return out.isEmpty ? "vm" : out
     }
 
-    /// IPSW 缓存目录, ~/Library/Application Support/HVM/cache/ipsw
-    public static var ipswCacheDir: URL {
-        appSupport.appendingPathComponent("cache/ipsw", isDirectory: true)
-    }
-
-    /// virtio-win.iso 缓存目录, ~/Library/Application Support/HVM/cache/virtio-win
-    /// (Win11 arm64 装机必需的 virtio-blk/net/gpu 驱动 ISO; 全局共享一份)
+    /// virtio-win.iso 缓存目录 (Win11 arm64 装机必需的 virtio 驱动 ISO, 全局共享一份)
     public static var virtioWinCacheDir: URL {
         appSupport.appendingPathComponent("cache/virtio-win", isDirectory: true)
     }
 
-    /// UTM Guest Tools ISO 缓存目录, ~/Library/Application Support/HVM/cache/utm-guest-tools
-    /// (Win guest 装拖窗口动态 resize 用的 ARM64 native vdagent + utmapp 自家 viogpudo;
-    ///  ~120MB; 全局共享一份). 老 cache `cache/spice-tools/` (上游 spice-guest-tools.exe
-    ///  时代) 不自动迁移, 由 user 自行清理 orphan.
+    /// UTM Guest Tools ISO 缓存目录 (Win guest 动态 resize 用的 ARM64 vdagent + viogpudo, 全局共享一份)
     public static var utmGuestToolsCacheDir: URL {
         appSupport.appendingPathComponent("cache/utm-guest-tools", isDirectory: true)
     }
 
-    /// Linux / Windows guest ISO 自动下载缓存根目录,
-    /// ~/Library/Application Support/HVM/cache/os-images
-    /// 子目录按 family 分: ubuntu/ debian/ fedora/ alpine/ rocky/ opensuse/ custom/
+    /// Linux / Windows guest ISO 自动下载缓存根目录, 子目录按 family 分
     public static var osImagesCacheDir: URL {
         appSupport.appendingPathComponent("cache/os-images", isDirectory: true)
     }
@@ -98,8 +75,7 @@ public enum HVMPaths {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).sock")
     }
 
-    /// QEMU 后端运行时 socket 路径 (per-VM, transient). 由 QemuHostEntry / qemu-launch 共用,
-    /// 避免硬编码字符串在多处漂移.
+    /// QEMU 后端运行时 socket 路径 (per-VM, transient), 由 QemuHostEntry / qemu-launch 共用
     public static func qmpSocketPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).qmp")
     }
@@ -112,9 +88,8 @@ public enum HVMPaths {
     public static func swtpmPidPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).swtpm.pid")
     }
-    /// QEMU 进程的 -pidfile 路径. host 进程异常退出 (SIGKILL / OOM / 之前的 SIGPIPE) 时,
-    /// QEMU 子进程会 reparent 到 launchd 成 orphan 占着 NVRAM / 磁盘 fd. 下次 host 启动前
-    /// 用本 pid 文件抓老 pid kill 掉. 详见 HVMQemu/SidecarOrphanReaper 注释.
+    /// QEMU 进程的 -pidfile 路径. host 异常退出时 QEMU 会 reparent 到 launchd 成 orphan 占着 fd;
+    /// 下次 host 启动前用本 pid 抓老进程 kill 掉. 详见 HVMQemu/SidecarOrphanReaper.
     public static func qemuPidPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).qemu.pid")
     }
@@ -132,26 +107,18 @@ public enum HVMPaths {
     public static func vdagentSocketPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).vdagent.sock")
     }
-    /// qemu-guest-agent (qemu-ga.exe in guest, UTM Guest Tools 装包含) 的 virtio-serial
-    /// chardev unix socket. host 通过本 socket 发 JSON `guest-exec` 命令在 guest 内跑
-    /// process (PowerShell / cmd / 任何 .exe), 拿 stdout / stderr / exit_code, 不依赖
-    /// keyboard typing (避开 IME 字符替换) / OCR (避开识别误差) / GUI mouse 操作.
-    /// 由 hvm-dbg exec-guest 使用, 是端到端自动化验证 guest 行为的最可靠通路.
+    /// qemu-guest-agent 的 virtio-serial chardev socket. host 发 JSON `guest-exec` 在 guest 内
+    /// 跑 process 拿 stdout/exit_code, 不依赖 keyboard/OCR/mouse. 由 hvm-dbg exec-guest 使用.
     public static func qgaSocketPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).qga.sock")
     }
-    /// SPICE WebDAV virtio-serial chardev socket — host ↔ guest 共享目录 (docs/v3/SHARED_FOLDER.md).
-    /// QEMU 作 chardev server, HVM 主进程 SpiceWebdavServer 作 client 连入读写 mux frame.
-    /// guest 内 spice-webdavd 通过 virtio-port `org.spice-space.webdav.0` 把本地
-    /// \\localhost\dav (Win) / GVFS davs:// (Linux) HTTP 流转给 host.
+    /// SPICE WebDAV virtio-serial chardev socket — host ↔ guest 共享目录.
+    /// QEMU 作 chardev server, HVM 主进程 SpiceWebdavServer 作 client; guest 内 spice-webdavd 走 `org.spice-space.webdav.0`.
     public static func webdavSocketPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).webdav.sock")
     }
-    /// HVM 自家 guest helper virtio-serial chardev socket — UTM 风格文件剪贴板
-    /// (docs/v3/HOST_FILE_CLIPBOARD.md). QEMU 作 chardev server, HVM 主进程
-    /// HVMFileClipboardBridge 作 client 连入. guest 内 hvm-guest-helper.exe 通过
-    /// virtio-port `com.hellmessage.hvm-clipboard.0` 收 host 端 JSON 指令调
-    /// OleSetClipboard 设 Win 用户剪贴板.
+    /// HVM 自家 guest helper virtio-serial chardev socket — 文件剪贴板.
+    /// HVM 主进程 HVMFileClipboardBridge 作 client; guest 内 hvm-guest-helper.exe 走 `com.hellmessage.hvm-clipboard.0` 设 Win 剪贴板.
     public static func hvmClipboardSocketPath(for id: UUID) -> URL {
         runDir.appendingPathComponent("\(id.uuidString.lowercased()).hvm-clipboard.sock")
     }

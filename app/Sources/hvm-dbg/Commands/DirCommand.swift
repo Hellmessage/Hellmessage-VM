@@ -1,13 +1,6 @@
-// hvm-dbg/Commands/DirCommand.swift
-// hvm-dbg dir ls — 列 guest 内目录, 走 qemu-guest-agent.
-//
-// 用途: GUI "从 VM 取文件" 浏览器同款后端的 CLI 入口; 调试用.
-//
-// 用法:
-//   hvm-dbg dir ls <vm> --path 'C:\Users'       # Windows guest
-//   hvm-dbg dir ls <vm> --path /home            # Linux guest
-//
-// 输出: human (默认) 显示对齐表; json 走 IPCDbgListDirPayload 结构.
+// hvm-dbg dir ls — 列 guest 内目录 (一层), 走 qemu-guest-agent.
+//   hvm-dbg dir ls <vm> --path 'C:\Users'   # Windows guest
+//   hvm-dbg dir ls <vm> --path /home        # Linux guest
 
 import ArgumentParser
 import Foundation

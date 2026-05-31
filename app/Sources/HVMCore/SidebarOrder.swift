@@ -1,19 +1,6 @@
 // HVMCore/SidebarOrder.swift
-// Sidebar VM 列表的用户自定义顺序持久化.
-//
-// 文件位置: ~/Library/Application Support/HVM/sidebar-order.json
-// 内容格式: { "version": 1, "ids": ["<uuid>", "<uuid>", ...] }
-//
-// 设计要点:
-// - 与 routing JSON / config.yaml 解耦, 不污染现有 VM 元数据
-// - load 容错: 文件不存在 / JSON 损坏 → 返回空数组, 走 displayName 排序
-// - save 是覆盖写, 调用方负责传完整顺序数组
-// - apply(...) helper 把存储顺序套到当前 list 上: 已知 ID 按存储顺序排前面,
-//   未知 ID (新 VM / 文件没记录的) 按 displayName 排后面追加
-//
-// 不做的:
-// - 跨机器同步 (顺序是用户本机偏好, 无 portable 需求)
-// - 顺序变更历史 (覆盖写, 不留 audit log)
+// Sidebar VM 列表的用户自定义顺序持久化到 ~/Library/Application Support/HVM/sidebar-order.json.
+// 与 routing JSON / config.yaml 解耦; load 容错 (损坏返空数组走 displayName 排序), save 覆盖写.
 
 import Foundation
 

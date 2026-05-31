@@ -1,4 +1,3 @@
-// hvm-dbg/Commands/FindTextCommand.swift
 // hvm-dbg find-text — 抓屏 + OCR + 子串匹配. 找到返回 bbox + center, 找不到 exit 23.
 //
 // 与 mouse click --at 配合可在不知坐标的情况下点按钮:

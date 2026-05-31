@@ -1,20 +1,8 @@
 // HVMCore/VMnetBridgeProbe.swift
-// 桥模式 socket_vmnet daemon 响应性轻量探测.
-//
-// 设计目标: 启 VM 前抓**daemon 响应性**故障 — daemon 进程死 / 协议错配 / socket 孤儿.
-//
-// **不抓什么 (踩坑教训, 2026-05-23)**: vmnet.framework 内核侧 "bridge attach silently dead"
-// 这种情况 — daemon 进程在跑 + socket 在 + write 不报错, 但帧根本不到物理 iface.
-// 这条无法从 user-space 区分: 实测纯被动 listen 30s 0 字节 (即使桥是活的), 主动发探测帧
-// 后再 listen 2s 仍然 0 字节 — socket_vmnet 不把入向 broadcast/multicast 转给被动客户端
-// (跟我们之前的假设相反). 唯一可靠的判别需要 sudo tcpdump 物理 iface, 不适合放主进程.
-// 这种故障由用户感知 (VM 没拿 DHCP) → 自己点 [状态栏 vmnet → 重启 daemon] 自救.
-//
-// 抓什么: connect 失败 (典型 socket 孤儿, daemon 进程死) + write 后 daemon 立刻断开
-// (典型 daemon 进入异常状态, 进程仍在但拒绝服务). 这两条都通过启 VM 前 ~200ms 内
-// 完成判定, 启动 latency 几乎不可感.
-//
-// 设计稿: docs/v3/VMNET_DAEMON_HEALTH.md (实现期"silent bridge 探测"已撤回, 见 R5)
+// 桥模式 socket_vmnet daemon 响应性轻量探测 (启 VM 前 ~200ms 内判定).
+// 抓: connect 失败 (socket 孤儿 / daemon 死) + write 后 daemon 立刻断开 (拒绝服务).
+// 不抓: vmnet.framework 内核侧 "bridge attach silently dead" (daemon 在 + socket 在 + write 不报错,
+// 但帧不到物理 iface). user-space 无法区分, 唯一可靠判别需 sudo tcpdump; 由用户感知后点 [重启 daemon] 自救.
 
 import Foundation
 import Darwin

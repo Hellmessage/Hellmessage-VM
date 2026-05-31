@@ -1,24 +1,8 @@
-// HVMUITooltip.swift — 新 GUI 自绘 tooltip (PR-C6)
+// HVMUITooltip.swift — 新 GUI 自绘 tooltip (不用系统 NSTooltip, 完全自家风格).
 //
-// 用法 (modifier on any view):
-//   HVMUI.Button(icon: "trash", variant: .ghost) { ... }
-//       .hvmTooltip("删除当前 VM")
-//
-//   HVMUI.Icon("info.circle")
-//       .hvmTooltip("详细说明", edge: .leading)
-//
-//   image.hvmTooltip("...", kbd: "⌘+S")   // tooltip 末加键盘快捷键 chip
-//
-// 设计:
-//   - 自绘 tooltip 卡片, 不用系统 NSTooltip (无 vibrancy, 完全自家风格)
-//   - hover 500ms 延迟后出, hover off 立即收
-//   - 200ms ease-out 渐入 + scale 0.95→1.0
-//   - 可选 edge (位置): .top / .bottom / .leading / .trailing (默认 .top)
-//   - bg = bgOverlay + borderEmphasis + radius md + 轻 shadow
-//   - 不参与 layout flow (用 .overlay)
-//
-// 跟 SwiftUI 系统 .help() modifier 区别: .help() 是 NSTooltip 风, 风格固定;
-// HVMUI.Tooltip 完全自家绘, 风格跟其他 HVMUI 组件一致.
+// hover 500ms 延迟后出, hover off 立即收; edge 控位置 (.top default / .bottom / .leading / .trailing).
+// 不参与 layout flow (用 .overlay). 可选 kbd 末加键盘快捷键 chip.
+// 用法: view.hvmTooltip("删除当前 VM") / view.hvmTooltip("...", edge: .leading, kbd: "⌘+S")
 
 
 import SwiftUI
@@ -88,9 +72,8 @@ fileprivate struct TooltipModifier: ViewModifier {
                 if showTooltip {
                     TooltipContent(text: text, kbd: kbd)
                         .fixedSize()
-                        // GeometryReader 拿 tooltip 实际渲染 size, 上传 @State
-                        // 用 onAppear/onChange (PreferenceKey 跨 overlay 边界传
-                        // 不上, 实测 macOS 14 上 onPreferenceChange 不触发)
+                        // GeometryReader 拿 tooltip 实际渲染 size 上传 @State
+                        // (PreferenceKey 跨 overlay 边界不触发, 用 onAppear/onChange)
                         .background(
                             GeometryReader { proxy in
                                 Color.clear
@@ -100,11 +83,8 @@ fileprivate struct TooltipModifier: ViewModifier {
                                     }
                             }
                         )
-                        // offset 推 tooltip 整体出 trigger 外侧 + gap 间距.
-                        // overlay alignment 让 tooltip 跟 trigger 同 edge 对齐
-                        // (默认重叠), offset 用 tooltipSize 把它推出去.
-                        // 首帧 tooltipSize=0 时 offset=(0,0) tooltip 跟 trigger
-                        // 重叠一闪, 第二帧 size 更新后跳到正确位置. 可接受.
+                        // offset 用 tooltipSize 把 tooltip 推出 trigger 外侧 + gap
+                        // (首帧 size=0 重叠一闪, 第二帧跳到正确位置, 可接受)
                         .offset(offsetForEdge)
                         .transition(.opacity.combined(with:
                             .scale(scale: 0.95, anchor: scaleAnchor)))
@@ -136,9 +116,7 @@ fileprivate struct TooltipModifier: ViewModifier {
         }
     }
 
-    /// 用 tooltip 实际 size 算 offset 把 tooltip 整体推到 trigger 外侧 + gap.
-    /// overlay alignment 让 tooltip 跟 trigger 同 edge 对齐 (默认重叠), offset
-    /// 沿 edge 反方向推出 tooltipSize.dim + gap 距离.
+    /// 用 tooltip 实际 size 算 offset, 沿 edge 反方向推出 tooltipSize + gap.
     private var offsetForEdge: CGSize {
         switch edge {
         case .top:

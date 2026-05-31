@@ -58,9 +58,7 @@ struct ListCommand: AsyncParsableCommand {
             return
         }
 
-        // watch 模式: 拦截 SIGINT, 循环刷新.
-        // signal(SIGINT, SIG_IGN) 阻止默认终止, DispatchSource 把信号转成 handler 调用.
-        // 100ms 切片轮询 stop flag, Ctrl+C 后最多 100ms 退出.
+        // watch 模式: SIGINT 转 DispatchSource handler 循环刷新, 100ms 切片轮询 stop flag.
         guard interval > 0 else {
             FileHandle.standardError.write(Data("--interval 必须 > 0\n".utf8))
             throw ExitCode(2)
@@ -97,8 +95,7 @@ struct ListCommand: AsyncParsableCommand {
     /// 单次扫 + 渲染. run() 直接调一次, watch 循环每 interval 调一次.
     private func renderOnce() {
         let root = bundleDir.map { URL(fileURLWithPath: $0) } ?? HVMPaths.vmsRoot
-        // 枚举走 VMCatalog.list (收口, 跟新 GUI store 同一来源). actualBytes 列表展示要算,
-        // VMSummary 不带 (慢), 这里按 summary.config 单独算.
+        // 枚举走 VMCatalog.list (跟新 GUI store 同一来源); actualBytes 单独按 summary.config 算
         let summaries = VMCatalog.list(in: root)
 
         var rows: [Row] = []
@@ -121,12 +118,10 @@ struct ListCommand: AsyncParsableCommand {
             }
             guard let config = s.config else { continue }
 
-            // 主盘路径走 config.disks (engine-aware), 不再用 BundleLayout 常量推断
+            // 主盘路径走 config.disks (engine-aware)
             let mainURL = config.mainDiskURL(in: s.bundleURL) ?? s.bundleURL
             let actualBytes = (try? DiskFactory.actualBytes(at: mainURL)) ?? 0
-            // qcow2 的 stat.st_size = 文件实际字节 (刚创 ~200KB), 不是 guest 看到的 virtual size,
-            // 直接当 logical 用会显示成 0Gi. 用 DiskSpec.sizeGiB (config 里的名义容量) 兜底.
-            // raw sparse: logicalBytes 等于 ftruncate 撑出来的名义大小, 也跟 sizeGiB 对齐, 仍可一致使用.
+            // logical 用 DiskSpec.sizeGiB (名义容量): qcow2 的 st_size 是文件实际字节非 virtual size
             let logicalGiB = UInt64(config.disks.first?.sizeGiB ?? 0)
 
             rows.append(Row(

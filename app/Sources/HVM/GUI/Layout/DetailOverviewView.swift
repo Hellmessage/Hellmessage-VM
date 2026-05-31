@@ -1,11 +1,10 @@
-// DetailOverviewView.swift — 右栏 VM 详情 (只读 overview + 启停; M5).
+// DetailOverviewView.swift — 右栏 VM 详情 (概览 + 启停 + inline 配置编辑 + running framebuffer TAB).
 //
-// 本稿只做只读概览 + 启停按钮. 完整配置编辑 (network/disk/sharing/加密) 留
-// NEW_GUI_VM_DETAIL.md 子稿. 运行中不嵌真画面 (标占位, framebuffer 子稿补).
-// 加密 VM 解锁前 config=nil, overview 兜底只显基础信息.
+// running 详情区分「画面」/「配置」TAB. 加密 VM 解锁前 config=nil, overview 兜底只显基础信息.
 
 
 import SwiftUI
+import AppKit
 import HVMControl
 import HVMBundle
 
@@ -16,14 +15,14 @@ struct DetailOverviewView: View {
     // 资源 section 编辑 draft (字符串, 校验时转 Int). 切换 VM 时 reset.
     @State private var draftCPU = ""
     @State private var draftMemGiB = ""
-    // 网络 draft (V5). 跟 cpu/mem 统一 saveFooter 保存.
+    // 网络 draft, 跟 cpu/mem 统一 saveFooter 保存.
     @State private var draftNetworks: [NetworkSpec] = []
     // 已加载 draft 的 VM id + 当时 config 是否存在 — 防 1Hz 刷新误清未保存编辑;
-    // 但解锁后 config 由 nil → 非 nil 时要重新 sync (id 没变, 靠 hasConfig 触发).
+    // 解锁后 config 由 nil → 非 nil 时 (id 没变) 靠 hasConfig 触发重新 sync.
     @State private var draftLoadedID: UUID? = nil
     @State private var draftLoadedHasConfig = false
 
-    /// running 详情区: 画面 / 配置 切换 (F2). 切 VM / 改 runState 时 reset 回 .screen.
+    /// running 详情区: 画面 / 配置 切换. 切 VM / 改 runState 时 reset 回 .screen.
     enum RunningTab { case screen, config }
     @State private var runningTab: RunningTab = .screen
 
@@ -58,7 +57,7 @@ struct DetailOverviewView: View {
                 .padding(.bottom, isRunning ? HVMTheme.space.md : HVMTheme.space.lg)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            // running: 画面 / 配置 TAB 切换 (F2)
+            // running: 画面 / 配置 TAB 切换
             if isRunning {
                 runningTabBar(vm)
                     .padding(.horizontal, HVMTheme.space.xl)
@@ -75,13 +74,22 @@ struct DetailOverviewView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onChange(of: store.selectedID) { _, _ in syncDraftIfNeeded(); runningTab = .screen }
+        .onChange(of: store.selectedID) { _, _ in
+            syncDraftIfNeeded(); runningTab = .screen
+            if let cur = store.selected { store.refreshGuestIP(cur) }
+        }
         .onChange(of: store.selected?.config?.cpuCount) { _, _ in syncDraftIfNeeded() }
-        .onChange(of: store.selected?.runState) { _, _ in runningTab = .screen }
-        .onAppear { syncDraftIfNeeded() }
+        .onChange(of: store.selected?.runState) { _, _ in
+            runningTab = .screen
+            if let cur = store.selected { store.refreshGuestIP(cur) }   // 起/停切换时刷 guest IP
+        }
+        .onAppear {
+            syncDraftIfNeeded()
+            if let cur = store.selected { store.refreshGuestIP(cur) }
+        }
     }
 
-    /// 画面 / 配置 TAB (running). HVMUI.Button primary/ghost 按选中.
+    /// 画面 / 配置 TAB (running).
     private func runningTabBar(_ vm: VMSummary) -> some View {
         HStack(spacing: HVMTheme.space.sm) {
             HVMUI.Button("画面", variant: runningTab == .screen ? .primary : .ghost, size: .sm,
@@ -94,8 +102,7 @@ struct DetailOverviewView: View {
 
     /// 配置滚动区 (stopped 全可编辑 / running 多字段 disabled).
     private func configScroll(_ vm: VMSummary) -> some View {
-            // 可滚动卡片区. 反向 zIndex (上→下递减) 让网络 section 的 Select 下拉浮在
-            // 下方 saveFooter / 磁盘之上, 不被盖住.
+            // 反向 zIndex (上→下递减) 让网络 section 的 Select 下拉浮在下方 section 之上
             ScrollView {
                 VStack(alignment: .leading, spacing: HVMTheme.space.xl) {
                     if vm.runState == .running {
@@ -107,8 +114,7 @@ struct DetailOverviewView: View {
                         DetailSharingSection(vm: vm).zIndex(50)
                         DetailOptionsSection(vm: vm).zIndex(45)
                     }
-                    // 加密 section: 入口不依赖 config (加密 VM 锁定态 config=nil 也要显
-                    // 解密/改密入口; 明文 / 不支持态也各有内容)
+                    // 加密 section 入口不依赖 config (锁定态 config=nil 也要显解密/改密入口)
                     DetailEncryptionSection(vm: vm).zIndex(40)
                     if vm.config != nil {
                         resourceSection(vm).zIndex(35)
@@ -117,17 +123,18 @@ struct DetailOverviewView: View {
                             .zIndex(30)
                         diskSection(vm).zIndex(10)
                         DetailBootSection(vm: vm).zIndex(5)
+                        DetailSnapshotSection(vm: vm).zIndex(4)
                     }
                 }
                 .padding(.horizontal, HVMTheme.space.xl)
                 .padding(.bottom, HVMTheme.space.xl)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .hvmHideScroller()   // 强制隐滚动条 (系统"始终显示"设置下 .scrollIndicators 不生效)
+                .hvmHideScroller()   // 强制隐滚动条 (系统"始终显示"下 .scrollIndicators 不生效)
             }
             .scrollIndicators(.hidden)
     }
 
-    // MARK: - 磁盘 (V4)
+    // MARK: - 磁盘
 
     @ViewBuilder
     private func diskSection(_ vm: VMSummary) -> some View {
@@ -181,7 +188,7 @@ struct DetailOverviewView: View {
         }
     }
 
-    // MARK: - 资源编辑 (V3)
+    // MARK: - 资源编辑
 
     /// 选中 VM 真变化 / config 由无到有 (解锁) 才 reset draft; 守卫防 1Hz 刷新误清未保存编辑
     private func syncDraftIfNeeded() {
@@ -222,8 +229,7 @@ struct DetailOverviewView: View {
     @ViewBuilder
     private func resourceSection(_ vm: VMSummary) -> some View {
         let editable = vm.runState == .stopped
-        // 放弃/保存 放在"资源"标题右侧 (跟磁盘添加同款 headerTrailing), dirty 才显示.
-        // 表单字段 (cpu/mem/network) 统一这一组按钮保存.
+        // 放弃/保存 放标题右侧 headerTrailing, dirty 才显示; cpu/mem/network 统一这组按钮保存.
         HVMUI.Section("资源",
                       description: editable ? nil : "停止 VM 后可编辑",
                       headerTrailing: {
@@ -314,15 +320,45 @@ struct DetailOverviewView: View {
                     }
                 } else {
                     // 加密 VM 未解锁: config 为 nil
-                    infoRow("加密", "🔒 已加密 — 解锁查看完整配置 (后续子稿)")
+                    infoRow("加密", "🔒 已加密 — 解锁查看完整配置")
+                }
+                if vm.runState == .running {
+                    guestIPRow(vm)
                 }
             }
         }
     }
 
-    /// 操作按钮组 — 放在标题右侧 (header trailing). 按 vm.runState 决定显示哪些; 但动作
-    /// 一律读 store.selected 再执行, 防 hvm-dbg gui probe 闭包 stale 作用到旧 vm
-    /// (probe onAppear 只注册一次, view 复用不重注册; 真人点击无此问题, 自动化会撞).
+    /// guest IP 行 (running 才显). 走 store.guestIPs 缓存 (IPC guest.netinfo → qemu-ga). 带复制按钮.
+    @ViewBuilder
+    private func guestIPRow(_ vm: VMSummary) -> some View {
+        HStack(alignment: .top, spacing: HVMTheme.space.md) {
+            Text("guest IP")
+                .font(HVMTheme.font.sm)
+                .foregroundStyle(HVMTheme.color.textSecondary)
+                .frame(width: 64, alignment: .leading)
+            if let ip = store.guestIPs[vm.id] {
+                Text(ip)
+                    .font(HVMTheme.font.monoSm)
+                    .foregroundStyle(HVMTheme.color.textPrimary)
+                    .textSelection(.enabled)
+                HVMUI.Button(icon: "doc.on.doc", variant: .icon, size: .sm,
+                             probeID: "detail.guestIP.copy") {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(ip, forType: .string)
+                }
+            } else {
+                Text("获取中…（需 guest 装 qemu-ga）")
+                    .font(HVMTheme.font.sm)
+                    .foregroundStyle(HVMTheme.color.textTertiary)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// 操作按钮组 (header trailing). 按 vm.runState 决定显示哪些; 动作一律读 store.selected
+    /// 再执行, 防 probe 闭包 stale 作用到旧 vm (probe onAppear 只注册一次, 自动化会撞).
     @ViewBuilder
     private func actionButtons(_ vm: VMSummary) -> some View {
         HStack(spacing: HVMTheme.space.sm) {
@@ -373,6 +409,21 @@ struct DetailOverviewView: View {
                     store.lock(vm.id)
                 }
             }
+            // 克隆 (仅 stopped; 加密源在 dialog 内收密码). 动作读 store.selected 防 stale.
+            if vm.runState == .stopped {
+                HVMUI.Button("克隆", variant: .secondary, icon: "doc.on.doc",
+                             probeID: "detail.button.clone") {
+                    if let cur = store.selected { presentClone(cur) }
+                }
+            }
+        }
+    }
+
+    /// present 克隆 dialog (读 store.selected 防 stale; store 显式传, dialog overlay 拿不到环境).
+    private func presentClone(_ vm: VMSummary) {
+        let s = store
+        dialog.present { handle in
+            CloneVMDialog(vm: vm, handle: handle, store: s)
         }
     }
 

@@ -1,18 +1,8 @@
 // HVMNet/IPResolver.swift
-// 通过 host 的 ARP 表反查 guest IP. VZ 不暴露 guest 内部 IP, 又不能装 guest agent (CLAUDE.md
-// 禁止), 所以走 host 侧 ARP 是最朴素的零依赖方案:
+// 通过 host 的 ARP 表 (`arp -an`) 按 MAC 反查 guest IP. 零依赖方案, 5s 缓存避免频繁 fork arp.
 //
-//   `arp -an` 输出形如:
-//     ? (192.168.64.5) at 1a:2b:3c:4d:5e:6f on bridge100 ifscope [ethernet]
-//
-// 5s LRU cache 避免菜单频繁弹出导致每次都 fork arp 进程.
-//
-// 局限:
-//   - guest 启动后必须跟 host 通过任意 traffic 才会出现在 ARP 表 (DHCP / icmp / ssh 之类)
-//   - guest 关机后 ARP entry 仍会残留几分钟 (kernel 缓存)
-//   - MAC 大小写 / 前导零问题: arp 输出可能是 "1a:2b:3:4:5:6", 比对时双方都规范化
-//
-// 桥接 (M4) 模式下也走同样的查法, 因为 host 跟物理 LAN 上 guest 也走 ARP.
+// 局限: guest 需先跟 host 有过 traffic 才出现在 ARP 表; 关机后 entry 仍残留几分钟; MAC 大小写 /
+// 前导零不一, 比对时双方都规范化.
 
 import Foundation
 

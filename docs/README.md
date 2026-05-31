@@ -1,52 +1,63 @@
-# HVM 文档总入口
+# HVM 文档
 
-本目录是 HVM 项目的全部设计文档与决策沉淀:
+基于当前代码现状梳理的开发者文档（**QEMU-only 单后端**，guest 仅 Linux + Windows arm64；VZ 后端 / macOS guest 已移除）。
 
-| 目录 / 文件 | 内容 | 用法 |
-|---|---|---|
-| [v1/](v1/) | **现状描述** — 按当前代码逻辑重构后的设计文档 (架构 / 模块 / 协议 / 约束) | 想了解"项目长什么样"看这里 |
-| [v3/](v3/) | **设计提案** — 单提案单文档, 大多已合入, 留底作决策溯源 | 想知道"某能力当年是怎么决定的"看这里 |
-| [v4/](v4/) | **新 GUI 重构主线** — Theme/组件库/各业务页设计提案 (跟 v3 平行) | 想了解新 GUI 体系怎么设计的看这里 |
-| [CHANGELOG.md](CHANGELOG.md) | **历史 TODO 归档** — v2 (2026-05-03) 全项目深审 45 项, 已基本完成 | 想知道"2026-05 期间到底修了哪些 commit"看这里 |
+项目硬约束在仓库根 [CLAUDE.md](../CLAUDE.md)，与本目录冲突时以 CLAUDE.md 为准。
 
-## 快速入口
+## 文档索引
 
-### 我想了解项目
+### 总览与工程
 
-→ [v1/README.md](v1/README.md) — v1 文档索引, 推荐阅读顺序
+| 文档 | 内容 |
+|---|---|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | 项目全貌、16 个 target 拓扑与依赖、三二进制角色、GUI↔host↔QEMU 进程模型、HVMControl 控制层 |
+| [BUILD_SIGN.md](BUILD_SIGN.md) | SwiftPM 构建、`make build` / `build-all` / `install`、bundle.sh 签名闭环、双 entitlement、零运行时依赖 |
+| [VM_BUNDLE.md](VM_BUNDLE.md) | `.hvmz` 目录布局、`config.yaml` schema v3 全字段、Yams 序列化、ConfigMigrator、BundleLock flock 互斥 |
+| [ERROR_MODEL.md](ERROR_MODEL.md) | HVMError 错误模型、退出码映射、HVMIPC 协议、SignalGuard 信号处理、日志落盘规则 |
 
-### 我想看新能力的设计提案 / 决策溯源
+### QEMU 后端与显示
 
-→ [v3/README.md](v3/README.md) — v3 提案索引(单提案单文档, 状态: 已合入 / 设计稿 / 评审中 / 实现中)
+| 文档 | 内容 |
+|---|---|
+| [QEMU_INTEGRATION.md](QEMU_INTEGRATION.md) | QEMU/EDK2/swtpm 随包分发、版本锁定、patch 串行管理、dylib bundle 零依赖、双 firmware 策略 |
+| [QEMU_DISPLAY_PROTOCOL.md](QEMU_DISPLAY_PROTOCOL.md) | HDP IOSurface 显示协议 v1.0.0（AF_UNIX + shm + SCM_RIGHTS）、消息格式、ramfb + virtio-gpu 双路 |
+| [DISPLAY_INPUT.md](DISPLAY_INPUT.md) | framebuffer 零拷贝渲染、键鼠捕获（Cmd+Opt）、修饰键状态镜像、macStyle 映射、dynamic resize |
 
-### 我想看新 GUI 重构怎么设计的
+### 存储 / 加密 / 网络
 
-→ [v4/README.md](v4/README.md) — 新 GUI 重构主线索引(Theme / 组件库 / 各业务页提案)
+| 文档 | 内容 |
+|---|---|
+| [STORAGE.md](STORAGE.md) | 磁盘 qcow2/raw、DiskFactory、CloneManager（APFS clonefile）、SnapshotManager、ISOValidator |
+| [ENCRYPTION.md](ENCRYPTION.md) | 整 VM 落盘加密（PBKDF2 + HKDF 子 key + LUKS qcow2 + swtpm + AES-GCM config）、encrypt/decrypt/rekey |
+| [NETWORK.md](NETWORK.md) | socket_vmnet daemon、NAT/shared/host/bridged 模式、`-netdev stream` 接法、daemon 健康探测 |
 
-### 我想看 2026-05 大重构修了什么
+### Guest 与数据共享
 
-→ [CHANGELOG.md](CHANGELOG.md) — v2 TODO 历史归档
+| 文档 | 内容 |
+|---|---|
+| [GUEST_OS_INSTALL.md](GUEST_OS_INSTALL.md) | Linux ISO 装机（OSImageCatalog 下载）、Windows 11 装机（unattend / virtio-win / UTM Guest Tools / swtpm） |
+| [SHARING.md](SHARING.md) | 共享目录（SPICE WebDAV）、文本/图片剪贴板、Cmd+V 文件粘贴（vdagent file_xfer）、文件传输（QGA） |
 
-### 我想看约束
+### 入口与界面
 
-→ 项目根目录 [../CLAUDE.md](../CLAUDE.md) — 唯一权威约束源
-- 与 v1/ 描述冲突时, 以 CLAUDE.md 为准
-- 已识别的待修订点先回写 v1 / 更新 CLAUDE.md
+| 文档 | 内容 |
+|---|---|
+| [CLI.md](CLI.md) | `hvm-cli` 全子命令参考（21 顶层 + 子命令）、参数、退出码、加密密码输入 |
+| [DEBUG_PROBE.md](DEBUG_PROBE.md) | `hvm-dbg` 调试探针全子命令、HDP-GUI 自动化协议（`.hvmProbe` + ProbeRegistry） |
+| [GUI.md](GUI.md) | 新 GUI：HVMUI 组件库、Theme token、强制 probeID、NewGUIStore、两栏主界面 + 详情页 inline 编辑 + dialog 体系 |
 
-## 版本约定
+### 规划 / 路线图
 
-- **v1** 是"现状快照", 描述代码现在长什么样
-- **v3** 是"设计决策", 描述当时为什么这么做; 实现合入后状态标 "代码已合入", 现状回写 v1
-- **v4** 是"新 GUI 重构主线", 跟 v3 平行, 独立立项 (Theme / 组件库 / 业务页)
-- **CHANGELOG** 是"历史 TODO 归档", 2026-05-03 v2 清单的滚动留底
-- 旧 v2 目录已退役 (历史归并到 CHANGELOG.md)
+| 文档 | 内容 |
+|---|---|
+| [HEADLESS.md](HEADLESS.md) | 无头模式现状分析 + 路线图 TODO（P0 `-display none` / P1 解耦 AppKit / P2 console / P3 launchd 自启 / P4 远程显示）|
 
-## 治理
+## 推荐阅读顺序
 
-- 文档与代码漂移是常见问题, v1 重构每季度 review 一次, 维持准确度
-- 新设计决策 → 新建 v3/<TOPIC>.md, 评审 → 实现 → 合入后回写 v1
-- 已知漂移 → 立即修 v1 / 更新 CLAUDE.md, 不放任
+1. [ARCHITECTURE.md](ARCHITECTURE.md) — 先建立项目全貌与模块拓扑
+2. [VM_BUNDLE.md](VM_BUNDLE.md) — `.hvmz` 与 config schema 是数据模型基础
+3. [QEMU_INTEGRATION.md](QEMU_INTEGRATION.md) — 唯一后端的随包分发与构建
+4. [BUILD_SIGN.md](BUILD_SIGN.md) — 怎么编出带签名的 `.app`
+5. 按需读各专题（存储 / 加密 / 网络 / 显示 / 共享 / 装机 / CLI / hvm-dbg / GUI）
 
----
-
-**最后更新**: 2026-05-30 (补 v4 入口; 删冗余 v1/todo.md)
+> 文档为当前代码现状描述，非设计提案。代码迭代后需同步更新对应文档。

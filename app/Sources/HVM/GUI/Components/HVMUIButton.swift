@@ -1,40 +1,11 @@
-// HVMUIButton.swift — 新 GUI 按钮组件 (PR-C1b 按 R1-R9 重做)
+// HVMUIButton.swift — 新 GUI 按钮组件.
 //
-// 5 variant (互斥):
-//   .primary       — accent 青底, 主操作 (Dialog 主按钮 / 保存 / 创建)
-//   .secondary     — 边框 + 透明底, 次要操作 (取消 / 返回)
-//   .ghost         — 无边框, hover 才出 bg, 弱化操作 (icon toolbar / tab)
-//   .destructive   — 边框 error 色, 危险操作 (确认前的删除 / 加密 reset)
-//   .icon          — 纯图标 size×size, ghost 同款外观但正方形 (Dialog 关闭 X / titlebar)
+// 5 variant: primary (青底主操作) / secondary (边框次操作) / ghost (hover 才出 bg) /
+//            destructive (error 边框危险操作) / icon (纯图标正方形).
+// 3 size: .sm 24 高 / .md 32 高 (default) / .lg 40 高.
+// 交互: hover 色变, press scale 0.97, focus ring (键盘 Tab 才显), loading 换 spinner.
 //
-// 3 档 size:
-//   .sm — 24 高 / font sm / padding sm (icon-only 24×24; toolbar / 列表行内联用)
-//   .md — 32 高 / font md / padding md (default; 表单 / dialog 主流)
-//   .lg — 40 高 / font md / padding lg (hero CTA / 单按钮 dialog)
-//
-// 用法:
-//   HVMUI.Button("保存", variant: .primary) { save() }
-//   HVMUI.Button("删除", variant: .destructive, icon: "trash") { delete() }
-//   HVMUI.Button("装机", variant: .primary, icon: "play.fill",
-//                iconPosition: .trailing, size: .lg) { install() }
-//   HVMUI.Button("提交中", variant: .primary, isLoading: true) { }
-//   HVMUI.Button(icon: "gear", variant: .ghost, size: .sm) { ... }
-//
-// 视觉 (Linear+):
-//   - hover  : bg 加深 120ms easeOutFast
-//   - press  : scale 0.97 spring (HVMButtonPressStyle)
-//   - focus  : 外圈 2px borderFocus ring 渐现 200ms (键盘 Tab 才显; click 不出)
-//   - loading: icon 位置换 ProgressView; action 跳过, hover 跳过
-//   - disabled: bg / fg 改 dim token, 不再走整体 .opacity(0.4)
-//     (深底上整 opacity 会让按钮跟主底压平; 改用 textTertiary fg + bgDisabled bg)
-//
-// 键盘 + a11y:
-//   - SwiftUI.Button + .focused($isFocused) + .accessibilityLabel
-//   - Space / Return 自带触发
-//   - loading / disabled 时不可点
-//
-// probe: probeID 非 nil + 非 disabled + 非 loading 时挂 .button(action).
-// hvm-dbg gui click --identifier X 走 action.
+// probe: probeID 非 disabled + 非 loading 时挂 .button(action), hvm-dbg gui click 走 action.
 
 
 import SwiftUI
@@ -152,7 +123,7 @@ struct Button: View {
         self.size = size
         self.isDisabled = disabled
         self.isLoading = isLoading
-        self.fillWidth = false   // 纯 icon 按钮不支持 fillWidth
+        self.fillWidth = false   // 纯 icon 不支持 fillWidth
         self.probeID = probeID
         self.probeLabel = probeLabel
         self.action = action
@@ -186,10 +157,7 @@ struct Button: View {
                     .stroke(borderColor, lineWidth: borderWidth)
             )
             .overlay(focusRing)
-            // disabled 用 opacity 0.4 整体降透 (保留 variant 身份感: primary 青字降透
-            // 后仍能看出是青色 primary, 不像 bgDisabled 灰底+灰字完全失去 primary
-            // 视觉). 按钮一般不嵌在 sectionCard 同色容器内, 不存在 Toggle 那种"压平"
-            // 问题; loading 用 opacity 0.65 居中, 比 disabled 浅一档暗示"忙不可点".
+            // disabled / loading 走整体降透 (保留 variant 身份感, 不灰底失去 primary 视觉)
             .opacity(buttonOpacity)
             .animation(HVMTheme.motion.easeOutFast, value: hovered)
             .animation(HVMTheme.motion.easeOut, value: isFocused)
@@ -229,8 +197,7 @@ struct Button: View {
 
     // MARK: - 外观计算 (variant + state 矩阵, 全 token)
 
-    /// disabled 走 opacity 0.4 整体降透 (保留 variant 身份感), loading 走 0.65 (比
-    /// disabled 更可读, 暗示 "忙" 不是 "禁"). active 1.0.
+    /// disabled 0.4 / loading 0.65 (比 disabled 可读, 暗示 "忙" 非 "禁") / active 1.0.
     private var buttonOpacity: Double {
         if isDisabled { return 0.4 }
         if isLoading  { return 0.65 }
@@ -293,8 +260,7 @@ struct Button: View {
 
 }  // extension HVMUI 结束
 
-/// 按钮 press 反馈: scale 0.97 spring. 不影响其它外观, 仅做交互动效.
-/// 不用 .scaleEffect on hover state — hover 走色变, press 走形变, 两通道独立.
+/// 按钮 press 反馈: scale 0.97 spring (hover 走色变, press 走形变, 两通道独立).
 private struct HVMButtonPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label

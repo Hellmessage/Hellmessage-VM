@@ -1,16 +1,10 @@
 // HVMEncryption/RoutingMetadata.swift
-// 加密 VM 的路由元数据 — 明文 JSON 文件, **不**在加密内.
-// 跨机器 portable 入口: 目标机读 routing JSON 拿 KDF 参数 + scheme,
-// 用户输密码 → PBKDF2(password, salt) → master KEK → 解锁 VM.
+// 加密 VM 的路由元数据 — 明文 JSON (<bundle>.hvmz/meta/encryption.json), **不**在加密内.
+// 跨机器 portable 入口: 目标机读 routing JSON 拿 KDF 参数 + scheme, 用户输密码 →
+// PBKDF2(password, salt) → master KEK → 解锁 VM.
 //
-// 设计稿 docs/v3/ENCRYPTION.md v2.3.
-//
-// 文件位置:
-//   - VZ-sparsebundle: <parent>/<name>.hvmz.encryption.json (sparsebundle 同级)
-//   - QEMU-perfile:    <bundle>.hvmz/meta/encryption.json (bundle 内)
-//
-// 字段命名走 snake_case (跟设计稿 + 业界惯例对齐, 也方便用户手动编辑诊断).
-// schemaVersion 是 routing JSON 自己的版本, **不是** VMConfig schemaVersion.
+// 字段命名 snake_case (方便用户手动编辑诊断). schemaVersion 是 routing JSON 自己的版本,
+// **不是** VMConfig schemaVersion.
 
 import Foundation
 import HVMBundle
@@ -18,29 +12,24 @@ import HVMCore
 
 public struct RoutingMetadata: Sendable, Equatable, Codable {
     /// routing JSON 自己的 schema 版本 (与 VMConfig.schemaVersion 不同维度).
-    /// v1: 初稿 (kek_source / keychain_item) — 已废
-    /// v2: 加 kdf_* 字段 (强制密码 + 跨机器 portable; v2.2)
-    /// v3: 加 guest_os 字段 — 让加密 VM 解锁前 GUI 能正确显示 Windows/Linux/macOS, 不再
-    ///     掉到 placeholder=.linux. 解锁前可见的"装机完成"等按钮也按真 guestOS 分支.
-    ///     非敏感: 只是 win/linux/macos 三选一, 不暴露 VM 内容. 老 v2 JSON 解码时 guestOS=nil
-    ///     兜底 .linux 保兼容
+    /// v1: 初稿 (kek_source) — 已废; v2: 加 kdf_* 字段; v3: 加 guest_os (让解锁前 GUI 正确显示
+    /// Win/Linux). 老 v2 JSON 解码 guestOS=nil 兜底 .linux.
     public static let currentSchemaVersion = 3
 
     public var schemaVersion: Int
     public var vmId: UUID
     public var scheme: EncryptionSpec.EncryptionScheme
     public var displayName: String
-    /// guest 操作系统类型. v3 加; 老 v2 routing JSON 解码 nil → 调用方按 .linux 兜底.
+    /// guest 操作系统类型. 老 v2 解码 nil → 调用方按 .linux 兜底.
     public var guestOS: GuestOSType?
 
     // KDF 参数 (跨机器派生 master KEK 必备)
-    public var kdfAlgo: String                  // "pbkdf2-sha256" — 未来切 argon2id 升 v4
+    public var kdfAlgo: String                  // "pbkdf2-sha256"
     public var kdfIterations: UInt32
-    public var kdfSalt: Data                    // 16 字节 random; JSON 编 base64 (Data 默认)
+    public var kdfSalt: Data                    // 16 字节 random; JSON 编 base64
     public var kdfKeylen: Int                   // 32 (256 bit)
 
-    /// QEMU 路径附加 (诊断用): 哪些文件被加密了.
-    /// VZ 路径 nil (整 sparsebundle 加密, 不需要分项列).
+    /// 诊断用: 哪些文件被加密了.
     public var encryptedPaths: [String]?
 
     /// QEMU 加密路径默认列出的文件.
@@ -87,13 +76,6 @@ public struct RoutingMetadata: Sendable, Equatable, Codable {
 // MARK: - Routing JSON 文件位置 + I/O
 
 public enum RoutingJSON {
-    /// VZ 路径 routing JSON 位置: 与 sparsebundle 同级.
-    /// 例: <parent>/Foo.hvmz.sparsebundle → <parent>/Foo.hvmz.encryption.json
-    public static func locationForSparsebundle(_ sparsebundleURL: URL) -> URL {
-        let stem = sparsebundleURL.deletingPathExtension()  // .hvmz
-        return stem.appendingPathExtension("encryption.json")
-    }
-
     /// QEMU 路径 routing JSON 位置: bundle 内 meta/encryption.json
     public static func locationForQemuBundle(_ bundleURL: URL) -> URL {
         bundleURL.appendingPathComponent("meta", isDirectory: true)

@@ -1,20 +1,13 @@
 // HVMQemu/QgaDir.swift
+// guest 文件系统目录列表 (GUI "从 VM 取文件" 浏览器 / hvm-dbg dir ls).
+// 走 qemu-guest-agent guest-exec 跑 PowerShell (Win) / find (Linux).
 //
-// guest 文件系统目录列表 — 给 GUI "从 VM 取文件" 浏览器 / hvm-dbg dir ls 用.
-// 走 qemu-guest-agent guest-exec 跑 PowerShell (Win) / find (Linux) 拿目录条目.
+// 输出协议: 每条目一行, tab 分隔 3 字段 `<type>\t<size>\t<fullPath>`,
+//   type = "D" (目录) / "F" (文件), size 字节数 (目录恒 0).
+//   不用 JSON (PowerShell ConvertTo-Json 空/单元素输出不稳定); 文件名带 tab/\n 不转义 (罕见).
+//   隐藏文件 / system file 一并列出.
 //
-// 输出协议: 每条目一行, **tab 分隔** 3 字段:
-//   <type>\t<size>\t<fullPath>
-// 其中 type = "D" (目录) / "F" (文件), size 是字节数 (目录恒为 0).
-//
-// 设计取向:
-//   - 不用 JSON: PowerShell ConvertTo-Json 在空数组 / 单元素 时输出不稳定; tab 分隔最简
-//   - tab 在文件名里极罕见 (Win / Linux 都允许但用户基本不用), 不做转义
-//   - 名字带 \n 的会被 find 默认行为破坏 (find 不转义), 但同样几乎没人这么命名; v2 再考虑
-//   - 隐藏文件 / system file 一并列出 (Win -Force, Linux find -mindepth 1)
-//
-// 性能: PowerShell 启动 + cmdlet 跑 ~1-2 秒 per 调用. Linux find ~100ms. UI 端务必
-// async 显示 loading. 大目录 (10k+ 文件) 慢但可用.
+// 性能: PowerShell ~1-2s/次, Linux find ~100ms. UI 端 async 显示 loading.
 
 import Foundation
 import HVMBundle
@@ -94,9 +87,8 @@ public enum QgaDir {
     private static func runLinuxList(
         socketPath: String, path: String, timeoutSec: Int
     ) async throws -> QgaExec.Result {
-        // GNU find 自带 -printf, Ubuntu/Debian/Arch/Fedora 默认. busybox find 不支持
-        // (Alpine/OpenWrt), 用户撞了再单独 fallback. %y=type %s=size %p=fullpath
-        // type: 'd'=dir, 'f'=file, 'l'=symlink, 其他略走 'F' 兜底 (parse 时转大写)
+        // GNU find -printf (主流发行版默认; busybox find 不支持, 撞了再 fallback).
+        // %y=type ('d'/'f'/'l', parse 时转大写) %s=size %p=fullpath
         let script = "find -- \"$1\" -mindepth 1 -maxdepth 1 -printf '%y\\t%s\\t%p\\n'"
         return try await QgaExec.run(
             socketPath: socketPath,
@@ -110,8 +102,8 @@ public enum QgaDir {
 
     private static func parse(stdout: String, fallbackParent: String) throws -> [Entry] {
         var entries: [Entry] = []
-        // **重要**: Swift `\r\n` 是单一 grapheme Character, split { $0 == "\n" || $0 == "\r" }
-        // 漏切 Windows CRLF 行 — 实测 PowerShell stdout 全部塞进一个 entry. 先剥 \r 再按 \n 切.
+        // **重要**: Swift `\r\n` 是单一 grapheme, split { $0 == "\n" } 漏切 Windows CRLF 行.
+        // 先剥 \r 再按 \n 切.
         let cleaned = stdout.replacingOccurrences(of: "\r", with: "")
         for rawLine in cleaned.split(separator: "\n", omittingEmptySubsequences: true) {
             let line = String(rawLine)

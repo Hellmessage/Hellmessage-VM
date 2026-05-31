@@ -1,11 +1,11 @@
 // CreateCommand.swift
-// hvm-cli create — 非交互式创建 VM bundle (Linux ISO 引导 / macOS IPSW 装机)
+// hvm-cli create — 非交互式创建 VM bundle (Linux / Windows arm64 ISO 装机)
 
 import ArgumentParser
 import Foundation
 import HVMBundle
+import HVMControl
 import HVMCore
-import HVMEncryption
 import HVMNet
 import HVMQemu
 import HVMStorage
@@ -62,181 +62,154 @@ struct CreateCommand: AsyncParsableCommand {
     func run() async throws {
         do {
             let os = try parseGuestOS(self.os)
-            // QEMU-only: GuestOSType 仅 linux/windows, Engine 仅 qemu — ArgumentParser 解析阶段
-            // 已拒 --os macOS / --engine vz (非法 raw value), 无需再显式拦.
 
-            // ---- 导入磁盘镜像分支 (跳过 ISO 装机, 直接 boot) ----
-            // 与 --iso / --ipsw 互斥, 仅 --os linux 支持; engine 由镜像格式锁定 (qcow2→qemu, raw→vz)
-            var importInfo: DiskFactory.ImportableDiskInfo? = nil
+            // ---- 导入磁盘镜像分支 (跳过 ISO 装机, 直接 boot; 仅 CLI, GUI 不接) ----
             if let importPath = importDisk {
-                guard os == .linux else {
-                    throw HVMError.config(.invalidEnum(field: "import-disk", raw: importPath,
-                                                       allowed: ["仅 --os linux 支持"]))
-                }
-                if iso != nil || ipsw != nil {
-                    throw HVMError.config(.invalidEnum(field: "import-disk", raw: importPath,
-                                                       allowed: ["与 --iso / --ipsw 互斥"]))
-                }
-                let qemuImgURL = try QemuPaths.qemuImgBinary()
-                importInfo = try DiskFactory.inspectImage(
-                    at: URL(fileURLWithPath: importPath),
-                    qemuImg: qemuImgURL
-                )
+                try runImport(os: os, importPath: importPath)
+                return
             }
 
-            // engine: 导入时由镜像格式锁定; 否则按 --engine / guestOS 默认.
-            // ArgumentParser 已在解析阶段把非 vz/qemu 的拼写错挡掉, self.engine 只可能是
-            // .vz / .qemu / nil, 这里不再校验字符串.
-            // QEMU-only (P1a): engine 恒 qemu (vz 已在上面拒). 导入 raw/qcow2 均走 qemu.
-            let engineValue: Engine = .qemu
-            _ = importInfo   // 格式由 inspectImage 决定 DiskSpec.format, engine 不再随格式分流
-
-            // OS 分支专属字段校验 (导入分支已在上面处理, 此处只走 ISO/IPSW)
-            var isoPath: String? = nil
-            let ipswPath: String? = nil   // macOS/IPSW 已随 VZ 移除, 恒 nil
-            if importInfo == nil {
-                // QEMU-only: linux/windows 都走 ISO 装机
-                guard let p = iso else { throw HVMError.config(.missingField(name: "iso")) }
-                try ISOValidator.validate(at: p)
-                isoPath = p
-                if ipsw != nil {
-                    throw HVMError.config(.invalidEnum(field: "ipsw", raw: "(set)",
-                                                       allowed: ["(已下线 — macOS guest 随 VZ 移除)"]))
-                }
+            // ---- ISO 装机 / 加密分支 → VMControl.create (CLI + GUI 单一来源) ----
+            guard let isoPath = iso else { throw HVMError.config(.missingField(name: "iso")) }
+            if ipsw != nil {
+                throw HVMError.config(.invalidEnum(field: "ipsw", raw: "(set)",
+                                                   allowed: ["(已下线 — macOS guest 随 VZ 移除)"]))
             }
-
             let (networkMode, networkIface) = try parseNetwork(self.network)
             let macAddr = try resolveMAC(explicit: self.mac)
 
-            let parentDir = URL(fileURLWithPath:
-                self.path ?? HVMPaths.vmsRoot.path,
-                isDirectory: true
-            )
-            try HVMPaths.ensure(parentDir)
-            let bundleURL = parentDir.appendingPathComponent("\(name).hvmz", isDirectory: true)
-
-            // 卷空间预检 (主盘. macOS 装机时 IPSW 缓冲单独在 install 阶段预检)
-            // 导入模式: 用 max(--disk, 镜像 virtual-size GiB) 作为预检值, 防呆下限就是镜像本身
-            let effectiveDiskGiB: UInt64 = {
-                if let info = importInfo { return max(disk, info.virtualSizeGiB) }
-                return disk
-            }()
-            try VolumeInfo.assertSpaceAvailable(
-                at: parentDir.path,
-                requiredBytes: effectiveDiskGiB * (1 << 30)
-            )
-
-            // engine-aware 主盘: VZ → os.img (raw), QEMU → os.qcow2
-            let mainFormat: DiskFormat = engineValue == .qemu ? .qcow2 : .raw
-            let mainDiskFile = "\(BundleLayout.disksDirName)/\(BundleLayout.mainDiskFileName(for: engineValue))"
-            let mainDisk = DiskSpec(
-                role: .main,
-                path: mainDiskFile,
-                sizeGiB: effectiveDiskGiB,
-                format: mainFormat
-            )
-            let config = VMConfig(
-                displayName: name,
-                guestOS: os,
-                engine: engineValue,
-                cpuCount: cpu,
-                memoryMiB: memory * 1024,
-                disks: [mainDisk],
-                networks: [NetworkSpec(
-                    mode: networkMode,
-                    macAddress: macAddr,
-                    bridgedInterface: networkIface
-                )],
-                installerISO: isoPath,
-                bootFromDiskOnly: importInfo != nil,
-                macOS: nil,   // macOS guest 已随 VZ 移除
-                linux: os == .linux ? LinuxSpec() : nil,
-                windows: os == .windows ? WindowsSpec() : nil
-            )
-
-            // ---- 加密分支 (--encrypt; v2.4 仅 QEMU) ----
+            var password: String? = nil
             if encrypt {
-                guard engineValue == .qemu else {
-                    throw HVMError.config(.invalidEnum(
-                        field: "encrypt",
-                        raw: "engine=\(engineValue.rawValue)",
-                        allowed: ["仅 QEMU 后端支持加密 (--engine qemu); macOS guest 必走 VZ 无法加密 (v2.4 决策)"]
-                    ))
-                }
-                guard importInfo == nil else {
-                    throw HVMError.config(.invalidEnum(
-                        field: "encrypt",
-                        raw: "import-disk",
-                        allowed: ["加密 VM 暂不支持 --import-disk (导入明文 qcow2 转 LUKS 留 PR-10)"]
-                    ))
-                }
-                let password = try PasswordPrompt.read(
+                password = try PasswordPrompt.read(
                     prompt: "为加密 VM \(name) 设置密码: ",
                     confirm: true,
                     minLength: 4
                 )
-                try createEncryptedVM(
-                    parentDir: parentDir,
-                    bundleURL: bundleURL,
-                    password: password,
-                    config: config,
-                    sizeGiB: effectiveDiskGiB
-                )
-            } else {
-                try BundleIO.create(at: bundleURL, config: config)
-                let qemuImg = mainFormat == .qcow2 ? (try? QemuPaths.qemuImgBinary()) : nil
-                let mainDiskAbs = bundleURL.appendingPathComponent(mainDiskFile)
-                if let info = importInfo, let importPath = importDisk {
-                    do {
-                        try DiskFactory.importImage(
-                            from: URL(fileURLWithPath: importPath),
-                            to: mainDiskAbs,
-                            info: info,
-                            targetSizeGiB: effectiveDiskGiB,
-                            qemuImg: qemuImg
-                        )
-                    } catch {
-                        try? FileManager.default.removeItem(at: bundleURL)
-                        throw error
-                    }
-                } else {
-                    try DiskFactory.create(
-                        at: mainDiskAbs,
-                        sizeGiB: effectiveDiskGiB,
-                        format: mainFormat,
-                        qemuImg: qemuImg
-                    )
-                }
             }
 
-            switch format {
-            case .human:
-                print("✔ 已创建 \(bundleURL.path)")
-                print("  id:        \(config.id.uuidString)")
-                print("  guestOS:   \(config.guestOS.rawValue)")
-                print("  engine:    \(config.engine.rawValue)")
-                print("  cpu/mem:   \(config.cpuCount) 核 / \(config.memoryMiB / 1024) GiB")
-                print("  disk:      \(effectiveDiskGiB) GiB (\(mainFormat.rawValue))")
-                if let p = isoPath  { print("  iso:       \(p)") }
-                if let p = ipswPath { print("  ipsw:      \(p)") }
-                if let p = importDisk, let info = importInfo {
-                    print("  imported:  \(p) (\(info.format.rawValue), 虚拟容量 \(info.virtualSizeGiB) GiB)")
-                }
-                print("  mac:       \(macAddr)")
-                if importInfo != nil {
-                    print("下一步: hvm-cli start \(name)  (导入磁盘已就绪, 直接 boot)")
-                } else {
-                    print("下一步: hvm-cli start \(name)  (在 guest 内完成安装, 然后 hvm-cli boot-from-disk \(name))")
-                }
-            case .json:
-                printJSON([
-                    "bundlePath": bundleURL.path,
-                    "id": config.id.uuidString,
-                    "guestOS": config.guestOS.rawValue,
-                ])
-            }
+            let spec = VMControl.CreateSpec(
+                name: name,
+                guestOS: os,
+                cpuCount: cpu,
+                memoryGiB: memory,
+                diskGiB: disk,
+                networkMode: networkMode,
+                bridgedInterface: networkIface,
+                macAddress: macAddr,
+                installerISO: isoPath,
+                parentDir: path.map { URL(fileURLWithPath: $0, isDirectory: true) },
+                windows: os == .windows ? WindowsSpec() : nil,
+                encrypt: encrypt,
+                password: password
+            )
+            let result = try VMControl.create(spec)
+            printCreated(bundleURL: result.bundleURL, config: result.config,
+                         effectiveDiskGiB: disk, isoPath: isoPath, macAddr: macAddr,
+                         imported: nil)
         } catch {
             format == .json ? bailJSON(error) : bail(error)
+        }
+    }
+
+    /// 导入现成 qcow2 / raw 镜像作主盘 (跳过装机, 直接 boot). 与 --iso / --ipsw / --encrypt 互斥, 仅 --os linux.
+    private func runImport(os: GuestOSType, importPath: String) throws {
+        guard os == .linux else {
+            throw HVMError.config(.invalidEnum(field: "import-disk", raw: importPath,
+                                               allowed: ["仅 --os linux 支持"]))
+        }
+        if iso != nil || ipsw != nil {
+            throw HVMError.config(.invalidEnum(field: "import-disk", raw: importPath,
+                                               allowed: ["与 --iso / --ipsw 互斥"]))
+        }
+        if encrypt {
+            throw HVMError.config(.invalidEnum(field: "encrypt", raw: "import-disk",
+                                               allowed: ["加密 VM 暂不支持 --import-disk (导入明文 qcow2 转 LUKS 留 PR-10)"]))
+        }
+        let qemuImgURL = try QemuPaths.qemuImgBinary()
+        let importInfo = try DiskFactory.inspectImage(
+            at: URL(fileURLWithPath: importPath),
+            qemuImg: qemuImgURL
+        )
+        let (networkMode, networkIface) = try parseNetwork(self.network)
+        let macAddr = try resolveMAC(explicit: self.mac)
+
+        let parentDir = URL(fileURLWithPath: self.path ?? HVMPaths.vmsRoot.path, isDirectory: true)
+        try HVMPaths.ensure(parentDir)
+        let bundleURL = parentDir.appendingPathComponent("\(name).hvmz", isDirectory: true)
+
+        // 预检值取 max(--disk, 镜像 virtual-size GiB)
+        let effectiveDiskGiB = max(disk, importInfo.virtualSizeGiB)
+        try VolumeInfo.assertSpaceAvailable(at: parentDir.path,
+                                            requiredBytes: effectiveDiskGiB * (1 << 30))
+
+        let mainFormat: DiskFormat = .qcow2
+        let mainDiskFile = "\(BundleLayout.disksDirName)/\(BundleLayout.mainDiskFileName(for: .qemu))"
+        let mainDisk = DiskSpec(role: .main, path: mainDiskFile,
+                                sizeGiB: effectiveDiskGiB, format: mainFormat)
+        let config = VMConfig(
+            displayName: name,
+            guestOS: os,
+            engine: .qemu,
+            cpuCount: cpu,
+            memoryMiB: memory * 1024,
+            disks: [mainDisk],
+            networks: [NetworkSpec(mode: networkMode, macAddress: macAddr,
+                                   bridgedInterface: networkIface)],
+            installerISO: nil,
+            bootFromDiskOnly: true,
+            linux: LinuxSpec(),
+            windows: nil
+        )
+        try BundleIO.create(at: bundleURL, config: config)
+        let mainDiskAbs = bundleURL.appendingPathComponent(mainDiskFile)
+        do {
+            try DiskFactory.importImage(
+                from: URL(fileURLWithPath: importPath),
+                to: mainDiskAbs,
+                info: importInfo,
+                targetSizeGiB: effectiveDiskGiB,
+                qemuImg: qemuImgURL
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: bundleURL)
+            throw error
+        }
+        printCreated(bundleURL: bundleURL, config: config,
+                     effectiveDiskGiB: effectiveDiskGiB, isoPath: nil, macAddr: macAddr,
+                     imported: (path: importPath, info: importInfo))
+    }
+
+    /// 统一打印创建结果 (human / json). imported 非 nil 时打导入信息 + 直接 boot 提示.
+    private func printCreated(bundleURL: URL,
+                              config: VMConfig,
+                              effectiveDiskGiB: UInt64,
+                              isoPath: String?,
+                              macAddr: String,
+                              imported: (path: String, info: DiskFactory.ImportableDiskInfo)?) {
+        switch format {
+        case .human:
+            print("✔ 已创建 \(bundleURL.path)")
+            print("  id:        \(config.id.uuidString)")
+            print("  guestOS:   \(config.guestOS.rawValue)")
+            print("  engine:    \(config.engine.rawValue)")
+            print("  cpu/mem:   \(config.cpuCount) 核 / \(config.memoryMiB / 1024) GiB")
+            print("  disk:      \(effectiveDiskGiB) GiB (qcow2)")
+            if let p = isoPath { print("  iso:       \(p)") }
+            if let im = imported {
+                print("  imported:  \(im.path) (\(im.info.format.rawValue), 虚拟容量 \(im.info.virtualSizeGiB) GiB)")
+            }
+            print("  mac:       \(macAddr)")
+            if imported != nil {
+                print("下一步: hvm-cli start \(name)  (导入磁盘已就绪, 直接 boot)")
+            } else {
+                print("下一步: hvm-cli start \(name)  (在 guest 内完成安装, 然后 hvm-cli boot-from-disk \(name))")
+            }
+        case .json:
+            printJSON([
+                "bundlePath": bundleURL.path,
+                "id": config.id.uuidString,
+                "guestOS": config.guestOS.rawValue,
+            ])
         }
     }
 
@@ -248,91 +221,7 @@ struct CreateCommand: AsyncParsableCommand {
         ))
     }
 
-    /// 创建加密 QEMU VM. 走 EncryptedBundleIO.create + QcowLuksFactory + OVMFVarsLuksFactory.
-    /// 失败一律清残留 (handle.deinit 兜底 close).
-    private func createEncryptedVM(parentDir: URL,
-                                    bundleURL: URL,
-                                    password: String,
-                                    config: VMConfig,
-                                    sizeGiB: UInt64) throws {
-        // 1. EncryptedBundleIO.create 创建加密外壳 (config.yaml.enc + meta/encryption.json)
-        let handle = try EncryptedBundleIO.create(
-            parentDir: parentDir,
-            displayName: config.displayName,
-            password: password,
-            baseConfig: config,
-            scheme: .qemuPerfile
-        )
-        guard let subKeys = handle.qemuSubKeys else {
-            try? handle.close()
-            try? FileManager.default.removeItem(at: bundleURL)
-            throw HVMError.encryption(.parseFailed(reason: "EncryptedBundleIO.create 未返子 keys"))
-        }
-
-        // 2. 主盘 LUKS qcow2
-        let qemuImg: URL
-        do {
-            qemuImg = try QemuPaths.qemuImgBinary()
-        } catch {
-            try? handle.close()
-            try? FileManager.default.removeItem(at: bundleURL)
-            throw error
-        }
-        let mainDiskAbs = bundleURL.appendingPathComponent(
-            "\(BundleLayout.disksDirName)/\(BundleLayout.mainDiskFileName(for: .qemu))"
-        )
-        do {
-            try QcowLuksFactory.create(
-                at: mainDiskAbs,
-                sizeBytes: sizeGiB * (1 << 30),
-                key: subKeys.qcow2Disk,
-                qemuImg: qemuImg
-            )
-        } catch {
-            try? handle.close()
-            try? FileManager.default.removeItem(at: bundleURL)
-            throw error
-        }
-
-        // 3. OVMF VARS LUKS (仅 Windows guest)
-        if config.guestOS == .windows {
-            let qemuRoot: URL
-            do {
-                qemuRoot = try QemuPaths.resolveRoot()
-            } catch {
-                try? handle.close()
-                try? FileManager.default.removeItem(at: bundleURL)
-                throw error
-            }
-            let template = qemuRoot.appendingPathComponent("share/qemu/edk2-aarch64-vars.fd")
-            let nvramAbs = BundleLayout.nvramDir(bundleURL)
-                .appendingPathComponent(BundleLayout.nvramLuksFileName)
-            try? FileManager.default.createDirectory(at: BundleLayout.nvramDir(bundleURL),
-                                                       withIntermediateDirectories: true)
-            do {
-                try OVMFVarsLuksFactory.create(
-                    at: nvramAbs,
-                    fromTemplate: template,
-                    key: subKeys.qcow2Nvram,
-                    qemuImg: qemuImg
-                )
-            } catch {
-                try? handle.close()
-                try? FileManager.default.removeItem(at: bundleURL)
-                throw error
-            }
-        }
-
-        // 4. close handle (QEMU 路径 noop, 仅清子 keys 引用)
-        try handle.close()
-    }
-
-    /// 解析 --network 参数 → (mode, bridgedInterface).
-    /// - "nat"             → (.user, nil)         (兼容老命名, 现行 NAT 走 user-mode)
-    /// - "shared"          → (.vmnetShared, nil)
-    /// - "host"            → (.vmnetHost, nil)
-    /// - "bridged:<iface>" → (.vmnetBridged, "<iface>")
-    /// - "none"            → (.none, nil)
+    /// 解析 --network → (mode, bridgedInterface): nat→user, shared/host/none, bridged:<iface>.
     private func parseNetwork(_ raw: String) throws -> (NetworkMode, String?) {
         if raw == "nat" || raw == "user" { return (.user, nil) }
         if raw == "shared" { return (.vmnetShared, nil) }

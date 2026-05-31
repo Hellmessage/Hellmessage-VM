@@ -1,11 +1,6 @@
 // HVMCore/SocketPaths.swift
-// socket_vmnet daemon 的标准 socket 路径集中在此.
-//
-// 路径由 scripts/install-vmnet-daemons.sh 写 launchd plist 时约定, 运行期由多处消费
-// (QEMU 后端构造 -netdev stream, VMnetSupervisor 存在性检查, NIC 热插拔等).
-// 集中成常量避免散落硬编的字面量漂移.
-//
-// 路径与 socket_vmnet 上游 + lima + hell-vm 全部一致, 跨工具复用同一 daemon.
+// socket_vmnet daemon 的标准 socket 路径集中常量, 避免多处硬编字面量漂移.
+// 路径与 socket_vmnet 上游 / lima / hell-vm 一致, 跨工具复用同一 daemon.
 import Foundation
 
 public enum SocketPaths {

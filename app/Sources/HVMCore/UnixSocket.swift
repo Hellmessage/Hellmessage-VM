@@ -1,11 +1,6 @@
 // HVMCore/UnixSocket.swift
-// 公共 unix domain socket 客户端 connect helper.
-// HVMIPC SocketClient / HVMQemu QmpClient / QemuConsoleBridge 都依赖.
-//
-// 为什么放 HVMCore: socket 是底层基础设施, HVMCore 是最低层 module 所有 socket 用户都依赖;
-// 不放 HVMIPC 因为 HVMQemu 不依赖 HVMIPC, 不放 HVMQemu 因为 HVMIPC 不依赖 HVMQemu.
-//
-// 不做 server 端 (bind/listen/accept), 那个由各自实现 (SocketServer / FakeQmpServer 测试).
+// 公共 unix domain socket 客户端 connect helper (放 HVMCore 让所有 socket 用户共用).
+// SocketClient / QmpClient / QemuConsoleBridge 都依赖. 不做 server 端 (各自实现).
 
 import Foundation
 import Darwin

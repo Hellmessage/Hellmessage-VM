@@ -1,8 +1,5 @@
-// HVMFont.swift — 新 GUI 字号 token (Linear 风, 严格节奏)
-//
-// 业务侧禁止 Font.system(size:...) 直写, 一律走 HVMTheme.font.<name>.
-// 节奏: 11 / 12 / 13 / 14 / 18 / 24, 不留中间值 (16 / 20 等).
-// mono 仅用于"代码值" (UUID / MAC / 路径 / shell 命令展示 / build 号).
+// HVMFont.swift — 新 GUI 字号 token. 业务侧禁 Font.system(size:) 直写, 走 HVMTheme.font.<name>.
+// 节奏严格 11/12/13/14/18/24, 不留中间值. mono 仅用于代码值 (UUID/MAC/路径/build 号).
 
 
 import SwiftUI

@@ -1,11 +1,10 @@
-// QemuFramebufferView.swift — 新 GUI 详情区 QEMU 画面嵌入 (业务页 #4 framebuffer, F2).
+// QemuFramebufferView.swift — 新 GUI 详情区 QEMU 画面嵌入.
 //
-// SwiftUI ↔ AppKit 桥: NSViewRepresentable 包稳定 container NSView, 内挂 FramebufferHostView
-// (MTKView, 复用显示链). 关键纪律: Coordinator 持 fbView, makeNSView 只建一次, SwiftUI 复用时
-// updateNSView 不重建 (防 Metal drawable 断). fanout 走 NewGUIStore.ensureQemuFanout.
+// SwiftUI ↔ AppKit 桥: NSViewRepresentable 包稳定 container NSView, 内挂 FramebufferHostView (MTKView).
+// 关键纪律: Coordinator 持 fbView, makeNSView 只建一次, updateNSView 不重建 (防 Metal drawable 断).
 //
-// dialog z-order 防穿透 (F3): CAMetalLayer 不尊重 AppKit sibling z-order, dialog 活时叠不透明
-// 遮罩 + isPaused + inputCaptureEnabled=false (三保险).
+// dialog z-order 防穿透: CAMetalLayer 不尊重 AppKit sibling z-order, dialog 活时叠不透明遮罩 +
+// isPaused + inputCaptureEnabled=false (三保险).
 
 import SwiftUI
 import AppKit
@@ -28,7 +27,6 @@ struct QemuFramebufferView: NSViewRepresentable {
         let fb = FramebufferHostView(frame: .zero)
         fb.translatesAutoresizingMaskIntoConstraints = false
         fb.macStyleShortcuts = vm.config?.macStyleShortcuts ?? true
-        // onFilePaste (Cmd+V 文件粘贴) 接线留 F3
         container.addSubview(fb)
         NSLayoutConstraint.activate([
             fb.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -55,7 +53,11 @@ struct QemuFramebufferView: NSViewRepresentable {
         context.coordinator.maskView = mask
 
         // 注册到 fanout (resize master: 详情区是唯一 view, 拖窗口改 guest 分辨率)
-        store.ensureQemuFanout(vm).addSubscriber(fb, isResizeMaster: true)
+        let session = store.ensureQemuFanout(vm)
+        session.addSubscriber(fb, isResizeMaster: true)
+        // 文件拖拽 / Cmd+V 文件粘贴 → IPC clipboard.paste-files (走 vdagent file_xfer, 落 guest ~/Downloads).
+        // FramebufferHostView 已实现 drag-drop + Cmd+V 拦截, 这里补上 onFilePaste 接线 (原 F3).
+        fb.onFilePaste = { [weak session] urls in session?.sendPasteFiles(urls) }
 
         applyDialogState(context.coordinator, presenting: dialogPresenting)
         return container

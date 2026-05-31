@@ -1,11 +1,9 @@
 // VMControl.swift
-// VM 动作门面 — 收口启停/删除. CLI 命令 + 新 GUI store 共用同一套, 不再各写各的.
-//
-// start: 委托 HostLauncher.launch (fork --host-mode-bundle 子进程).
-// stop/kill/status: 走 BundleLock.inspect 拿 socketPath → SocketClient IPC.
-// delete: requireStopped 检查 → 废纸篓 / purge / secure-erase.
-//
-// 注意: 调用方 (CLI tty prompt / GUI dialog) 负责加密 VM 的密码获取; VMControl 只透传.
+// VM 动作门面 (启停/删除) — CLI 命令 + GUI store 共用.
+//   start:            委托 HostLauncher.launch (fork --host-mode-bundle 子进程)
+//   stop/kill/status: BundleLock.inspect 拿 socketPath → SocketClient IPC
+//   delete:           requireStopped 检查 → 废纸篓 / purge / secure-erase
+// 加密 VM 的密码由调用方获取, VMControl 只透传.
 
 import Foundation
 import HVMBundle

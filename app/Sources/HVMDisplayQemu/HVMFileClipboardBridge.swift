@@ -1,28 +1,17 @@
 // HVMDisplayQemu/HVMFileClipboardBridge.swift
 //
 // UTM 风格 host → guest 文件剪贴板 — host 端的 JSON 协议 client.
-// 详见 docs/v3/HOST_FILE_CLIPBOARD.md.
 //
-// 通路:
-//   macOS Cmd+C 文件 → PasteboardBridge 通知 (走独立 onFileURLs callback)
-//   → HVMFileClipboardBridge.publishFiles(urls)
-//     ├─ (PR-3) QGA push files to C:\ProgramData\HVM\clipboard\<sanitized>
-//     └─ JSON 帧 {"op":"set-clipboard","paths":[<guest 端绝对路径>]}
-//        发到 virtio-serial socket → guest hvm-guest-helper.exe 收
-//        → 调 OleSetClipboard + CF_HDROP 设 Win user clipboard
+// 通路: macOS Cmd+C 文件 → PasteboardBridge onFileURLs → publishFiles(urls)
+//   → QGA push files to C:\ProgramData\HVM\clipboard\<sanitized>
+//   → JSON 帧 {"op":"set-clipboard","paths":[...]} 发 virtio-serial socket
+//   → guest hvm-guest-helper.exe 调 OleSetClipboard + CF_HDROP 设 Win clipboard.
 //
-// 关键设计点:
-//   - 跟 SpiceWebdavServer 同款 single-client unix socket model (QEMU chardev server=on,
-//     我们作 client). 跟 vdagent / qga / webdav 独立 chardev, 互不抢
-//   - JSON length-prefix framing (4-byte BE u32 length + body), 跟 HVMIPC/Frame.swift 同款,
-//     兼容 hvm-guest-helper crate src/protocol.rs (上游已实现)
-//   - 单 in-flight request: 当前不允许 pipeline, 一条 req 一条 resp 串行. 简化心智 +
-//     避免 helper 端混乱 (helper 也是单线程主循环)
-//   - 连接断了不报错, 主动 retry 5s 重连 (跟 guest helper 主循环同款). 这样 VM 重启 /
-//     helper 崩了再起都自动恢复
-//
-// PR-2 范围: 只实 chardev socket + JSON 协议 client + ping/set/clear 三 op. 不接 QGA
-// 上传 (PR-3 做) 也不接 PasteboardBridge 回调 (PR-3 wire). 这次 commit 是 server 端独立可测.
+// 设计要点:
+//   - single-client unix socket (QEMU chardev server=on, 我们作 client); 独立 chardev 不抢
+//   - JSON length-prefix framing (4-byte BE u32 length + body), 兼容 helper src/protocol.rs
+//   - 单 in-flight request 串行, 不 pipeline (helper 单线程主循环)
+//   - 连接断了不报错, 5s 重连, VM 重启 / helper 崩了都自动恢复
 
 import Foundation
 import Darwin
@@ -40,26 +29,21 @@ public final class HVMFileClipboardBridge: @unchecked Sendable {
     /// helper retry 是 5s, 我们 connect 失败也按这个周期重连.
     private static let reconnectDelaySec: TimeInterval = 5
 
-    /// Guest 端 staging 目录. 用 `C:\ProgramData\HVM\clipboard\` (world-writable +
-    /// world-readable, 任何 user-session app 都能 paste 读). 跟 docs/v3/HOST_FILE_CLIPBOARD.md
-    /// D4 一致.
+    /// Guest 端 staging 目录 (world-writable/readable, 任何 user-session app 都能 paste 读).
     public static let guestStagingDir = #"C:\ProgramData\HVM\clipboard"#
 
-    /// 单文件 1 GiB 软上限. 比 FILE_XFER 4 GiB 严些 — 剪贴板期望 snappy, 大文件用户走
-    /// drag-drop 心智更对.
+    /// 单文件 1 GiB 软上限. 比 FILE_XFER 4 GiB 严些 (剪贴板期望 snappy, 大文件走 drag-drop).
     public static let maxFileSizeBytes: UInt64 = 1 * 1024 * 1024 * 1024
 
-    /// staging 目录文件 TTL. 超过自动清掉. 24h 给跨重启 paste 复用; 不会无限累积.
+    /// staging 目录文件 TTL. 超过自动清掉. 24h 给跨重启 paste 复用.
     public static let stagingTTLHours: Int = 24
 
-    /// 单次 publishFiles 整体超时 (上传 + setClipboard). 600s 跟 FILE_XFER 一致, 给大文件
-    /// + 多文件留余量.
+    /// 单次 publishFiles 整体超时 (上传 + setClipboard).
     public static let publishTimeoutSec: Int = 600
 
     private let socketPath: String
-    /// QGA socket 路径 (HVMPaths.qgaSocketPath(for:).path). publishFiles 走 QGA push
-    /// 上传文件到 guest staging dir. nil 时 publishFiles fail-soft 不上传 (PR-3 之前的
-    /// fallback, 现在应该总有值; nil 仅给单测用).
+    /// QGA socket 路径. publishFiles 走 QGA push 上传文件到 guest staging dir.
+    /// nil 时 fail-soft 不上传 (仅给单测用).
     private let qgaSocketPath: String?
     private let queue = DispatchQueue(label: "hvm.file-clipboard.client", qos: .userInitiated)
     /// queue 内访问. -1 = 未连接 / 已关.
@@ -163,6 +147,85 @@ public final class HVMFileClipboardBridge: @unchecked Sendable {
         }
     }
 
+    // MARK: - 通用 RPC ops (exec / write-file / read-file)
+    //
+    // 安全铁律 (见 docs/GUEST_HELPER_RPC_DESIGN.md §5b): 方向单向 host→guest, host 永远是发命令
+    // 的权威方; guest 返回的 stdout/stderr/blob 一律是【惰性 bytes】, host 侧只解码 + 落盘 / 展示,
+    // 绝不 eval / 拼成命令 / 喂 Process. 这里三个方法只做 "发 JSON → 解码字段返回", 不在 host 跑任何
+    // 来自 guest 的东西.
+
+    public struct ExecResult: Sendable {
+        public let exitCode: Int       // -1 = 超时被 kill
+        public let stdoutB64: String   // base64, 调用方自行 decode (惰性 bytes, 不在 host 执行)
+        public let stderrB64: String
+    }
+
+    /// 在 guest 的【登录用户会话】跑命令 (helper 进程身份). shell="cmd" 走 cmd /c; 否则 powershell
+    /// -EncodedCommand. script 是【host 给 guest 执行】的, 返回的 stdout/stderr 只当数据看.
+    /// timeoutMs 到则 guest 侧 kill 子进程 (exitCode=-1). timeoutSec 是 host 等响应的 IPC 超时.
+    public func exec(
+        shell: String = "powershell",
+        script: String,
+        timeoutMs: UInt64? = nil,
+        stdinB64: String? = nil,
+        timeoutSec: Int = 120
+    ) async throws -> ExecResult {
+        var payload: [String: Any] = ["op": "exec", "shell": shell, "script": script]
+        if let timeoutMs { payload["timeout_ms"] = timeoutMs }
+        if let stdinB64 { payload["stdin_b64"] = stdinB64 }
+        let resp = try await sendRequest(payload: payload, timeoutSec: timeoutSec)
+        guard resp.ok else {
+            throw BridgeError.remoteFailure(code: resp.code ?? "?", message: resp.message ?? "?")
+        }
+        return ExecResult(
+            exitCode: resp.exitCode ?? -1,
+            stdoutB64: resp.stdoutB64 ?? "",
+            stderrB64: resp.stderrB64 ?? ""
+        )
+    }
+
+    /// host→guest 写文件 (分块续写). offset=0 截断创建 + 按需建父目录; offset>0 在偏移续写.
+    /// dataB64 是本块数据的 base64. isFinal 标记末块 (当前 helper 仅作语义标记). 返回本次写入字节数.
+    /// 路径走 Rust 原生宽字符 API, 无 qemu-ga 的 ANSI mojibake — 中文路径可靠.
+    @discardableResult
+    public func writeFile(
+        path: String,
+        dataB64: String,
+        offset: UInt64 = 0,
+        isFinal: Bool = true,
+        timeoutSec: Int = 120
+    ) async throws -> UInt64 {
+        let resp = try await sendRequest(
+            payload: [
+                "op": "write-file", "path": path, "data_b64": dataB64,
+                "offset": offset, "final": isFinal,
+            ] as [String: Any],
+            timeoutSec: timeoutSec
+        )
+        guard resp.ok else {
+            throw BridgeError.remoteFailure(code: resp.code ?? "?", message: resp.message ?? "?")
+        }
+        return resp.bytes ?? 0
+    }
+
+    /// guest→host 读文件 (分块). 从 offset 读至多 len 字节 (helper 内部夹到帧上限). 返回 (base64, eof).
+    /// 返回的 dataB64 是【惰性 bytes】, host 侧只 decode 落盘, 不执行.
+    public func readFile(
+        path: String,
+        offset: UInt64 = 0,
+        len: UInt64 = 1 << 20,
+        timeoutSec: Int = 120
+    ) async throws -> (dataB64: String, eof: Bool) {
+        let resp = try await sendRequest(
+            payload: ["op": "read-file", "path": path, "offset": offset, "len": len] as [String: Any],
+            timeoutSec: timeoutSec
+        )
+        guard resp.ok else {
+            throw BridgeError.remoteFailure(code: resp.code ?? "?", message: resp.message ?? "?")
+        }
+        return (resp.dataB64 ?? "", resp.eof ?? true)
+    }
+
     // MARK: - publishFiles (UTM-style paste-where-you-paste 主入口)
 
     /// 单次 publish 结果.
@@ -182,17 +245,10 @@ public final class HVMFileClipboardBridge: @unchecked Sendable {
         public let reason: String
     }
 
-    /// 主入口: PasteboardBridge.onFileURLs callback 调到这里. 同 Cmd+V 文件粘贴 (FILE_XFER)
-    /// 边界一致:
-    ///   - 文件夹: skip
-    ///   - 单文件 > 1 GiB: skip + 提示走 drag-drop
-    ///   - 多文件串行上传 (v1 保守, vdagent / qga / chardev 同时打三条 IPC 通路怕抖)
-    /// 流程:
-    ///   1. cleanup: QGA 删 staging dir 老文件 (> 24h)
-    ///   2. ensure: mkdir -p C:\ProgramData\HVM\clipboard\
-    ///   3. push: 每个 url QGA push 到 staging dir, 文件名 sanitize
-    ///   4. notify: 调 setClipboard 让 helper 设 CF_HDROP
-    ///   5. 返 PublishResult, 调用方根据 result 走通知 (PR-5 加)
+    /// 主入口: PasteboardBridge.onFileURLs callback 调到这里. 边界: 文件夹 skip,
+    /// 单文件 > 1 GiB skip + 提示走 drag-drop, 多文件串行上传.
+    /// 流程: cleanup staging 老文件 → mkdir staging → 逐个 QGA push (文件名 sanitize)
+    /// → setClipboard 让 helper 设 CF_HDROP → 返 PublishResult.
     public func publishFiles(_ urls: [URL]) async -> PublishResult {
         var success: [String] = []
         var skip: [Skip] = []
@@ -260,23 +316,50 @@ public final class HVMFileClipboardBridge: @unchecked Sendable {
             }
 
             let sanitized = Self.sanitize(filename: url.lastPathComponent)
-            let guestPath = #"\#(Self.guestStagingDir)\\#(sanitized)"#
+            let finalGuestPath = #"\#(Self.guestStagingDir)\\#(sanitized)"#
+            // qemu-ga 在 Windows 用 ANSI 代码页处理 guest-file-open 路径 → 非 ASCII (中文) 文件名
+            // 里的字符被转成 '?', 文件落到错名; 而 setClipboard 用的是原名 → CF_HDROP 指向不存在
+            // 的文件 → 粘不出来. 修复: 非 ASCII 名先 push 到 ASCII 临时名 (qga 安全), 再用 PowerShell
+            // -EncodedCommand (UTF-16, Unicode 正确) 改名回原名; CF_HDROP 用原名.
+            let needsUnicodeRename = !sanitized.allSatisfy { $0.isASCII }
+            let pushPath: String
+            if needsUnicodeRename {
+                let ext = url.pathExtension
+                let asciiExt = ext.allSatisfy { $0.isASCII } ? ext : ""
+                let stem = "hvmstage-\(UUID().uuidString.prefix(8))"
+                let tempName = asciiExt.isEmpty ? stem : "\(stem).\(asciiExt)"
+                pushPath = #"\#(Self.guestStagingDir)\\#(tempName)"#
+            } else {
+                pushPath = finalGuestPath
+            }
             do {
                 _ = try await QgaFile.push(
                     socketPath: qgaSocketPath,
                     srcLocal: url,
-                    dstRemote: guestPath,
+                    dstRemote: pushPath,
                     timeoutSec: Self.publishTimeoutSec,
                     progress: nil
                 )
-                success.append(guestPath)
-                fputs("HVMHost(qemu): file-clipboard push ok: \(url.lastPathComponent) → \(guestPath)\n", stderr)
+                var clipboardPath = pushPath
+                if needsUnicodeRename {
+                    do {
+                        try await renameGuestFileUnicode(qgaSocketPath: qgaSocketPath,
+                                                          from: pushPath, to: finalGuestPath)
+                        clipboardPath = finalGuestPath
+                    } catch {
+                        // 改名失败: 退回用 ASCII 临时名 (粘得出来, 名字是 hvmstage-xxxx, 比指向
+                        // 不存在的原名/完全粘不出来好). 仅日志, 不算失败.
+                        fputs("HVMHost(qemu): file-clipboard unicode rename 失败, 退回 ASCII 名: \(error)\n", stderr)
+                    }
+                }
+                success.append(clipboardPath)
+                fputs("HVMHost(qemu): file-clipboard push ok: \(url.lastPathComponent) → \(clipboardPath)\n", stderr)
             } catch {
                 fail.append(Fail(path: path, reason: "QGA push 失败: \(error)"))
             }
         }
 
-        // Step 4: 通知 helper 设 clipboard (即便部分 push 失败, 已成功的还是要让用户能 paste).
+        // Step 4: 通知 helper 设 clipboard (部分 push 失败时已成功的仍要让用户能 paste).
         var clipboardSet = false
         if !success.isEmpty {
             do {
@@ -284,8 +367,7 @@ public final class HVMFileClipboardBridge: @unchecked Sendable {
                 clipboardSet = true
                 fputs("HVMHost(qemu): file-clipboard setClipboard ok (\(success.count) files)\n", stderr)
             } catch {
-                // helper 没响应是常态 (helper 未安装 / 未启动). 把所有"已上传成功"项移到 failed,
-                // 因为没设 clipboard 用户也 paste 不到.
+                // helper 没响应 (未装 / 未启) 是常态. 没设 clipboard 则 paste 不到, 移到 failed.
                 fputs("HVMHost(qemu): file-clipboard setClipboard 失败: \(error)\n", stderr)
                 for p in success {
                     fail.append(Fail(path: p, reason: "guest helper 未响应: \(error)"))
@@ -298,6 +380,31 @@ public final class HVMFileClipboardBridge: @unchecked Sendable {
             successful: success, skipped: skip, failed: fail,
             clipboardSet: clipboardSet
         )
+    }
+
+    /// 用 PowerShell -EncodedCommand (UTF-16LE) Unicode-safe 改名 guest 文件.
+    /// qemu-ga guest-file-open 走 ANSI 代码页 (非 ASCII 名 mojibake), 故 push 用 ASCII 临时名后
+    /// 用此法改回原名. EncodedCommand 是 UTF-16, PowerShell 内部全 Unicode, 中文名正确落地.
+    private func renameGuestFileUnicode(qgaSocketPath: String, from: String, to: String) async throws {
+        func psQuote(_ s: String) -> String {
+            "'" + s.replacingOccurrences(of: "'", with: "''") + "'"
+        }
+        let cmd = "Move-Item -LiteralPath \(psQuote(from)) -Destination \(psQuote(to)) -Force"
+        guard let enc = cmd.data(using: .utf16LittleEndian)?.base64EncodedString() else {
+            throw BridgeError.decodeFailed("encode rename command")
+        }
+        let result = try await QgaExec.run(
+            socketPath: qgaSocketPath,
+            path: "powershell.exe",
+            args: ["-NoProfile", "-NonInteractive", "-EncodedCommand", enc],
+            timeoutSec: 60
+        )
+        if result.exitCode != 0 {
+            let err = Data(base64Encoded: result.stderrBase64)
+                .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            throw BridgeError.remoteFailure(code: "unicode_rename_failed",
+                                            message: "exit=\(result.exitCode): \(err.prefix(200))")
+        }
     }
 
     // MARK: - staging dir 管理 (QGA exec)
@@ -342,8 +449,8 @@ public final class HVMFileClipboardBridge: @unchecked Sendable {
         }
     }
 
-    /// 文件名 sanitize: 替换 Windows 非法字符 (: / \ < > " | ? *) → '_'. 保留 .ext.
-    /// 路径 traversal 防御: lastPathComponent 已经只是文件名, 不含 / .., 这里再 strip 一次.
+    /// 文件名 sanitize: Windows 非法字符 (: / \ < > " | ? *) → '_', 保留 .ext.
+    /// 路径 traversal 防御 (lastPathComponent 已只是文件名, 这里再 strip 一次).
     static func sanitize(filename: String) -> String {
         let illegal: Set<Character> = [":", "/", "\\", "<", ">", "\"", "|", "?", "*"]
         var out = String()
@@ -374,6 +481,22 @@ public final class HVMFileClipboardBridge: @unchecked Sendable {
         let version: String?
         let code: String?
         let message: String?
+        // RPC 扩展 (exec / write-file / read-file). helper 侧 snake_case, 见 protocol.rs.
+        let exitCode: Int?      // exec: 进程退出码 (超时 = -1)
+        let stdoutB64: String?  // exec: stdout base64
+        let stderrB64: String?  // exec: stderr base64
+        let dataB64: String?    // read-file: 读到的 blob base64
+        let bytes: UInt64?      // write-file: 本次写入字节数
+        let eof: Bool?          // read-file: 是否已到文件尾
+
+        enum CodingKeys: String, CodingKey {
+            case id, ok, version, code, message
+            case exitCode = "exit_code"
+            case stdoutB64 = "stdout_b64"
+            case stderrB64 = "stderr_b64"
+            case dataB64 = "data_b64"
+            case bytes, eof
+        }
     }
 
     // MARK: - 内部: connect / read loop / 重连
@@ -409,8 +532,7 @@ public final class HVMFileClipboardBridge: @unchecked Sendable {
         if rc != 0 {
             let saved = errno
             Darwin.close(fd)
-            // VM 启动早期 chardev socket 还没就绪是常态, 5s 后再试.
-            // ENOENT (2) 或 ECONNREFUSED (61) 都正常.
+            // VM 启动早期 chardev socket 没就绪是常态 (ENOENT / ECONNREFUSED), 5s 后再试.
             log.info("file-clipboard connect errno=\(saved) path=\(self.socketPath) — 5s 后重试")
             scheduleReconnect()
             return
@@ -418,8 +540,7 @@ public final class HVMFileClipboardBridge: @unchecked Sendable {
         sockFD = fd
         log.info("file-clipboard connected to \(self.socketPath)")
 
-        // read loop 独立 Thread 跑 blocking recv. 收到完整 frame → decode JSON →
-        // 通过 id resume continuation.
+        // read loop 独立 Thread 跑 blocking recv: 完整 frame → decode JSON → 按 id resume cont.
         let t = Thread { [weak self] in self?.runReadLoop() }
         t.name = "hvm.file-clipboard.read"
         readThread = t
@@ -572,15 +693,12 @@ public final class HVMFileClipboardBridge: @unchecked Sendable {
             do {
                 let r = try await group.next()!
                 group.cancelAll()
-                // 主等待 task 的 continuation 已 resume (成功路径), 但 pending map 里 entry
-                // 由 read loop / send fail 路径清, 不需要这里清.
                 return r
             } catch {
                 group.cancelAll()
-                // 超时路径: 主等待 task 还在 await continuation, group.cancelAll() 不会唤醒它
-                // (Swift withCheckedThrowingContinuation 不响应 cancellation). 必须手动
-                // resume 才不漏. 拿到 continuation = nil 说明 read loop / send fail 已先 resume,
-                // 跳过即可.
+                // 超时路径: 主等待 task 还在 await continuation, cancelAll 不唤醒它
+                // (withCheckedThrowingContinuation 不响应 cancellation), 必须手动 resume.
+                // continuation = nil 说明 read loop / send fail 已先 resume, 跳过.
                 let removed = pending.withLock { $0.removeValue(forKey: id) }
                 removed?.resume(throwing: BridgeError.cancelled("op timeout, request cancelled"))
                 throw error

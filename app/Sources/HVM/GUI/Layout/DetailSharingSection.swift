@@ -1,9 +1,7 @@
-// DetailSharingSection.swift — 详情页共享目录 section (V8).
+// DetailSharingSection.swift — 详情页共享目录 section (host ↔ guest SPICE WebDAV).
 //
-// host ↔ guest 共享目录 (SPICE WebDAV). 仅 QEMU 后端 + Linux/Windows guest 生效;
-// VZ 后端 / macOS guest 灰显 + 文案 (推后 VZSharedDirectory 提案). 改 sharedFolders 需
-// 停机 (chardev 不支持热挂, CLAUDE.md 约束) → 仅 stopped 可增删/改 readOnly.
-// 增删走 store.saveConfig (自动分流明文/加密 + requireStopped=true 拒 running).
+// 仅 QEMU 后端 + Linux/Windows guest 生效, 否则灰显 + 文案. 改 sharedFolders 需停机
+// (chardev 不支持热挂) → 仅 stopped 可增删/改 readOnly. 走 store.saveConfig 自动分流明文/加密.
 
 
 import SwiftUI

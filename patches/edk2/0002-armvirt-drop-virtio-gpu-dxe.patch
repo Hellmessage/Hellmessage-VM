@@ -1,0 +1,24 @@
+diff --git a/ArmVirtPkg/ArmVirtQemu.dsc b/ArmVirtPkg/ArmVirtQemu.dsc
+index 713710c..6df6796 100644
+--- a/ArmVirtPkg/ArmVirtQemu.dsc
++++ b/ArmVirtPkg/ArmVirtQemu.dsc
+@@ -554,7 +554,6 @@
+   # Video support
+   #
+   OvmfPkg/QemuRamfbDxe/QemuRamfbDxe.inf
+-  OvmfPkg/VirtioGpuDxe/VirtioGpu.inf
+   OvmfPkg/PlatformDxe/Platform.inf
+ 
+   #
+diff --git a/ArmVirtPkg/ArmVirtQemuFvMain.fdf.inc b/ArmVirtPkg/ArmVirtQemuFvMain.fdf.inc
+index 3890600..93031d0 100644
+--- a/ArmVirtPkg/ArmVirtQemuFvMain.fdf.inc
++++ b/ArmVirtPkg/ArmVirtQemuFvMain.fdf.inc
+@@ -165,7 +165,6 @@ READ_LOCK_STATUS   = TRUE
+   # Video support
+   #
+   INF OvmfPkg/QemuRamfbDxe/QemuRamfbDxe.inf
+-  INF OvmfPkg/VirtioGpuDxe/VirtioGpu.inf
+   INF OvmfPkg/PlatformDxe/Platform.inf
+ 
+   #

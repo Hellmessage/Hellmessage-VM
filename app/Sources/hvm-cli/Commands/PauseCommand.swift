@@ -1,5 +1,5 @@
 // PauseCommand.swift
-// hvm-cli pause — 暂停 VM (VZ pause). guest 进入挂起态, vCPU 不再调度, 内存保留.
+// hvm-cli pause — 暂停 VM. vCPU 不再调度, 内存保留.
 
 import ArgumentParser
 import Foundation

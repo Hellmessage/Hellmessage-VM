@@ -1,22 +1,10 @@
 // HVMGuiProbe/ProbeRegistry.swift
 // 自家 SwiftUI 控件 → 测试 closure 的全局注册表.
-// 设计稿 docs/v3/HVM_DBG_GUI_PROTOCOL.md D-G2 (重构版).
 //
-// 为什么不用 NSAccessibility:
-//   SwiftUI 通过 NSHostingView 合成 a11y children, 但默认只在 VoiceOver 激活时
-//   暴露完整 tree. 程序内查询 accessibilityChildren() 拿不到 Button / TextField 等
-//   叶子控件 (实测 macOS 14+). 强行用 AXUIElement 系列 C API 需要 a11y trust.
-//
-// 改走自家 closure registry 更直接:
-//   - 控件 .hvmProbe(id: "dialog.X.button.Y", action: .button { ... }) 在 onAppear
-//     注册到全局 dict, onDisappear 移除
-//   - hvm-dbg gui click <id> 直接调 closure (= 等价用户点击触发的 action)
-//   - hvm-dbg gui type <id> --text "..." 调 setter
-//   - 不依赖系统 a11y 服务, 跨 SwiftUI / AppKit 一致
-//
-// 缺点: 不能模拟原生 mouse event 链 (例如 hover 后才出现的菜单). 当前 PR-11 测试场景
-// 都是直接 button.action / textField.text, 这套足够. 后续如有 hover/drag 需求, 再加
-// SimulatedNSEvent 路径.
+// 不用 NSAccessibility: SwiftUI 的 a11y tree 默认只在 VoiceOver 激活时暴露叶子控件
+// (实测 macOS 14+), 程序内查询拿不到. 改走自家 closure registry: 控件 .hvmProbe(...)
+// onAppear 注册 / onDisappear 移除, hvm-dbg gui click/type 直接调 closure, 不依赖系统 a11y.
+// 局限: 不能模拟原生 mouse event 链 (hover 菜单等), 当前测试场景够用.
 
 import AppKit
 import Foundation

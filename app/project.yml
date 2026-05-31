@@ -1,0 +1,240 @@
+# XcodeGen 工程定义 — 由 `make xcode-gen` 生成 app/HVM.xcodeproj (开发期辅助, 非权威构建路径).
+#
+# 镜像 Package.swift 的 target 拓扑 (16 lib/C target + 3 executable). 改 Package.swift 的
+# target/依赖后需同步本文件再 `make xcode-gen` 重生.
+#
+# DEVELOPMENT_TEAM 走 ${DEVELOPMENT_TEAM} 环境变量占位 (make xcode-gen 从 makefile.local
+# 的 APPLE_DEV_TEAM 注入), 不硬编码 team ID 进提交文件 (CLAUDE.md 签名约束).
+#
+# 注: 真实发布仍走 `make build` (SwiftPM + bundle.sh 签名 + 嵌 QEMU). 本工程产物无 QEMU
+# 嵌入 / 无打包签名闭环, 仅供 Xcode 编辑 / 补全 / 调试运行主进程.
+
+name: HVM
+
+options:
+  bundleIdPrefix: com.hellmessage
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
+    CODE_SIGN_STYLE: Automatic
+    # XcodeGen 给 static lib 生成"拷 Swift 桥接头到 include/"的 run script; Xcode 默认
+    # ENABLE_USER_SCRIPT_SANDBOXING=YES 下 ditto 写临时文件被沙箱拒。关掉沙箱化。
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # Xcode 16+ 默认 explicit modules 对 SPM 传递 C 依赖 (Yams → CYaml) 解析不了,
+    # 回退隐式模块编译。
+    SWIFT_ENABLE_EXPLICIT_MODULES: NO
+    # XcodeGen 不把 Yams 内部 C 模块 CYaml 的 modulemap 传给依赖 Yams 的 static lib。
+    # 补 clang header 搜索路径, 指向 Xcode 自己 resolve 的 SourcePackages (BUILD_DIR 的
+    # 兄弟目录, 随 DerivedData 位置走), 跟 Xcode 内部用的是同一份, 不会 redefinition。
+    OTHER_SWIFT_FLAGS: -Xcc -I$(BUILD_DIR)/../../SourcePackages/checkouts/Yams/Sources/CYaml/include
+
+packages:
+  swift-argument-parser:
+    url: https://github.com/apple/swift-argument-parser
+    from: 1.5.0
+  Yams:
+    url: https://github.com/jpsim/Yams
+    from: 5.1.0
+
+targets:
+
+  # ---- 基础库 ----
+  HVMCore:
+    type: library.static
+    platform: macOS
+    sources: [Sources/HVMCore]
+
+  HVMUtils:
+    type: library.static
+    platform: macOS
+    sources: [Sources/HVMUtils]
+    dependencies:
+      - target: HVMCore
+
+  # SCM_RIGHTS fd 接收 C helper (recvmsg + cmsg 宏). public header 在 include/.
+  HVMScmRecv:
+    type: library.static
+    platform: macOS
+    sources: [Sources/HVMScmRecv]
+    settings:
+      base:
+        DEFINES_MODULE: YES
+        MODULEMAP_FILE: Sources/HVMScmRecv/include/module.modulemap
+
+  # ---- 功能模块 ----
+  HVMBundle:
+    type: library.static
+    platform: macOS
+    sources: [Sources/HVMBundle]
+    dependencies:
+      - target: HVMCore
+      - package: Yams
+
+  HVMNet:
+    type: library.static
+    platform: macOS
+    sources: [Sources/HVMNet]
+    dependencies:
+      - target: HVMCore
+      - target: HVMBundle
+
+  HVMEncryption:
+    type: library.static
+    platform: macOS
+    sources: [Sources/HVMEncryption]
+    dependencies:
+      - target: HVMCore
+      - target: HVMBundle
+      - package: Yams
+
+  HVMStorage:
+    type: library.static
+    platform: macOS
+    sources: [Sources/HVMStorage]
+    dependencies:
+      - target: HVMCore
+      - target: HVMBundle
+      - target: HVMNet
+      - target: HVMEncryption
+
+  HVMInstall:
+    type: library.static
+    platform: macOS
+    sources: [Sources/HVMInstall]
+    dependencies:
+      - target: HVMCore
+      - target: HVMBundle
+      - target: HVMStorage
+      - target: HVMUtils
+
+  HVMIPC:
+    type: library.static
+    platform: macOS
+    sources: [Sources/HVMIPC]
+    dependencies:
+      - target: HVMCore
+
+  HVMQemu:
+    type: library.static
+    platform: macOS
+    sources: [Sources/HVMQemu]
+    dependencies:
+      - target: HVMCore
+      - target: HVMBundle
+      - target: HVMUtils
+
+  HVMControl:
+    type: library.static
+    platform: macOS
+    sources: [Sources/HVMControl]
+    dependencies:
+      - target: HVMCore
+      - target: HVMBundle
+      - target: HVMEncryption
+      - target: HVMIPC
+      - target: HVMStorage
+      - target: HVMQemu
+
+  HVMDisplayQemu:
+    type: library.static
+    platform: macOS
+    sources: [Sources/HVMDisplayQemu]
+    dependencies:
+      - target: HVMCore
+      - target: HVMBundle
+      - target: HVMQemu
+      - target: HVMScmRecv
+
+  HVMGuiProbe:
+    type: library.static
+    platform: macOS
+    sources: [Sources/HVMGuiProbe]
+    dependencies:
+      - target: HVMCore
+      - target: HVMIPC
+      - target: HVMDisplayQemu
+
+  # ---- 可执行 ----
+  HVM:
+    type: application
+    platform: macOS
+    sources: [Sources/HVM]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hellmessage.vm
+        CODE_SIGN_ENTITLEMENTS: Resources/HVM.entitlements
+        # Xcode 自动生成 Info.plist (开发调试用; 真实 .app 的 plist 由 bundle.sh 写).
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSPrincipalClass: NSApplication
+        INFOPLIST_KEY_CFBundleDisplayName: HVM
+        INFOPLIST_KEY_LSMinimumSystemVersion: "14.0"
+    # static lib 在 Xcode link 阶段不传递依赖 (SPM 会自动链全闭包, Xcode 不会),
+    # 故 executable 显式列出全部 13 个 lib target + package (未用符号 link 时 strip).
+    dependencies:
+      - target: HVMCore
+      - target: HVMUtils
+      - target: HVMScmRecv
+      - target: HVMBundle
+      - target: HVMNet
+      - target: HVMEncryption
+      - target: HVMStorage
+      - target: HVMInstall
+      - target: HVMIPC
+      - target: HVMQemu
+      - target: HVMControl
+      - target: HVMDisplayQemu
+      - target: HVMGuiProbe
+      - package: Yams
+        product: Yams
+
+  hvm-cli:
+    type: tool
+    platform: macOS
+    sources: [Sources/hvm-cli]
+    dependencies:
+      - target: HVMCore
+      - target: HVMUtils
+      - target: HVMScmRecv
+      - target: HVMBundle
+      - target: HVMNet
+      - target: HVMEncryption
+      - target: HVMStorage
+      - target: HVMInstall
+      - target: HVMIPC
+      - target: HVMQemu
+      - target: HVMControl
+      - target: HVMDisplayQemu
+      - target: HVMGuiProbe
+      - package: swift-argument-parser
+        product: ArgumentParser
+      - package: Yams
+        product: Yams
+
+  hvm-dbg:
+    type: tool
+    platform: macOS
+    sources: [Sources/hvm-dbg]
+    dependencies:
+      - target: HVMCore
+      - target: HVMUtils
+      - target: HVMScmRecv
+      - target: HVMBundle
+      - target: HVMNet
+      - target: HVMEncryption
+      - target: HVMStorage
+      - target: HVMInstall
+      - target: HVMIPC
+      - target: HVMQemu
+      - target: HVMControl
+      - target: HVMDisplayQemu
+      - target: HVMGuiProbe
+      - package: swift-argument-parser
+        product: ArgumentParser
+      - package: Yams
+        product: Yams

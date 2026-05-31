@@ -1,26 +1,8 @@
 // HVMGuiProbe/ProbeServer.swift
 // hvm-dbg ↔ HVM GUI 测试协议 (HDP-GUI) 服务端.
-// 设计稿 docs/v3/HVM_DBG_GUI_PROTOCOL.md.
 //
-// 跨 module 依赖说明: 引 HVMDisplayQemu 拿 FramebufferHostView (debug.simulate-drop /
-// debug.show-drop-overlay 直接戳 view 测拖放通路).
-//
-// 架构: SocketServer (HVMIPC) 包装, 跑在 HVM 主进程内, 监听
-//       ~/Library/Application Support/HVM/run/hvm-dbg-gui.sock
-//
-// 启用: 仅当 env HVM_GUI_PROBE=1 时 install (release build 默认不启).
-//
-// op 集 (PR-G1 仅 screenshot; G2-G5 扩):
-//   - gui.screenshot   截当前主窗口 + 任何弹层 → PNG (base64)
-//   - gui.ping         健康探测 (PR-G1 加, 用来跑通往返)
-//   - gui.list         列控件 tree (PR-G2)
-//   - gui.click        点 identifier (PR-G3)
-//   - gui.type         输文字 (PR-G3)
-//   - gui.keypress     发 keystroke (PR-G3)
-//   - gui.dialog       当前 dialog 名 (PR-G3 / G4)
-//   - gui.event.subscribe 长连接事件流 (PR-G4)
-//   - debug.trigger-error  仅测试用; 给 ErrorPresenter push 一个测试 ErrorDialog
-//                          (验 dialog z-order / 显示行为, 不依赖真实业务失败路径)
+// 跑在 HVM 主进程内的 SocketServer, 监听 run/hvm-dbg-gui.sock. 仅 env HVM_GUI_PROBE=1 时启用
+// (release 默认不启). 引 HVMDisplayQemu 拿 FramebufferHostView 测拖放通路.
 
 import Foundation
 import AppKit
@@ -80,10 +62,8 @@ public enum ProbeServer {
         let s = SocketServer(socketPath: path)
         do {
             try s.start { req in
-                // SocketServer handler 在 IPC 池线程; 必须 hop 到 MainActor 跑实际逻辑 (操作 NSWindow / SwiftUI state 必须主线程).
-                // 历史: 之前用 DispatchQueue.main.sync — 工作原理上从背景线程调 main.sync 不会自死锁,
-                // 但若主线程同步调用又依赖 IPC 回包的代码出现, 会形成跨线程死锁循环. 改 Task @MainActor + semaphore
-                // 不破坏阻塞语义但避开 main.sync 这把脆性锁
+                // handler 在 IPC 池线程, 必须 hop 到 MainActor 跑 (操作 NSWindow / SwiftUI state).
+                // 用 Task @MainActor + semaphore 保阻塞语义, 避开 main.sync 的跨线程死锁风险.
                 let sem = DispatchSemaphore(value: 0)
                 nonisolated(unsafe) var captured: IPCResponse = .failure(
                     id: req.id, code: "gui.internal", message: "MainActor handler 未返回")

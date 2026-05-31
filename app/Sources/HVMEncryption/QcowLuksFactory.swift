@@ -1,30 +1,15 @@
 // HVMEncryption/QcowLuksFactory.swift
-// QEMU 路径加密: qcow2 native LUKS create / resize / rekey 包.
-// 走 HVM 包内 qemu-img (Bundle.main/Resources/QEMU/bin/qemu-img).
+// qcow2 native LUKS create / grow / rekey / isLuksEncrypted 包. 走 HVM 包内 qemu-img.
 //
-// 设计稿 docs/v3/ENCRYPTION.md v2.2.
+// 密钥注入安全: key 写 0o600 临时文件, qemu-img --object secret,file= 读完后立即 unlink;
+// 不走 ps 可见的 secret-key=base64,data=... 形式.
 //
-// API:
-//   - create(at:, sizeBytes:, key:, qemuImg:) — qemu-img create LUKS qcow2
-//   - grow(at:, toBytes:, key:, qemuImg:)     — qemu-img resize (LUKS 需要 key 解 header)
-//   - rekey(at:, oldKey:, newKey:, qemuImg:)  — 两步 amend (add new + remove old)
-//   - isLuksEncrypted(at:, qemuImg:)          — 探测, 不需 key
+// LUKS rekey 两步法 (qemu-img amend, 10.2 无 reencrypt 子命令):
+//   step 1: amend encrypt.new-secret=sec_new,state=active  → 加新 keyslot
+//   step 2: amend encrypt.old-secret=sec_old,state=inactive → 销毁老 keyslot
+//   step 1 失败数据不动; step 2 失败 → .luksRekeyHalfDone (双 keyslot 激活, 重试可恢复).
 //
-// 密钥注入安全:
-//   key (32 字节 SymmetricKey) 写到 0o600 临时文件 (NSTemporaryDirectory + UUID 后缀),
-//   qemu-img 用 --object secret,file=<path> 一次性读完, 完成后立即 unlink.
-//   不走 ps 可见的 secret-key=base64,data=... 形式.
-//
-// LUKS rekey 两步法 (qemu-img amend, HVM 包 qemu-img 10.2 没有 reencrypt 子命令):
-//   step 1: amend -o "encrypt.new-secret=sec_new,encrypt.state=active" → 加新 keyslot
-//   step 2: amend -o "encrypt.old-secret=sec_old,encrypt.state=inactive" → 销毁老 keyslot
-//   step 1 失败 → 直接报错, 数据不动
-//   step 2 失败 → 抛 .luksRekeyHalfDone (老 + 新 keyslot 都激活, 用户重试可恢复)
-//
-// 不做:
-//   - import 现有明文 qcow2 转 LUKS (用户走 qemu-img convert + create)
-//   - keyslot 多版本管理 (LUKS 有 8 keyslot, HVM 只用 0 + 1, 不暴露)
-//   - 性能调优 (encrypt.iter-time PBKDF time, 默认 2000ms 即可)
+// 不做: import 明文 qcow2 转 LUKS / keyslot 多版本管理 / 性能调优.
 
 import Foundation
 import CryptoKit
@@ -89,8 +74,8 @@ public enum QcowLuksFactory {
     }
 
     /// 改密 step 1 (拆出): 加新 keyslot. 加完两个 keyslot 都激活, 老密码仍能解.
-    /// 用于 RekeyVMOperation 原子化重排 (TODO #12): 先全部 disk addNewKeyslot →
-    /// atomic write config + routing → 全部 removeOldKeyslot. 任意 crash 点都能用一个密码解.
+    /// RekeyVMOperation 原子化重排用: 全部 disk addNewKeyslot → atomic write config + routing
+    /// → 全部 removeOldKeyslot. 任意 crash 点都能用某个密码解.
     public static func addNewKeyslot(at url: URL,
                                        oldKey: SymmetricKey,
                                        newKey: SymmetricKey,
@@ -136,9 +121,8 @@ public enum QcowLuksFactory {
         ])
     }
 
-    /// 改密 (rekey, 两步法 — 内联调). step 1 加新 keyslot, step 2 销毁老 keyslot.
-    /// step 2 失败 → 抛 .luksRekeyHalfDone (此时老 + 新两个 keyslot 都激活, 用户重试 rekey 可恢复).
-    /// **注**: 推荐用 addNewKeyslot + removeOldKeyslot 拆开调用 (TODO #12 原子化).
+    /// 改密 (rekey, 两步法内联). step 2 失败 → .luksRekeyHalfDone (双 keyslot 激活, 重试可恢复).
+    /// 推荐用 addNewKeyslot + removeOldKeyslot 拆开调用 (原子化).
     public static func rekey(at url: URL,
                              oldKey: SymmetricKey,
                              newKey: SymmetricKey,
@@ -196,8 +180,7 @@ public enum QcowLuksFactory {
         proc.waitUntilExit()
         guard proc.terminationStatus == 0 else { return false }
         let data = (try? stdoutPipe.fileHandleForReading.readToEnd()) ?? Data()
-        // 简单识别: encrypted=true + format-specific.encrypt.format=luks
-        // 完整 JSON 解析过度, 字符串包含识别已足够 (qemu-img info JSON 输出稳定).
+        // 字符串包含识别即可 (qemu-img info JSON 输出稳定), 不做完整 JSON 解析.
         guard let s = String(data: data, encoding: .utf8) else { return false }
         return s.contains("\"encrypted\": true") && s.contains("\"format\": \"luks\"")
     }

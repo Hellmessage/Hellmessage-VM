@@ -1,12 +1,6 @@
 // HVMCore/NetworkInterfaces.swift
-// HostNetworkInterface —— 枚举宿主机可用于桥接的以太网/Wi-Fi 接口
-//
-// 用途:
-// - VMSettingsNetworkSection / CreateVMDialog 的 "桥接接口" picker 数据源
-// - VMnetSupervisor 判断用户选的 iface 当前是否 link up
-//
-// 过滤策略 (不把虚拟/内部接口暴露给用户):
-//   白名单只认 en* 与 pktap*; 跳过 lo0 / utun* / awdl* / llw* / bridge* / ap* / anpi* 等内部接口.
+// 枚举宿主机可用于桥接的以太网/Wi-Fi 接口, 给 picker 数据源 + VMnetSupervisor link 判断.
+// 白名单只认 en* 与 pktap*, 跳过 lo0 / utun* / awdl* 等内部接口.
 
 import Foundation
 import Darwin
@@ -69,7 +63,7 @@ public enum HostNetworkInterfaces {
                                              &host, socklen_t(host.count),
                                              nil, 0, NI_NUMERICHOST)
                         guard rc == 0 else { return nil }
-                        // CChar → UInt8 + 截首 null. 用 String(decoding:as:) 替 String(cString:) (deprecated)
+                        // CChar → UInt8 + 截首 null
                         let utf8 = host.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }
                         return String(decoding: utf8, as: UTF8.self)
                     }

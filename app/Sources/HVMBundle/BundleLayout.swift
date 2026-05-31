@@ -1,6 +1,5 @@
 // HVMBundle/BundleLayout.swift
-// .hvmz 目录布局的路径助手. 所有相对路径定义集中于此
-// 布局规范见 docs/VM_BUNDLE.md
+// .hvmz 目录布局的路径助手. 所有相对路径定义集中于此.
 
 import Foundation
 
@@ -17,12 +16,8 @@ public enum BundleLayout {
     public static let snapshotsDirName  = "snapshots"
 
     public static let nvramFileName     = "efi-vars.fd"
-    /// 加密 VM 路径用的 NVRAM 文件名 (LUKS qcow2). 与 nvramFileName 互斥, 同 bundle 不能同时存在.
-    /// 加密 / 明文 状态判定: 看哪个文件存在 (EncryptedBundleIO 路由层做).
+    /// 加密 VM 的 NVRAM 文件名 (LUKS qcow2). 与 nvramFileName 互斥, 看哪个存在判定加密/明文.
     public static let nvramLuksFileName = "efi-vars.qcow2"
-    public static let auxStorageName    = "aux-storage"
-    public static let machineIdentifier = "machine-identifier"
-    public static let hardwareModel     = "hardware-model"
     public static let thumbnailName     = "thumbnail.png"
 
     public static func configURL(_ bundle: URL) -> URL {
@@ -41,11 +36,10 @@ public enum BundleLayout {
         bundle.appendingPathComponent(disksDirName, isDirectory: true)
     }
 
-    /// 创建 VM 时根据 engine 选择主盘文件名 (写入 DiskSpec.path 持久化).
-    /// 运行时永远从 VMConfig.mainDiskRelPath 读, 不再调用此函数.
+    /// 创建 VM 时按 engine 选主盘文件名 (写入 DiskSpec.path). 运行时从 VMConfig.mainDiskRelPath 读, 不调此函数.
     public static func mainDiskFileName(for engine: Engine) -> String {
         switch engine {
-        case .qemu: return "os.qcow2"   // QEMU-only: 恒 qcow2 (VZ raw .img 已移除)
+        case .qemu: return "os.qcow2"
         }
     }
 
@@ -68,7 +62,7 @@ public enum BundleLayout {
         nvramDir(bundle).appendingPathComponent(nvramFileName)
     }
 
-    /// 加密 NVRAM 路径 (LUKS qcow2). 仅加密 QEMU 路径 VM 用, 由 EncryptedBundleIO 路由层判定.
+    /// 加密 NVRAM 路径 (LUKS qcow2). 仅加密 QEMU VM 用.
     public static func nvramLuksURL(_ bundle: URL) -> URL {
         nvramDir(bundle).appendingPathComponent(nvramLuksFileName)
     }
@@ -89,13 +83,11 @@ public enum BundleLayout {
         snapshotsDir(bundle).appendingPathComponent(name, isDirectory: true)
     }
 
-    /// VZ serial console 的 Unix socket 运行时路径 (不进 config, 运行时生成)
+    /// serial console 的 Unix socket 运行时路径 (不进 config, 运行时生成).
+    /// 注: HDP iosurface / 输入 QMP / vdagent / swtpm 等 socket 走 HVMPaths.runDir (per-uuid), 不在 bundle 内.
     public static func serialSocketURL(_ bundle: URL) -> URL {
         bundle.appendingPathComponent("run", isDirectory: true).appendingPathComponent("console.sock")
     }
-    // 注: HDP iosurface / 输入 QMP / spice-vdagent 走的 socket 与 console QMP /
-    // swtpm 等同走 HVMPaths.runDir 全局风格 (per-uuid), 不在 bundle 内部.
-    // 见 HVMPaths.iosurfaceSocketPath / qmpInputSocketPath / vdagentSocketPath.
 
     /// swtpm 持久化 TPM 状态目录 (Win11 NVRAM 表征, 跨重启保留 SecureBoot 信任根)
     public static func tpmStateDir(_ bundle: URL) -> URL {
@@ -103,7 +95,7 @@ public enum BundleLayout {
     }
 
     /// AutoUnattend.xml 打包后的 ISO 路径 (Win11 SetupBypass + virtio 驱动自动装).
-    /// 由 WindowsUnattend.ensureISO 启动前生成 (幂等), 启动时作为第二个 cdrom 挂入.
+    /// 由 WindowsUnattend.ensureISO 启动前幂等生成, 启动时作第二个 cdrom 挂入.
     public static func unattendISOURL(_ bundle: URL) -> URL {
         bundle.appendingPathComponent("unattend.iso")
     }
@@ -113,9 +105,8 @@ public enum BundleLayout {
         bundle.appendingPathComponent(".unattend-stage", isDirectory: true)
     }
 
-    /// 判断路径是否落在 disks/ 下 (防越界). path 为 config.json 里的相对路径
+    /// 判断相对路径是否落在 disks/ 下 (防越界): 必须以 "disks/" 开头且不含 ".." 回跳.
     public static func isDiskPathInSandbox(_ path: String) -> Bool {
-        // 规范化后必须以 "disks/" 开头且不含 ".." 回跳
         let comps = (path as NSString).pathComponents
         guard let first = comps.first, first == disksDirName else { return false }
         if comps.contains("..") { return false }

@@ -1,9 +1,6 @@
 // DeleteCommand.swift
 // hvm-cli delete — 删除 VM bundle (默认移废纸篓, --purge 彻底 rm).
-//
-// 加密 VM + --purge: 默认走 SecureErase 单 pass random 覆写所有 ciphertext 文件,
-// 防 APFS free block 取证恢复. 跟"加密 VM 删了应该不可恢复"语义对齐.
-// (TODO #11)
+// 加密 VM + --purge 默认 secure-erase (单 pass random 覆写, 防 APFS free block 取证恢复).
 
 import ArgumentParser
 import Foundation

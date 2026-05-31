@@ -1,7 +1,5 @@
 // VMCatalog.swift
-// VM 枚举 — 收口 hvm-cli ListCommand.renderOnce + 老 AppModel.refreshList 两份扫盘逻辑.
-//
-// 加密 VM 不解密 (走 RoutingJSON 拿基础信息); 明文走 BundleIO.load.
+// VM 枚举 (CLI + GUI store 共用). 加密 VM 不解密走 RoutingJSON, 明文走 BundleIO.load.
 // 运行态走 BundleLock.isBusy (flock 非阻塞探测). 返回按 displayName 升序.
 
 import Foundation
@@ -27,12 +25,10 @@ public enum VMCatalog {
     public static func summary(for bundleURL: URL) -> VMSummary? {
         let runState: RunState = BundleLock.isBusy(bundleURL: bundleURL) ? .running : .stopped
 
-        // 加密 VM: 无明文 config.yaml, 走 routing JSON 拿 vmId / displayName / guestOS / scheme.
+        // 加密 VM: 无明文 config.yaml, 走 routing JSON 拿基础信息 (恒 qemu-perfile)
         if EncryptedBundleIO.detectScheme(at: bundleURL) != nil {
-            // QEMU-only: 加密 VM 恒 qemu-perfile
             let routingURL = RoutingJSON.locationForQemuBundle(bundleURL)
             guard let routing = try? RoutingJSON.read(from: routingURL) else { return nil }
-            // QEMU-only: 加密 VM 恒 qemu (vz-sparsebundle 已随 VZ 移除)
             let engine: Engine = .qemu
             return VMSummary(
                 id: routing.vmId,

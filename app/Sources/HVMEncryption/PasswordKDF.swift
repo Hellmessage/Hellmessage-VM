@@ -1,23 +1,11 @@
 // HVMEncryption/PasswordKDF.swift
 // 用户密码 → master KEK 派生. PBKDF2-SHA256, 跨机器 portable 的核心.
-// 设计稿 docs/v3/ENCRYPTION.md v2.2.
 //
-// 流程:
-//   1. 创建加密 VM 时, 生成 16 字节 random salt, 写明文 routing JSON
-//   2. master_KEK = PBKDF2-SHA256(password, salt, iter=600k, keylen=32)
-//   3. 启动加密 VM 时, 读 routing JSON 拿 salt + iter, 重新 PBKDF2 派生
-//   4. 跨机器拷贝 sparsebundle / .hvmz + routing JSON, 目标机输同一密码 → 派生同样的 master KEK
+// 创建加密 VM 时生成 16B random salt 写明文 routing JSON; 启动时读回 salt + iter 重新
+// PBKDF2 派生. 跨机器拷 .hvmz + routing JSON + 输同密码 → 派生同 master KEK.
 //
-// 选 PBKDF2-SHA256 而非 argon2id:
-//   - PBKDF2 是 Apple CommonCrypto 内置, 无第三方依赖
-//   - 600k iter 是 2024 OWASP 推荐值, 1Password / Bitwarden 同款
-//   - argon2id 更现代但需要 swift-crypto 或自家 C 集成, 与"不引第三方加密库"约束冲突
-//   - routing JSON 加 kdf_algo 字段为未来切 argon2id 留余地
-//
-// 性能:
-//   - M1: ~150 ms / 派生 (默认 600k iter)
-//   - M3: ~80 ms / 派生
-//   - 用户首启等待可接受; 不影响 VM 运行期 I/O
+// 选 PBKDF2-SHA256 (非 argon2id): Apple CommonCrypto 内置无第三方依赖; 600k iter 是
+// 2024 OWASP 推荐值. routing JSON 留 kdf_algo 字段为未来切 argon2id 留余地. 派生 ~80-150ms.
 
 import Foundation
 import CommonCrypto

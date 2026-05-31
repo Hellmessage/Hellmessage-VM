@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  per-user IDEWorkspaceUserSettings — 让 Xcode.app GUI 把 DerivedData 放到 app/.build/xcode.
+  由 make xcode-gen 把 __DERIVED_DATA_ABS__ 替换成绝对路径后写进
+  HVM.xcodeproj/project.xcworkspace/xcuserdata/<user>.xcuserdatad/.
+  注: 仅 Xcode.app GUI 读此设置; xcodebuild 不读 (只认 -derivedDataPath / 全局), 故无法
+      命令行验证。DerivedDataLocationStyle 整数值取自 IDEFoundation (1 = 自定义位置)。
+      SPM 工程不能用 SYMROOT/OBJROOT 或自定义 build location 重定向 (会触发 legacy build
+      location 而禁用 packages), 只能走 DerivedData 机制。
+-->
+<plist version="1.0">
+<dict>
+	<key>DerivedDataLocationStyle</key>
+	<integer>1</integer>
+	<key>DerivedDataCustomLocation</key>
+	<string>__DERIVED_DATA_ABS__</string>
+</dict>
+</plist>

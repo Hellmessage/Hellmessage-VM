@@ -1,25 +1,9 @@
 // HVMEncryption/OVMFVarsLuksFactory.swift
-// QEMU 路径加密 VM 的 OVMF VARS 加密化. 把 stock raw `edk2-aarch64-vars.fd` 模板
-// 转成 LUKS 加密 qcow2 (efi-vars.qcow2), QEMU 启动期走 -drive file.driver=luks 加载.
+// 加密 Win VM 的 OVMF VARS 加密化: 把 stock raw `edk2-aarch64-vars.fd` 模板转成 LUKS
+// 加密 qcow2 (efi-vars.qcow2), QEMU 启动期走 -drive file.driver=luks 加载.
+// (qemu-img convert -f raw -O qcow2 -o encrypt.format=luks,...)
 //
-// 设计稿 docs/v3/ENCRYPTION.md v2.2 "QEMU 路径 加密点四件套".
-//
-// 流程 (创建加密 Win VM 时):
-//   1. CreateVMDialog / EncryptedBundleIO 拿到 master KEK + HKDF 派生 nvramKey (32B)
-//   2. OVMFVarsLuksFactory.create(at: <bundle>/nvram/efi-vars.qcow2,
-//                                  fromTemplate: <qemuRoot>/share/qemu/edk2-aarch64-vars.fd,
-//                                  key: nvramKey, qemuImg: ...)
-//   3. qemu-img convert -f raw -O qcow2 -o encrypt.format=luks,encrypt.key-secret=sec0 ...
-//   4. 完成: efi-vars.qcow2 是 LUKS qcow2, 内容等价于原 64 KiB raw 模板字节
-//
-// 启动期 (PR-9 接入):
-//   QEMU argv 加 -drive if=pflash,driver=qcow2,file.filename=<path>,file.driver=luks,
-//                  file.key-secret=sec_nvram + -object secret,id=sec_nvram,file=<key file>
-//
-// 不做:
-//   - 内容修改 / 写入 (QEMU 启动后自动写, HVM 不动)
-//   - 从已加密 qcow2 转回 raw (decrypt 路径 PR-10 走 hvm-cli decrypt)
-//   - 改密 (走 QcowLuksFactory.rekey 即可, 同 LUKS qcow2 路径)
+// 不做: 内容修改 (QEMU 启动后自动写) / 转回 raw (走 hvm-cli decrypt) / 改密 (走 QcowLuksFactory.rekey).
 
 import Foundation
 import CryptoKit

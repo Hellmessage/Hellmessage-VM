@@ -1,11 +1,8 @@
 // HVMQemu/SwtpmArgsBuilder.swift
-// 纯函数: 构造 swtpm socket 模式的 argv. 跟 QemuArgsBuilder 同形态便于测试.
+// 纯函数: 构造 swtpm socket 模式的 argv.
 //
-// swtpm socket 模式生命周期:
-//   1. swtpm 启动 → 在 ctrlSocketPath 监听 unix domain socket
-//   2. QEMU 通过 -chardev socket,id=chartpm,path=<同一路径> 连入
-//   3. QEMU 退出 / 断开 → swtpm 因 --terminate 自动 exit
-//   4. tpmstate 目录持久化 NV 状态 (Win11 SecureBoot 信任根 + TPM PCR 都在这)
+// 生命周期: swtpm 在 ctrlSocketPath 监听 → QEMU -chardev 连入 → QEMU 断开后 swtpm --terminate
+// 自动退. tpmstate 目录持久化 NV 状态 (Win11 SecureBoot 信任根 + TPM PCR).
 
 import Foundation
 import HVMCore

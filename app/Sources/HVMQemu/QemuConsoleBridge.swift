@@ -1,5 +1,5 @@
 // HVMQemu/QemuConsoleBridge.swift
-// QEMU guest serial console 的 host 侧桥接 (与 HVMBackend/ConsoleBridge VZ 版同形态).
+// QEMU guest serial console 的 host 侧桥接 (unix socket client 连 QEMU server 端).
 //
 // 数据流:
 //   QEMU -serial chardev:cons0 → unix socket (QEMU server)
@@ -8,11 +8,6 @@
 //   guest stdout ─── socket recv ───┬───▶ console-YYYY-MM-DD.log (append, 跨天切)
 //                                    └───▶ ringBuffer (供 hvm-dbg console.read)
 //   hvm-dbg console.write ──IPC──▶ bridge.write ──▶ socket send ──▶ guest stdin
-//
-// 与 VZ ConsoleBridge 的差异:
-//   - VZ 用 pipe + FileHandle, attach 给 VZVirtualSerialPortConfiguration
-//   - QEMU 用 unix socket client (我们 connect 上 QEMU server 端)
-//   - ringBuffer / 日志 / read(sinceBytes:) 行为完全一致
 
 import Foundation
 import Darwin

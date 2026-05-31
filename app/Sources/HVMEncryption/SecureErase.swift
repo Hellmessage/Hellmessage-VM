@@ -1,17 +1,9 @@
 // HVMEncryption/SecureErase.swift
-// 单文件 best-effort secure delete: 覆写一遍 + unlink. 用于加密化转换时清旧明文文件
+// 单文件 best-effort secure delete: random 覆写一遍 + unlink. 用于加密化转换时清旧明文
 // (config.yaml / efi-vars.fd / 旧 raw disks / 旧 swtpm tpm/permall).
 //
-// 注意:
-//   - APFS / SSD wear leveling 让真正的 secure-erase 不可靠
-//   - 单 pass random 覆写仅"提高成本", 不能保证 100% 不可恢复
-//   - 真正彻底防御靠 host FileVault 全盘加密 (HVM 不强制, 但 README / 文档强烈建议)
-//
-// 实现:
-//   - open(O_WRONLY | O_TRUNC) — APFS sparse 文件 truncate 后 block 即被释放, 后续覆写
-//     的是新 block 不是老 block. 因此先 read 老内容长度 → 覆写 → fsync → unlink.
-//   - 用 random bytes 覆写 (从 SecRandomCopyBytes 拿). 单 pass 即可 (Schneier 7-pass 是
-//     磁性介质时代过时建议, SSD 上 1 pass 与 7 pass 差不多)
+// 注意: APFS / SSD wear leveling 让真正 secure-erase 不可靠, 单 pass 覆写仅"提高成本"
+// 不保证不可恢复. 真正防御靠 host FileVault 全盘加密. 单 pass 即可 (SSD 上 7-pass 无意义).
 
 import Foundation
 import Darwin

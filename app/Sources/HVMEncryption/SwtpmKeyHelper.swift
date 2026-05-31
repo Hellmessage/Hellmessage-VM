@@ -1,29 +1,12 @@
 // HVMEncryption/SwtpmKeyHelper.swift
 // 给 swtpm 子进程注入 32 字节 NVRAM 加密 key. 走 stdin (fd=0) + Pipe, 不落盘.
 //
-// 设计稿 docs/v3/ENCRYPTION.md v2.3 D10.
+// 流程: makeInjector(key:) 建 Pipe → 调用方设 process.standardInput = pipeReadHandle +
+// argv 加 ["--key", argumentValue] → run() → flush() 写 key + close. swtpm 读完用 key
+// 加密 NVRAM state (aes-256-cbc).
 //
-// 流程 (启动加密 Win VM 时):
-//   1. HVM 主进程派生 swtpm-key (HKDF from master, 32 字节 binary)
-//   2. SwtpmKeyHelper.makeInjector(key:) 创建 Pipe
-//   3. 调用方设 process.standardInput = injector.pipeReadHandle
-//   4. 调用方 argv 加 ["--key", SwtpmKeyHelper.argumentValue]
-//   5. process.run() 启动 swtpm
-//   6. injector.flush() 写 32 字节到 pipe + close write 端
-//   7. swtpm 读完 fd=0 后用 key 加密 NVRAM state (mode=aes-256-cbc)
-//
-// 关键: swtpm 不像 LUKS — format=binary 接受任意 32 字节, 不要求 UTF-8.
-// PR-5 D13 base64 编码限制不适用本路径.
-//
-// 安全:
-//   - key 不落盘 (Pipe 是 anonymous, 走内核内存)
-//   - swtpm 读完后 fd 自动 close (Foundation Pipe 行为)
-//   - HVM 主进程 flush() 后立即 close write 端, key 字节随 ARC 释放
-//
-// 不做:
-//   - 走 file= 形式 (会落盘, 不如 fd= 直接)
-//   - mode=aes-cbc (老 128 bit AES, 没必要)
-//   - format=hex (str 编码低效)
+// 关键: swtpm format=binary 接受任意 32 字节, 不要求 UTF-8 (不同于 LUKS 的 base64 限制).
+// 安全: key 不落盘 (Pipe anonymous 走内核内存); flush 后 close write 端, key 随 ARC 释放.
 
 import Foundation
 import CryptoKit

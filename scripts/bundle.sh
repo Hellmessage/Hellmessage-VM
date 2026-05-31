@@ -22,10 +22,9 @@ else
     SIGN="-"
     cat <<'EOF'
 ⚠ ad-hoc 签名 (本机 Keychain 没有 Apple Development 证书)
-  - 本机开发期可用: AMFI 接受 com.apple.security.virtualization, VZ guest 能正常起
+  - 本机开发期可用: QEMU-only 主进程不带 virtualization entitlement, HVF 由 QEMU 子进程 (QEMU.entitlements hypervisor) 承载
   - 不能拷给其他人用: 其他 Mac 上 AMFI 会拒绝 entitlement, .app 启动即崩
   - 想出可分发版本: 在 Apple Developer 注册个人证书后 make build 会自动用真实身份
-  - 详见 docs/BUILD_SIGN.md
 EOF
 fi
 
@@ -91,20 +90,16 @@ if [ -f "$ROOT/scripts/install-vmnet-daemons.sh" ]; then
     chmod +x "$RESOURCES/scripts/install-vmnet-daemons.sh"
 fi
 
-# 4.4b 拷贝 HVM Guest Helper EXE (arm64 Windows) + libunwind.dll 入 Resources/GuestHelper/.
-#      QemuHostEntry 启 Windows VM 后通过 QGA push 到 guest C:\Program Files\HVM Guest Helper\.
-#      详见 docs/v3/HOST_FILE_CLIPBOARD.md §4.5. 缺 EXE 时不 fail (Linux/macOS guest 不需要,
+# 4.4b 拷贝 HVM Guest Helper EXE (arm64 Windows) 入 Resources/GuestHelper/.
+#      QemuHostEntry 启 Windows VM 后通过 QGA push 到 guest C:\HVMGuestHelper\.
+#      缺 EXE 时不 fail (Linux/macOS guest 不需要,
 #      Win guest 跑没 helper 也只是文件剪贴板不可用, 其他功能不受影响).
-#      libunwind.dll: helper EXE 用 llvm-mingw 链 LLVM 异常 unwinder, 默认动态依赖 libunwind.dll;
-#      不带这个 DLL Windows 启 helper 直接静默死掉 (api-ms-win-* DLL 加载失败前 ldr 就 abort).
+#      helper 由 make guest-helper 编成【无 DLL 单 exe】(crt-static 全静态链 libunwind.a/ucrt),
+#      只依赖 Windows 系统 DLL, 不再随附 libunwind.dll.
 GH_SRC_EXE="$ROOT/patches/guest/helper-win/dist/aarch64/hvm-guest-helper.exe"
-GH_SRC_DLL="$ROOT/patches/guest/helper-win/dist/aarch64/libunwind.dll"
 if [ -f "$GH_SRC_EXE" ]; then
     mkdir -p "$RESOURCES/GuestHelper"
     cp "$GH_SRC_EXE" "$RESOURCES/GuestHelper/hvm-guest-helper.exe"
-    if [ -f "$GH_SRC_DLL" ]; then
-        cp "$GH_SRC_DLL" "$RESOURCES/GuestHelper/libunwind.dll"
-    fi
 fi
 
 # 4.5 嵌入 QEMU 后端 (软模式: third_party/qemu-stage/ 不存在则跳过, 仍出 .app)
@@ -141,7 +136,7 @@ fi
 
 # 5. 签名
 #    QEMU 子进程使用独立 entitlement (com.apple.security.hypervisor, HVF 必需);
-#    HVM 主进程 entitlement 含 com.apple.security.virtualization, 二者不能混用
+#    QEMU-only 后 HVM 主进程 entitlements 已空 (无 virtualization), 二者职责分离
 #    真实证书走 hardened runtime; ad-hoc 签名不叠加 --options runtime
 SIGN_ARGS=(--force --sign "$SIGN" --entitlements "$ENTITLEMENTS" --timestamp=none)
 if [ "$SIGN" != "-" ]; then

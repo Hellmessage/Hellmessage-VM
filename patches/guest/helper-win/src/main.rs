@@ -21,12 +21,16 @@
 // CF_HDROP clipboard set 详见 clipboard.rs.
 
 mod clipboard;
+mod exec;
+mod fileio;
 mod log;
 mod protocol;
 mod virtio;
 
 use std::thread;
 use std::time::Duration;
+
+use base64::Engine;
 
 use protocol::{read_frame, write_frame, Request, Response, PROTOCOL_VERSION};
 use virtio::{VirtioSerialPort, HVM_CLIPBOARD_PORT};
@@ -129,6 +133,43 @@ fn dispatch(req: Request) -> Response {
                 Err(e) => {
                     hvmlog!("clear-clipboard 失败: {}", e);
                     Response::fail(id, "clipboard.clear_failed", &format!("{e}"))
+                }
+            }
+        }
+        Request::Exec { id, shell, script, timeout_ms, stdin_b64 } => {
+            hvmlog!("exec shell={} ({} bytes)", shell, script.len());
+            let stdin = stdin_b64
+                .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok());
+            match exec::run(&shell, &script, timeout_ms, stdin) {
+                Ok(r) => Response::exec_result(
+                    id,
+                    r.exit_code,
+                    base64::engine::general_purpose::STANDARD.encode(&r.stdout),
+                    base64::engine::general_purpose::STANDARD.encode(&r.stderr),
+                ),
+                Err(e) => {
+                    hvmlog!("exec 失败: {}", e);
+                    Response::fail(id, "exec.spawn_failed", &format!("{e}"))
+                }
+            }
+        }
+        Request::WriteFile { id, path, data_b64, offset, is_final } => {
+            hvmlog!("write-file {} offset={} final={}", path, offset, is_final);
+            match fileio::write_file(&path, &data_b64, offset, is_final) {
+                Ok(n) => Response::write_result(id, n),
+                Err(e) => {
+                    hvmlog!("write-file 失败: {}", e);
+                    Response::fail(id, "write_file.failed", &format!("{e}"))
+                }
+            }
+        }
+        Request::ReadFile { id, path, offset, len } => {
+            hvmlog!("read-file {} offset={} len={}", path, offset, len);
+            match fileio::read_file(&path, offset, len) {
+                Ok((b64, eof)) => Response::read_result(id, b64, eof),
+                Err(e) => {
+                    hvmlog!("read-file 失败: {}", e);
+                    Response::fail(id, "read_file.failed", &format!("{e}"))
                 }
             }
         }

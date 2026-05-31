@@ -6,11 +6,11 @@
 # 跑完后 qemu-build.sh 会把 stage firmware 拷进 third_party/qemu-stage/share/qemu/.
 #
 # 仅打包者跑; 最终用户机器不需要 (HVM.app 包内已带 firmware).
-# 详见 docs/QEMU_INTEGRATION.md + CLAUDE.md "QEMU 后端约束"
+# 详见 CLAUDE.md "QEMU 后端约束"
 
 set -euo pipefail
 
-# ---- 锁定参数 (修改必须同步 docs/QEMU_INTEGRATION.md 与 CLAUDE.md) ----
+# ---- 锁定参数 (修改必须同步 CLAUDE.md) ----
 # stable202408: PlatformBootManagerLibLight 仍有 "无 NV BootOrder 时自动 boot first device"
 #               行为 (跟 kraxel firmware 一致, 也跟 hell-vm 同源参考项目对齐).
 #               stable202508 上游改了 Light 行为, 无 BootOrder 落 EFI Shell, 不能直接

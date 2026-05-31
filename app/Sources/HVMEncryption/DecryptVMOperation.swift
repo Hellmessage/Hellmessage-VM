@@ -1,22 +1,12 @@
 // HVMEncryption/DecryptVMOperation.swift
-// 加密 QEMU VM → 明文 VM 冷迁移. 设计稿 docs/v3/ENCRYPTION.md v2.4 PR-10b.
+// 加密 QEMU VM → 明文 VM 冷迁移 (`hvm-cli decrypt <vm>`).
 //
-// 流程 (`hvm-cli decrypt <vm>`):
-//   1. 校验 VM stopped + 加密形态
-//   2. EncryptedBundleIO.unlock 拿 master + 4 子 keys
-//   3. 临时目录 .decrypting-<8>/ 内:
-//      - qemu-img convert LUKS qcow2 → qcow2 (主盘 / 数据盘 解密)
-//      - qemu-img convert LUKS qcow2 → raw (OVMF VARS, Win VM)
-//      - EncryptedConfigIO.load → BundleIO.save 写明文 config.yaml
-//   4. 替换原文件: rm config.yaml.enc + meta/encryption.json + 加密 disks/nvram,
-//      mv 临时明文进来
-//   5. 完成后 rmdir 临时目录
+// 流程: unlock 拿 sub keys → 临时目录 .decrypting-<8>/ 内 qemu-img convert
+// LUKS qcow2 → qcow2 (disks) / → raw (OVMF VARS, Win) + 写明文 config.yaml →
+// 替换原文件 (rm config.yaml.enc + meta/encryption.json + 加密 disks/nvram, mv 明文进来).
 //
-// 失败回滚: 转换阶段失败 → 临时目录留, 主 bundle 不动. 替换阶段 mv 失败极少.
-//
-// 注:
-// - decrypt 后 disks 仍是 qcow2 (不切回 raw / 不改 engine)
-// - tpm/ 加密时已重置 (encrypt PR-10a 决策), decrypt 不动 — 仍是空, 启动时 swtpm 自建
+// 失败回滚: 转换阶段失败 → 临时目录留, 主 bundle 不动.
+// decrypt 后 disks 仍 qcow2 (不切回 raw / 不改 engine); tpm/ 加密时已重置, 启动时 swtpm 自建.
 
 import Foundation
 import CryptoKit
@@ -66,7 +56,7 @@ public enum DecryptVMOperation {
                                                       withIntermediateDirectories: true)
         }
 
-        // SIGINT 防中断 + 兜底清理 (PR-C). 二次 Ctrl-C 硬退时跑.
+        // SIGINT 防中断 + 兜底清理. 二次 Ctrl-C 硬退时跑.
         SignalGuard.install(message: "⚠ 解密操作进行中, 请等待结束 (再次 Ctrl-C 强制退出, 临时目录可能残留)")
         SignalGuard.registerCleanup {
             try? FileManager.default.removeItem(at: tmpDir)
@@ -118,7 +108,7 @@ public enum DecryptVMOperation {
         // 5. 解 config.yaml.enc → config.yaml (走 BundleIO.save 标准格式)
         config.encryption = nil   // 标记为明文
         let tmpConfigYaml = tmpDir.appendingPathComponent(BundleLayout.configFileName)
-        // 用 BundleIO.save 写到一个临时 bundle dir 里, 再 mv 到 tmpConfigYaml
+        // BundleIO.save 写到临时 bundle dir, 再 mv 到 tmpConfigYaml
         let tmpCfgBundle = tmpDir.appendingPathComponent(".cfg-stage-\(UUID().uuidString.prefix(6))",
                                                           isDirectory: true)
         try FileManager.default.createDirectory(at: tmpCfgBundle, withIntermediateDirectories: true)
@@ -169,8 +159,8 @@ public enum DecryptVMOperation {
         // 9. 删 routing JSON
         try? FileManager.default.removeItem(at: RoutingJSON.locationForQemuBundle(bundleURL))
 
-        // 10. tpm/ secure-erase (Win VM): swtpm state 是 swtpm-key 加密的,
-        // decrypt 后没 swtpm-key 了, 必须清空 tpm/. 启动期 swtpm 在空目录初始化新明文 state.
+        // 10. tpm/ secure-erase (Win VM): swtpm state 是 swtpm-key 加密的, decrypt 后无 key,
+        // 必须清空 tpm/. 启动期 swtpm 在空目录初始化新明文 state.
         if config.guestOS == .windows {
             let tpmDir = BundleLayout.tpmStateDir(bundleURL)
             if FileManager.default.fileExists(atPath: tpmDir.path) {

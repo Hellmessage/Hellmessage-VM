@@ -1,21 +1,10 @@
 // HVMDisplayQemu/GuestHelperInstaller.swift
 //
-// HVM Guest Helper EXE 自动安装. 详见 docs/v3/HOST_FILE_CLIPBOARD.md §4.5.
+// HVM Guest Helper EXE 自动安装 (Windows VM 启动 + QGA 就绪后 QemuHostEntry 调一次).
 //
-// 触发时机: QemuHostEntry 在 Windows VM 启动 + QGA 就绪后调一次 install(...).
-//
-// 流程:
-//   1. 检测 marker: QGA exec PowerShell test 'C:\ProgramData\HVM\.helper-installed-v1'
-//   2. 已装 → 跳过 (idempotent, 同 marker version 多次开机不重复推 EXE)
-//   3. 未装:
-//      a. mkdir 'C:\HVMGuestHelper\'
-//      b. QGA push hvm-guest-helper.exe → 上述目录
-//      c. 写 HKLM\Software\Microsoft\Windows\CurrentVersion\Run\HVMGuestHelper REG_SZ
-//      d. 写 marker (touch 'C:\ProgramData\HVM\.helper-installed-v1')
-//      e. 用 schtasks /RU INTERACTIVE 跑一次性 task 立即拉起 (跑在 user session, 不等下次登录).
-//         失败不算 fatal — 下次 boot 走 Run key 仍能拉起.
-//
-// 升级路径: marker 文件名带 version (v1, v2, ...). 改 marker 名 → 自动重装.
+// 流程: 检测 marker → 已装跳过 (idempotent) → 未装则 mkdir + QGA push EXE + 注册
+// schtasks ONLOGON 任务 + 写 marker + 立即拉起.
+// 升级路径: marker 文件名带 version, 改名 → 自动重装.
 
 import Foundation
 import OSLog
@@ -25,12 +14,14 @@ private let log = Logger(subsystem: "com.hellmessage.vm", category: "GuestHelper
 
 public enum GuestHelperInstaller {
 
-    /// marker 文件 — 装好之后 touch 一下, 下次开机看到就跳过. 版本号在文件名里, 升级时改名.
-    /// v2: 改 Run reg key → schtasks ONLOGON + /RL HIGHEST (virtio-serial 要 admin token).
-    public static let markerPath = #"C:\ProgramData\HVM\.helper-installed-v2"#
+    /// marker 文件 — 装好后 touch, 下次开机看到就跳过. 版本号在文件名里, 升级时改名.
+    /// v3: helper 改为【无 DLL 单 exe】(crt-static), 不再随附 libunwind.dll + 带 RPC ops (exec/
+    /// write-file/read-file). 升 v3 让已装旧 helper 的 guest 下次启动自动重推新 exe.
+    public static let markerPath = #"C:\ProgramData\HVM\.helper-installed-v3"#
     /// 老 marker 路径 — install 时一并删, 顺便清掉老的 Run reg key.
     public static let oldMarkerPaths: [String] = [
         #"C:\ProgramData\HVM\.helper-installed-v1"#,
+        #"C:\ProgramData\HVM\.helper-installed-v2"#,
     ]
 
     /// guest 端安装目录 + EXE 路径.
@@ -38,7 +29,6 @@ public enum GuestHelperInstaller {
     public static let installedExePath = #"C:\HVMGuestHelper\hvm-guest-helper.exe"#
 
     /// schtasks 持久任务名. SC ONLOGON / RL HIGHEST, 每次用户登录自动起 helper.
-    /// 升级时同名直接覆盖.
     public static let persistTaskName = "HVMGuestHelper"
 
     public enum InstallError: Error, CustomStringConvertible {
@@ -61,19 +51,9 @@ public enum GuestHelperInstaller {
         return FileManager.default.fileExists(atPath: exe.path) ? exe : nil
     }
 
-    /// 同上, libunwind.dll. Optional — 没找到时不算错 (但 helper 启不来).
-    public static func locateBundledDll() -> URL? {
-        guard let res = Bundle.main.resourceURL else { return nil }
-        let dll = res.appendingPathComponent("GuestHelper/libunwind.dll")
-        return FileManager.default.fileExists(atPath: dll.path) ? dll : nil
-    }
-
-    /// 主入口. async, 总耗时数秒 (QGA push EXE ~280KB 通常 < 5s).
-    /// 成功返 (installed: true) 表示这次真的装了; (installed: false) 表示 marker 已存在 skip.
-    /// 失败抛 InstallError, 调用方 log warn 但不算 VM 启动失败 — helper 没装只是文件剪贴板
-    /// 不可用, 其他 VM 功能正常.
-    /// timeouts 给很大值: Windows guest 第一次跑 PowerShell 通常 30-60s (.NET runtime + module
-    /// 加载). 第二次以后秒级.
+    /// 主入口. 成功返 installed=true 表示这次真装了, false 表示 marker 已存在 skip.
+    /// 失败抛 InstallError, 调用方 log warn 但不算 VM 启动失败 (helper 没装只是文件剪贴板不可用).
+    /// timeout 给很大值: Windows guest 首次跑 PowerShell 30-60s (.NET runtime 加载).
     public static func install(qgaSocketPath: String) async throws -> (installed: Bool, message: String) {
         guard let exeURL = locateBundledExe() else {
             throw InstallError.exeNotFound("Bundle.main/Resources/GuestHelper/hvm-guest-helper.exe")
@@ -81,9 +61,8 @@ public enum GuestHelperInstaller {
 
         fputs("HVMHost(qemu): GuestHelper.install begin (EXE=\(exeURL.lastPathComponent))\n", stderr)
 
-        // 0. 等 QGA 在 guest 内 ready (qemu-ga.exe Windows service 通常 boot 后 30-60s
-        //    才起来; 在那之前 QGA chardev socket 是 QEMU listening 但 guest 没 client,
-        //    任何 guest-exec 都 timeout). 用一个 cheap ping 探测 + 指数退避重试, 最多 10 min.
+        // 0. 等 QGA 在 guest 内 ready (qemu-ga.exe service boot 后 30-60s 才起, 之前任何
+        //    guest-exec 都 timeout). cheap ping 探测 + 重试, 最多 10 min.
         fputs("HVMHost(qemu): GuestHelper step 0/6 等 QGA 在 guest 端就绪 (qemu-ga service)\n", stderr)
         try await waitForQgaReady(qgaSocketPath: qgaSocketPath, totalTimeoutSec: 600)
 
@@ -99,6 +78,7 @@ public enum GuestHelperInstaller {
             Stop-Process -Name hvm-guest-helper -Force -ErrorAction SilentlyContinue
             reg delete 'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' /v HVMGuestHelper /f 2>$null | Out-Null
             Remove-Item 'C:\\Program Files\\HVM Guest Helper' -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item '\(installDir)\\libunwind.dll' -Force -ErrorAction SilentlyContinue
             \(oldMarkerPaths.map { #"Remove-Item '\#($0)' -Force -ErrorAction SilentlyContinue"# }.joined(separator: "\n"))
             """
         try? await runPowerShell(
@@ -117,9 +97,8 @@ public enum GuestHelperInstaller {
             errorTag: "mkdir install dir"
         )
 
-        // 3. QGA push EXE (+ libunwind.dll if 存在 — helper 用 llvm-mingw 链 LLVM unwinder,
-        //    不带 DLL Windows loader 直接静默 abort)
-        fputs("HVMHost(qemu): GuestHelper step 3/6 push EXE + DLL\n", stderr)
+        // 3. QGA push EXE. helper 是【无 DLL 单 exe】(crt-static), 不再随附 libunwind.dll.
+        fputs("HVMHost(qemu): GuestHelper step 3/6 push EXE\n", stderr)
         let pushStart = Date()
         do {
             _ = try await QgaFile.push(
@@ -129,27 +108,14 @@ public enum GuestHelperInstaller {
                 timeoutSec: 120,
                 progress: nil
             )
-            if let dllURL = locateBundledDll() {
-                let dllPath = #"\#(installDir)\libunwind.dll"#
-                _ = try await QgaFile.push(
-                    socketPath: qgaSocketPath,
-                    srcLocal: dllURL,
-                    dstRemote: dllPath,
-                    timeoutSec: 60,
-                    progress: nil
-                )
-            } else {
-                fputs("HVMHost(qemu): ⚠ GuestHelper libunwind.dll 没找到, helper 可能起不来\n", stderr)
-            }
         } catch {
-            throw InstallError.qgaFailed("QGA push hvm-guest-helper.exe / libunwind.dll: \(error)")
+            throw InstallError.qgaFailed("QGA push hvm-guest-helper.exe: \(error)")
         }
         let pushMs = Int(Date().timeIntervalSince(pushStart) * 1000)
-        fputs("HVMHost(qemu): GuestHelper push ok (\(pushMs) ms, EXE+DLL)\n", stderr)
+        fputs("HVMHost(qemu): GuestHelper push ok (\(pushMs) ms, EXE)\n", stderr)
 
-        // 4. 注册持久 schtasks ONLOGON 任务 (取代 Run reg key).
-        //    必须 /RL HIGHEST: virtio-serial port ACL 拒普通 user, 需要 admin token.
-        //    /SC ONLOGON: 每个用户登录自动起一份 helper (跑在该用户 session).
+        // 4. 注册持久 schtasks ONLOGON 任务. 必须 /RL HIGHEST: virtio-serial port ACL 拒
+        //    普通 user, 需要 admin token. /SC ONLOGON: 每个用户登录自动起一份 helper.
         fputs("HVMHost(qemu): GuestHelper step 4/6 schtasks ONLOGON 任务\n", stderr)
         let createPersist = #"schtasks /create /TN \#(persistTaskName) /TR '\#(installedExePath)' /SC ONLOGON /RU INTERACTIVE /RL HIGHEST /F | Out-Null"#
         try await runPowerShell(
@@ -179,9 +145,8 @@ public enum GuestHelperInstaller {
         }
     }
 
-    /// 立即拉起 helper. step 4 已注册 ONLOGON 持久任务, 这里直接 /run 触发一次 (next logon
-    /// 会按 SC ONLOGON 触发器自动重起, 不需要这里维护).
-    /// 失败不抛 — 调用方知道 fallback 是 "下次登录 ONLOGON 自动起".
+    /// 立即拉起 helper: 直接 /run 触发 step 4 注册的 ONLOGON 任务一次.
+    /// 失败不抛 — fallback 是 "下次登录 ONLOGON 自动起".
     private static func launchInUserSession(qgaSocketPath: String) async throws {
         let runPersist = #"schtasks /run /TN \#(persistTaskName) | Out-Null"#
         try await runPowerShell(

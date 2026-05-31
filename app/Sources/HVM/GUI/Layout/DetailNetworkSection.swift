@@ -1,7 +1,6 @@
-// DetailNetworkSection.swift — 详情页网络 section (NIC 列表 + 展开编辑, V5).
+// DetailNetworkSection.swift — 详情页网络 section (NIC 列表 + 展开编辑).
 //
-// 多网卡铺路: 每个 NIC 一个紧凑行 (网卡N | 模式 badge | MAC | 桥接接口 | 启用开关 | 删除),
-// 点击行展开编辑表单 (模式/设备型号/MAC/桥接接口). 标题右侧 [添加网卡].
+// 每个 NIC 一个紧凑行 (网卡N | 模式 | MAC | 桥接接口 | 启用 | 删除), 点击行展开编辑表单.
 // 编辑 networks draft (绑定自 DetailOverviewView), 统一 saveFooter 保存.
 
 
@@ -162,7 +161,77 @@ struct DetailNetworkSection: View {
                     .frame(maxWidth: 360)
                     .zIndex(1)
             }
+
+            if networks[i].mode == .user {
+                portForwardEditor(i)
+            }
         }
+    }
+
+    /// 端口转发编辑器 (仅 NAT/user 模式). 宿主机端口 → guest 端口, 走 -netdev user,hostfwd=...
+    @ViewBuilder
+    private func portForwardEditor(_ i: Int) -> some View {
+        VStack(alignment: .leading, spacing: HVMTheme.space.sm) {
+            HStack {
+                Text("端口转发")
+                    .font(HVMTheme.font.sm)
+                    .foregroundStyle(HVMTheme.color.textSecondary)
+                Spacer()
+                HVMUI.Button("添加", variant: .ghost, icon: "plus", size: .sm,
+                             disabled: !editable, probeID: "detail.network.\(i).pf.add") {
+                    networks[i].portForwards.append(PortForward(hostPort: 0, guestPort: 0))
+                }
+            }
+            ForEach(networks[i].portForwards.indices, id: \.self) { j in
+                HStack(spacing: HVMTheme.space.sm) {
+                    HVMUI.Select(selection: protoBind(i, j),
+                                 options: PortForward.Proto.allCases.map { .init(value: $0, label: $0.rawValue) },
+                                 disabled: !editable,
+                                 probeID: "detail.network.\(i).pf.\(j).proto")
+                        .frame(width: 86)
+                    HVMUI.TextField(text: portBind(i, j, host: true), placeholder: "宿主端口",
+                                    disabled: !editable,
+                                    probeID: "detail.network.\(i).pf.\(j).hostPort")
+                        .frame(width: 100)
+                    Text("→").foregroundStyle(HVMTheme.color.textTertiary)
+                    HVMUI.TextField(text: portBind(i, j, host: false), placeholder: "guest 端口",
+                                    disabled: !editable,
+                                    probeID: "detail.network.\(i).pf.\(j).guestPort")
+                        .frame(width: 100)
+                    HVMUI.Button(icon: "trash", variant: .ghost, size: .sm,
+                                 disabled: !editable, probeID: "detail.network.\(i).pf.\(j).delete") {
+                        if networks[i].portForwards.indices.contains(j) {
+                            networks[i].portForwards.remove(at: j)
+                        }
+                    }
+                    Spacer()
+                }
+            }
+            Text("宿主机端口 → guest 端口 (仅 NAT 模式). 例 2222 → 22: ssh 宿主机:2222 即进 guest.")
+                .font(HVMTheme.font.xs)
+                .foregroundStyle(HVMTheme.color.textTertiary)
+        }
+    }
+
+    /// proto 选择 (Select 收 Binding<Value?>, 这里包装非可选 proto).
+    private func protoBind(_ i: Int, _ j: Int) -> Binding<PortForward.Proto?> {
+        Binding(get: { networks[i].portForwards[j].proto },
+                set: { networks[i].portForwards[j].proto = $0 ?? .tcp })
+    }
+
+    /// 端口 Int ↔ String 绑定 (只收数字; 空/0 显空). host=true 宿主端口, false guest 端口.
+    private func portBind(_ i: Int, _ j: Int, host: Bool) -> Binding<String> {
+        Binding(
+            get: {
+                let v = host ? networks[i].portForwards[j].hostPort : networks[i].portForwards[j].guestPort
+                return v > 0 ? String(v) : ""
+            },
+            set: { newVal in
+                let n = Int(newVal.filter { $0.isNumber }.prefix(5)) ?? 0
+                if host { networks[i].portForwards[j].hostPort = n }
+                else { networks[i].portForwards[j].guestPort = n }
+            }
+        )
     }
 
     // MARK: - helpers

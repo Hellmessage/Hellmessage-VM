@@ -37,20 +37,16 @@ struct StartCommand: AsyncParsableCommand {
                 ))
             }
 
-            // 加密形态检测 (不解密) — 加密 VM 走 prompt password, 走 EncryptedBundleIO.unlock
-            // 拿 displayName + id 用于日志路径; 明文 VM 走 BundleIO.load (现状).
+            // 加密 VM: prompt password 拿 displayName + id (走 routing JSON, 不解密); 明文走 BundleIO.load
             let displayName: String
             let vmId: UUID
             var password: String? = nil
             if EncryptedBundleIO.detectScheme(at: bundleURL) != nil {
-                // QEMU-only: 加密 VM 恒 qemu-perfile
                 let routingURL = RoutingJSON.locationForQemuBundle(bundleURL)
                 let routing = try RoutingJSON.read(from: routingURL)
                 displayName = routing.displayName
                 vmId = routing.vmId
-                // Prompt 密码
                 if passwordStdin {
-                    // 脚本模式: 读 stdin 一行
                     let line = readLine(strippingNewline: true) ?? ""
                     if line.isEmpty {
                         throw HVMError.config(.missingField(name: "password (stdin 为空)"))

@@ -1,8 +1,6 @@
 // HVMDisplay/OCREngine.swift
-// 用 Vision framework (VNRecognizeTextRequest) 识别 frame buffer 里的文字.
-// 纯本地推理, 不联网. 支持指定 region.
-//
-// 输出坐标: guest 像素左上原点 (而 Vision 原生是 0-1 normalized + 左下原点, 这里转完).
+// 用 Vision (VNRecognizeTextRequest) 识别 framebuffer 里的文字, 纯本地, 支持指定 region.
+// 输出坐标转成 guest 像素左上原点 (Vision 原生是 0-1 normalized + 左下原点).
 
 import AppKit
 import Foundation

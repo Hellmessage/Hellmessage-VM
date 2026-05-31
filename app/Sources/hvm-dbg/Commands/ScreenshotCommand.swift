@@ -1,4 +1,3 @@
-// hvm-dbg/Commands/ScreenshotCommand.swift
 // hvm-dbg screenshot — 抓 guest 当前 frame buffer, 输出 PNG (stdout 二进制 / 文件 / json base64)
 //
 // VM 必须在跑 (state=running 或 paused), 否则报 dbg.vm_not_running (exit 20).

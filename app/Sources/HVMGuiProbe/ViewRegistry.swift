@@ -1,6 +1,5 @@
 // HVMGuiProbe/ViewRegistry.swift
 // gui.list / gui.click / gui.type 走 ProbeRegistry 自家 closure 注册表.
-// 设计稿 docs/v3/HVM_DBG_GUI_PROTOCOL.md PR-G2 (重构).
 
 import AppKit
 import Foundation

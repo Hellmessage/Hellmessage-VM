@@ -1,28 +1,9 @@
-// HVMUICheckbox.swift — 新 GUI 方框勾选 (PR-C3)
+// HVMUICheckbox.swift — 新 GUI 方框勾选.
 //
-// 用法:
-//   HVMUI.Checkbox("我同意条款", isOn: $accepted)
-//   HVMUI.Checkbox("仅显示运行中", isOn: $filter, size: .sm,
-//                  probeID: "toolbar.checkbox.runningOnly")
-//   HVMUI.Checkbox("全选", isOn: $allSelected, indeterminate: $isPartial)
-//
-// 状态:
-//   - off (isOn=false, indeterminate=false) — 空方框
-//   - on  (isOn=true, indeterminate=false) — 青底 + 白 checkmark
-//   - indeterminate (indeterminate=true)   — 青底 + 白 minus (半选; 给"全选" parent 用)
-// indeterminate 优先: 同时设 isOn / indeterminate 时显示 minus.
-//
-// size:
-//   .sm — 14×14, .md — 16×16 (default), .lg — 20×20
-//
-// 视觉:
-//   - off: bg = transparent, border = borderDefault
-//   - on / indeterminate: bg = accent (青), border = transparent
-//   - checkmark / minus 200ms 缩放进 (0.6 → 1.0 + opacity 0 → 1)
-//   - focus: 外 2px borderFocus ring
-//   - hover: bg layer 0 → 0.04 (off 态) 或 accentHover (on 态)
-//
-// 键盘 + a11y: 同 HVMUI.Toggle, 通过 SwiftUI.Button wrap.
+// 3 态: off (空框) / on (青底 checkmark) / indeterminate (青底 minus 半选, 给"全选" parent).
+//   indeterminate 优先: 同时设 isOn / indeterminate 时显示 minus.
+// 3 size: .sm 14 / .md 16 (default) / .lg 20.
+// 用法: HVMUI.Checkbox("我同意条款", isOn: $accepted, probeID: "...")
 
 
 import SwiftUI
@@ -119,7 +100,6 @@ struct Checkbox: View {
 
     private var box: some View {
         ZStack {
-            // 容器
             RoundedRectangle(cornerRadius: HVMTheme.radius.sm)
                 .fill(boxFill)
                 .frame(width: size.box, height: size.box)
@@ -143,8 +123,7 @@ struct Checkbox: View {
         .animation(HVMTheme.motion.easeOut, value: isFocused)
     }
 
-    /// disabled 时强制走 bgDisabled (灰底 + 灰勾), 不用 accent 误导用户它能点.
-    /// off 态 disabled = 透明底 (跟普通 off 一致, 仅靠 border 显示)
+    /// disabled+marked 走 bgDisabled (灰底 + 灰勾, 不用 accent 误导能点); off 态透明底.
     private var boxFill: Color {
         if isDisabled {
             return isMarked ? HVMTheme.color.bgDisabled : HVMTheme.color.transparent
@@ -156,11 +135,10 @@ struct Checkbox: View {
     }
 
     private var boxBorder: Color {
-        // disabled 始终保留 border, 不论 marked 与否 — 否则 disabled+marked 时
-        // 没 border 又没 accent bg, 在 bgDisabled 上靠 textTertiary 勾撑形太弱
+        // disabled 始终保留 border (否则 bgDisabled 上靠 textTertiary 勾撑形太弱)
         if isDisabled { return HVMTheme.color.borderDefault }
         if isMarked { return HVMTheme.color.transparent }
-        // off 态用 borderEmphasis 让在 sectionCard (bgRaised) 内的方框轮廓清晰
+        // off 态用 borderEmphasis 让 sectionCard (bgRaised) 内方框轮廓清晰
         return HVMTheme.color.borderEmphasis
     }
 

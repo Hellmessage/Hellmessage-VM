@@ -1,10 +1,6 @@
 // LogsCommand.swift
-// hvm-cli logs — 打印 VM 当天的 host 端日志.
-//
-// 路径:
-//   全局 host 侧 .log → ~/Library/Application Support/HVM/logs/<displayName>-<uuid8>/
-//     (host-*.log / qemu-stderr.log / swtpm*.log)
-//   guest serial console-*.log 仍在 bundle/logs/ — 由 hvm-dbg console 读, 不在此命令.
+// hvm-cli logs — 打印 VM 当天的 host 端日志 (logs/<displayName>-<uuid8>/host-*.log 等).
+// guest serial console-*.log 在 bundle/logs/ — 由 hvm-dbg console 读, 不在此命令.
 
 import ArgumentParser
 import Foundation

@@ -1,22 +1,11 @@
 // HVMEncryption/SecureBytes.swift
-// 安全字节缓冲: mlock 防 swap + memset_s 清零销毁.
-// 用于 MasterKey / EncryptionKDF.SubKeySet — 防"攻击者拿到 swap dump 提 key" 边缘场景.
-// (TODO #7)
+// 安全字节缓冲: mlock 防 swap + memset_s 清零销毁. 用于 MasterKey / SubKeySet.
 //
-// 实战边界:
-//   - root 攻击者直接读 process memory, mlock 防不住
-//   - 关机后的物理盘 swap 已被 macOS FileVault 加密 (默认开)
-//   - mlock 价值: 防 "swap dump 已被搞到但 host root 没拿到" 这个 narrow 场景
-//   - memset_s 防: 编译器把 secure-zero 优化掉 (普通 memset 可能被消)
+// 边界: root 攻击者直读 process memory mlock 防不住; mlock 仅防 narrow 的 "swap dump
+// 已搞到但 host root 没拿到" 场景. memset_s 防编译器把 secure-zero 优化掉.
 //
-// 实现:
-//   - calloc(1, len) 分配 (确保零初始化)
-//   - mlock(ptr, len) 锁页 — 失败仅 log warning, 不抛 (有些系统 ulimit 限 mlock 容量)
-//   - deinit: memset_s 清零 → munlock → free
-//
-// 限制:
-//   - Swift Data 复制走原生堆, 一旦 .withBytes closure 内调用 Data(...) 拷贝走就脱离保护
-//   - 调用方自负: closure 内 不要持久化 bytes 到 Data / String / 跨边界传递
+// 实现: calloc 零初始化 → mlock (失败仅 warn, 有些系统 ulimit 限容量) → deinit memset_s + munlock + free.
+// 限制: 调用方在 withBytes closure 内不要把 bytes 拷出 (Data/String) — 拷走即脱离保护.
 
 import Foundation
 import Darwin
@@ -74,7 +63,7 @@ public final class SecureBytes: @unchecked Sendable {
     }
 
     deinit {
-        // memset_s 防编译器优化掉清零. macOS 提供 (来自 <string.h>).
+        // memset_s 防编译器优化掉清零.
         _ = memset_s(ptr, count, 0, count)
         if locked {
             _ = munlock(ptr, count)

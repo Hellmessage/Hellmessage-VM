@@ -1,10 +1,6 @@
 // HVMQemu/SwtpmRunner.swift
-// swtpm 子进程包装. Thin wrapper over SidecarProcessRunner, 加 ctrlSocketPath 字段
-// 与 waitForSocketReady 转发 (swtpm 启动后 host 等其 unix socket 可用才让 QEMU 连).
-//
-// 与 QemuProcessRunner 差异:
-//   - 暴露 ctrlSocketPath (调用方需读)
-//   - waitForSocketReady 可用 (Qemu Runner 没暴露这个)
+// swtpm 子进程包装. Thin wrapper over SidecarProcessRunner, 多暴露 ctrlSocketPath +
+// waitForSocketReady (swtpm 启动后 host 等其 unix socket 可用才让 QEMU 连).
 
 import Foundation
 

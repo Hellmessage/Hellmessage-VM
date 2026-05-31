@@ -32,7 +32,6 @@ GUI 自动化           → hvm-dbg gui * (HDP-GUI 协议), 业务侧 .hvmProbe(
 - [桥接 / 共享网络](#桥接--共享网络-实验性-qemu-后端)
 - [调试探针 hvm-dbg](#hvm-dbg-调试探针--ai-agent-入口)
 - [目录结构](#目录结构)
-- [文档](#文档)
 - [License](#license)
 
 ---
@@ -51,8 +50,6 @@ HVM 还在 1.0 之前, **API、CLI 子命令、`.hvmz` bundle schema (v3)、IPC 
 | **M5** | `hvm-dbg` 完整化(screenshot / key / mouse / console / exec / gui) | ✅ |
 | **M6** | 打磨 + 文档查漏补缺 | ✅ |
 | **加密 / 克隆** | HVMEncryption + CloneManager (QEMU 全闭环, VZ-sparsebundle 推后) | ✅ |
-
-详见 [docs/v1/ROADMAP.md](docs/v1/ROADMAP.md)。
 
 ---
 
@@ -94,8 +91,6 @@ HVM 还在 1.0 之前, **API、CLI 子命令、`.hvmz` bundle schema (v3)、IPC 
 | Linux | VZ | QEMU | ✅ (QEMU only) | VZ 性能更好;QEMU 用于特殊设备 / 老内核 / 加密 |
 | Windows | **QEMU only** | — | ✅ | VZ 无 TPM, Win11 装不了 |
 
-工程与法律细节(GPL 合规、包内布局、`bundle.sh` 签名顺序、virtio-win / swtpm 处理)见 [docs/v1/QEMU_INTEGRATION.md](docs/v1/QEMU_INTEGRATION.md)。
-
 ## 不做什么(能力边界)
 
 **Virtualization.framework(VZ)的硬限制**(Windows 已通过 QEMU 后端绕过):
@@ -106,8 +101,6 @@ HVM 还在 1.0 之前, **API、CLI 子命令、`.hvmz` bundle schema (v3)、IPC 
 - ❌ **热插拔 CPU / 内存** — 改配置必须停机
 - ❌ **VZ-sparsebundle 加密 VM 启动解锁** — 路径推后, 加密 VM 当前只走 QEMU per-file scheme
 
-完整不做清单见 [docs/v1/ROADMAP.md](docs/v1/ROADMAP.md)。
-
 ---
 
 ## 系统要求
@@ -115,7 +108,7 @@ HVM 还在 1.0 之前, **API、CLI 子命令、`.hvmz` bundle schema (v3)、IPC 
 - macOS 14(Sonoma)或更高
 - Apple Silicon(M1 / M2 / M3 / M4 ...)
 - Xcode Command Line Tools — `xcode-select --install`
-- *(可选)* Apple Developer 个人证书 — 自动签出带 `com.apple.security.virtualization` entitlement 的 .app;没有也能 ad-hoc 签名跑
+- *(可选)* Apple Developer 个人证书 — 自动签出可分发 .app;没有也能 ad-hoc 签名跑。主进程不带特殊 entitlement (QEMU-only), HVF 加速由 QEMU 子进程的 `com.apple.security.hypervisor` 承载
 
 ## 构建
 
@@ -246,8 +239,6 @@ open /Applications/HVM.app
 ./build/hvm-dbg qemu-launch win11               # 直接拉 QEMU + 连 QMP, ctrl+c 走 ACPI
 ```
 
-完整子命令清单见 [docs/v1/CLI.md](docs/v1/CLI.md)。
-
 ### 整 VM 加密
 
 ```bash
@@ -275,7 +266,7 @@ echo "my-password" | ./build/hvm-cli start secure-linux --password-stdin
 # scheme=qemu-perfile  kdf=pbkdf2-sha256  iter=600000  salt=<base64>  ...
 ```
 
-GUI 等价: 详情页 stopped 视图 → "Encrypt" / "Decrypt" / "Rekey" 按钮 → 三态 dialog (form / running / done)。详见 [docs/v1/ENCRYPTION.md](docs/v1/ENCRYPTION.md)。
+GUI 等价: 详情页 stopped 视图 → "Encrypt" / "Decrypt" / "Rekey" 按钮 → 三态 dialog (form / running / done)。
 
 ### 整 VM 克隆
 
@@ -295,8 +286,6 @@ GUI 等价: 详情页 stopped 视图 → "Encrypt" / "Decrypt" / "Rekey" 按钮 
 # prompt 源密码 + 二次确认 → 字节级 LUKS qcow2 复制 + 用源 sub.config 重新加密 config
 # 新 VM 跟源同密码; 想换密码: hvm-cli rekey secure-linux-copy
 ```
-
-详见 [docs/v1/CLONE.md](docs/v1/CLONE.md)。
 
 ### 桥接 / 共享网络(实验性,QEMU 后端)
 
@@ -339,8 +328,7 @@ QEMU 通过 `-netdev stream,addr.type=unix,addr.path=<sock>` 直接连 daemon(4-
 
 launchd plist label namespace `com.hellmessage.hvm.vmnet.*`,跟 lima / hell-vm / colima 区分互不干扰。
 
-> VZ 后端的桥接(`com.apple.vm.networking` entitlement)仍在 Apple 审批中,审批通过前 VZ 路径只能用 NAT。
-> 详见 [docs/v1/NETWORK.md](docs/v1/NETWORK.md)。
+> 桥接网络走 `socket_vmnet` 系统级 launchd daemon (brew 安装 + osascript admin 提权),不依赖任何 VZ networking entitlement。
 
 ### `hvm-dbg`(调试探针 / AI agent 入口)
 
@@ -377,8 +365,6 @@ HVM_GUI_PROBE=1 open /Applications/HVM.app
 ./build/hvm-dbg gui screenshot --output /tmp/gui.png
 ```
 
-详见 [docs/v1/DEBUG_PROBE.md](docs/v1/DEBUG_PROBE.md) 与 [docs/v3/HVM_DBG_GUI_PROTOCOL.md](docs/v3/HVM_DBG_GUI_PROTOCOL.md)。
-
 ---
 
 ## 目录结构
@@ -411,27 +397,11 @@ HVM_GUI_PROBE=1 open /Applications/HVM.app
 | `hvm-cli` | 短命 CLI,操作 bundle 或对已有 host 发 IPC,不常驻 |
 | `hvm-dbg` | 调试探针,给 AI agent / 自动化测试用;零新协议,只复用公开 VZ API + QMP + qga + HDP-GUI |
 
-源码模块拓扑(17 target)见 [docs/v1/ARCHITECTURE.md](docs/v1/ARCHITECTURE.md)。
-
 ---
 
-## 文档
+## 项目约束
 
-- **[docs/v1/](docs/v1/)** — 现状描述(按当前代码逻辑重构,2026-05-05 全量更新)
-- **[docs/v3/](docs/v3/)** — 新能力设计提案 (单提案单文档, 大多已合入, 留底作决策溯源)
-- **[docs/CHANGELOG.md](docs/CHANGELOG.md)** — 历史 v2 TODO 清单归档 (45 项已完成)
-
-推荐阅读顺序:
-
-1. [docs/v1/ARCHITECTURE.md](docs/v1/ARCHITECTURE.md) — 项目全貌、17 模块、双后端进程模型
-2. [docs/v1/ROADMAP.md](docs/v1/ROADMAP.md) — 里程碑与不做清单
-3. [docs/v1/VM_BUNDLE.md](docs/v1/VM_BUNDLE.md) — `.hvmz` 目录布局与 `config.yaml` schema (YAML 1.1, v3)
-4. [docs/v1/QEMU_INTEGRATION.md](docs/v1/QEMU_INTEGRATION.md) — QEMU 随包分发、签名、补丁串行管理
-5. [docs/v1/ENCRYPTION.md](docs/v1/ENCRYPTION.md) — 整 VM 加密
-6. [docs/v1/CLONE.md](docs/v1/CLONE.md) — 整 VM 克隆
-7. 其他专题(CLI / GUI / NETWORK / STORAGE / GUEST_OS_INSTALL / DEBUG_PROBE / ...)按需读
-
-项目硬约束在仓库根 [CLAUDE.md](CLAUDE.md),与 docs/ 冲突时以 CLAUDE.md 为准。
+项目硬约束在仓库根 [CLAUDE.md](CLAUDE.md)。
 
 ---
 

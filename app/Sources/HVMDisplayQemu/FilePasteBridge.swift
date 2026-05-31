@@ -1,32 +1,20 @@
 // HVMDisplayQemu/FilePasteBridge.swift
 //
-// host → guest 文件粘贴桥. 详见 docs/v3/HOST_FILE_PASTE.md.
+// host → guest 文件粘贴桥 (vdagent FILE_XFER 通路).
 //
-// 流程:
-//   GUI 主进程 framebuffer view 拦 Cmd+V → 读 NSPasteboard file URLs
-//   → IPC clipboard.paste-files 到 VMHost 子进程
-//   → VMHost 子进程内 FilePasteBridge.handlePasteFiles(urls)
-//   → 每个 url 串行: vdagent.sendFileXferStart → 等 CAN_SEND_DATA → 流 chunks → 等 SUCCESS
-//   → 返回成功/跳过/失败汇总, VMHost 回 IPC 响应, GUI 进程发原生 UNUserNotification
+// 流程: GUI 拦 Cmd+V 读 file URLs → IPC clipboard.paste-files → 本类 handlePasteFiles
+//   → 每个 url 串行 vdagent.sendFileXferStart → 等 CAN_SEND_DATA → 流 chunks → 等 SUCCESS
+//   → 返回成功/跳过/失败汇总, GUI 发原生 UNUserNotification.
 //
-// 跟 PasteboardBridge (文本剪贴板) 平行存在:
-//   - 同一 VdagentClient 实例, 不冲突 (vdagent.queue 串行 writes)
-//   - PasteboardBridge 只关心 onClipboardTextReceived callback
-//   - FilePasteBridge 只关心 onFileXferStatus callback
-//   - 两条 callback 是不同 slot, 互不抢
+// 跟 PasteboardBridge (文本剪贴板) 共用同一 VdagentClient 实例, 不同 callback slot
+// (onFileXferStatus vs onClipboardTextReceived), 互不抢.
 //
-// 同步实现, NOT async/await:
-//   实测 IPC handler 里 await `Task.sleep` (在 withTaskGroup 中) 永远不 fire — Task 调度
-//   被 IPC dispatch 的 `sem.wait()` GCD 线程 + @MainActor Task 跨界栈卡住 (调试日志 "等
-//   CAN_SEND_DATA" 之后 90s 无动静). 改成纯 DispatchSemaphore.wait(timeout:) 直接走 kernel
-//   timer, 跟 Swift Concurrency 调度解耦, 也避免 cooperative pool 饥饿.
-//   整 pipeline 包在 Task.detached 里, await 一次拿结果即可 — 不与 main actor 抢调度.
+// 同步实现, NOT async/await: IPC handler 里 await Task.sleep 会被 IPC dispatch 的
+//   sem.wait() GCD 线程 + @MainActor Task 跨界卡死; 改用 DispatchSemaphore.wait(timeout:)
+//   走 kernel timer 跟 Swift Concurrency 解耦. 整 pipeline 包在 Task.detached 里.
 //
-// 边界:
-//   - 文件夹: skip + 通知 "暂不支持"
-//   - 单文件 > 4 GiB: skip (跟 SPICE 协议 + QGA 一致)
-//   - guest 未装 spice-vdagent: 等 CAN_SEND_DATA 30s 超时 → 报错
-//   - 串行不并发: vdagent socket 单 client + SPICE 协议 chunks 不可 interleave
+// 边界: 文件夹 skip; 单文件 > 4 GiB skip; guest 未装 spice-vdagent → 30s 超时报错;
+//   串行不并发 (vdagent socket 单 client + SPICE chunks 不可 interleave).
 
 import Foundation
 import Darwin
@@ -36,15 +24,13 @@ private let log = Logger(subsystem: "com.hellmessage.vm", category: "FilePaste")
 
 public final class FilePasteBridge: @unchecked Sendable {
 
-    /// 单文件 4 GiB 软上限. SPICE FILE_XFER_DATA size 字段是 u64, 协议本身能装更大,
-    /// 但跟 QGA / 主流虚拟机文件粘贴期望一致, 超过引导用户走共享目录.
+    /// 单文件 4 GiB 软上限. 超过引导用户走共享目录.
     public static let maxFileSizeBytes: UInt64 = 4 * 1024 * 1024 * 1024
 
-    /// 等 guest 回 CAN_SEND_DATA 的上限. 30s 通常足够; 超过说明 guest 内 spice-vdagent
-    /// 没装 / 没响应.
+    /// 等 guest 回 CAN_SEND_DATA 的上限. 超过 = guest 内 spice-vdagent 没装 / 没响应.
     public static let canSendTimeoutSec: Int = 30
 
-    /// 等终态 (SUCCESS / 错误) 的上限. 大文件按 50 MiB/s 估算: 4 GiB ~ 80s; 600s 留余量.
+    /// 等终态 (SUCCESS / 错误) 的上限. 4 GiB @ 50 MiB/s ~ 80s, 600s 留余量.
     public static let finalStatusTimeoutSec: Int = 600
 
     public struct PasteResult: Sendable {
@@ -73,9 +59,8 @@ public final class FilePasteBridge: @unchecked Sendable {
     /// 每个 transfer id 一个 slot. vdagent callback 写, waitNextStatus 读.
     private var slots: [UInt32: TransferSlot] = [:]
 
-    /// 单 transfer 的 STATUS 邮箱. 用 DispatchSemaphore 计数: 收到一个 status → signal();
-    /// 等的人 wait(timeout:) 醒来 → pop 一个 status. 多 status 可堆积 (理论 CAN_SEND_DATA
-    /// → SUCCESS 是两次).
+    /// 单 transfer 的 STATUS 邮箱. DispatchSemaphore 计数: 收到 status → signal(),
+    /// 等的人 wait(timeout:) 醒来 → pop. 多 status 可堆积 (CAN_SEND_DATA → SUCCESS 两次).
     private final class TransferSlot {
         var queue: [VdagentClient.FileXferResult] = []
         let sem = DispatchSemaphore(value: 0)
@@ -85,9 +70,8 @@ public final class FilePasteBridge: @unchecked Sendable {
         self.vdagent = vdagent
     }
 
-    /// 注册 vdagent.onFileXferStatus callback. 必须在 vdagent connect 后 / 任何 sendFileXferStart
-    /// 之前调一次. 老 callback 被覆盖 (跟 PasteboardBridge 的 onClipboardTextReceived 不同 slot,
-    /// 无冲突).
+    /// 注册 vdagent.onFileXferStatus callback. 必须在 vdagent connect 后 / 任何
+    /// sendFileXferStart 之前调一次.
     public func install() {
         vdagent.onFileXferStatus = { [weak self] id, result in
             self?.recordStatus(id: id, result: result)
@@ -108,8 +92,6 @@ public final class FilePasteBridge: @unchecked Sendable {
         slot.queue.append(result)
         slots[id] = slot
         stateLock.unlock()
-        // signal 必须在 unlock 后, 否则 sem.wait 醒来抢 stateLock 跟自己死锁? 不会, sem 是
-        // 跨 lock 安全的, 但分开调用语义更清晰
         slot.sem.signal()
     }
 

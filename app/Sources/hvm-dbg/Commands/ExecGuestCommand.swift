@@ -1,20 +1,13 @@
-// hvm-dbg/Commands/ExecGuestCommand.swift
 // hvm-dbg exec-guest — 通过 qemu-guest-agent 在 guest 内跑命令拿 stdout/stderr/exit_code.
 //
-// 不依赖 keyboard typing (避 IME 字符替换) / OCR (避识别误差) / GUI mouse (避 USB
-// tablet 坐标问题). 端到端自动化验证 guest 行为最可靠通路.
-//
-// 配套要求:
-//   - guest 内 qemu-ga.exe 服务在跑 (UTM Guest Tools NSIS installer 装包含
-//     qemu-ga-x86_64.msi, /S 静默安装)
-//   - argv 挂 chardev qga + virtserialport name=org.qemu.guest_agent.0
-//     (QemuArgsBuilder.qgaSocketPath, QemuHostEntry 自动 wire)
+// 不依赖 keyboard typing / OCR / GUI mouse, 端到端验证 guest 行为最可靠通路.
+// 配套: guest 内 qemu-ga 服务在跑 + argv 挂 chardev qga (QemuHostEntry 自动 wire).
 //
 // 用法:
 //   hvm-dbg exec-guest <vm> --path powershell.exe --args '-Command' --args 'Get-Date'
 //   hvm-dbg exec-guest <vm> --path cmd.exe --args /c --args 'echo hello'
 //
-// 多个 --args 串成 argv 数组. host 端用 0x1F unit-separator 编码不冲突 shell quote.
+// 多个 --args 串成 argv 数组, host 端用 0x1F unit-separator 编码避 shell quote 冲突.
 
 import ArgumentParser
 import Foundation
@@ -53,10 +46,7 @@ struct ExecGuestCommand: AsyncParsableCommand {
     func run() async throws {
         do {
             let socketPath = try IPCCall.socketPath(forVM: vm)
-            // 决定最终 path + argv:
-            // --ps "<line>"   → powershell.exe -NoProfile -EncodedCommand <utf16le-base64(line)>
-            // --cmd "<line>"  → cmd.exe /C <line>
-            // 否则用显式 --path + --args
+            // 决定最终 path + argv: --ps → powershell -EncodedCommand; --cmd → cmd.exe /C; 否则显式 --path + --args
             let finalPath: String
             let finalArgs: [String]
             if let ps {
@@ -85,9 +75,7 @@ struct ExecGuestCommand: AsyncParsableCommand {
                     "argv": argvEncoded,
                     "timeoutSec": "\(timeoutSec)",
                 ],
-                // IPC client read timeout 必须 ≥ guest 内执行时间, 否则 client 先 close
-                // socket → host send response 时 EPIPE → host crash. 加 5s buffer 给
-                // qga JSON encode + IPC frame send 一个余地.
+                // read timeout 必须 ≥ guest 执行时间, 否则 client 先 close → host send EPIPE crash; +5s buffer
                 timeoutSec: timeoutSec + 5
             )
             guard let json = resp.data?["payload"],

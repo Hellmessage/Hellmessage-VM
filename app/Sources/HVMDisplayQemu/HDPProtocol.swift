@@ -1,12 +1,10 @@
 // HDPProtocol.swift
 //
-// HVM-QEMU 显示嵌入协议 (HDP) 的 Swift 端定义
+// HVM-QEMU 显示嵌入协议 (HDP) 的 Swift 端定义. 协议规范 HDP v1.0.0;
+// C 端镜像头 include/ui/hvm_display_proto.h (patches/qemu/0002).
 //
-// 协议规范 (canonical): docs/QEMU_DISPLAY_PROTOCOL.md v1.0.0
-// C 端镜像头:           include/ui/hvm_display_proto.h (在 patches/qemu/0002 中)
-//
-// **同步规则**: 修改本文件必须同步上述两份文件并在协议规范文档 §13 追加版本条目.
-// 三处不允许任何一处单独改, 否则 host 与 QEMU 二进制握手会失配.
+// **同步规则**: 改本文件必须同步上述两份文件 + 协议规范 §13 追加版本条目.
+// 三处不允许单独改, 否则 host 与 QEMU 握手失配.
 
 import Foundation
 
@@ -389,9 +387,7 @@ public enum HDP {
 
 // MARK: - Data little-endian helpers
 //
-// 协议规范 §2: 一律 little-endian. host 是 arm64 / x86, 都 LE, 不需要 byteswap.
-// 但显式写 LE 让协议层不依赖 host 假设, 一旦未来跨平台 (例如 Windows host)
-// 也能保持正确.
+// 协议规范 §2: wire 一律 little-endian. 显式写 LE 让协议层不依赖 host 字节序假设.
 
 extension Data {
     fileprivate mutating func appendLE(_ v: UInt8) {

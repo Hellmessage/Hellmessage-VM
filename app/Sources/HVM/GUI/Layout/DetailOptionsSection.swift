@@ -1,10 +1,7 @@
-// DetailOptionsSection.swift — 详情页选项 section (V8): 剪贴板共享 + macOS 风格快捷键.
+// DetailOptionsSection.swift — 详情页选项 section: 剪贴板共享 + macOS 风格快捷键.
 //
-// 两项都仅 QEMU 后端 (vdagent / 输入映射) 生效, VZ macOS guest 框架自带剪贴板 → 灰显 + 文案.
-//   - 剪贴板共享: 可 running 热改 (走 store.setClipboardSharing → IPC clipboard.setEnabled, P0-3)
-//   - macStyleShortcuts: host cmd → guest ctrl 转发. 改完无须重启 (framebuffer view 实时读),
-//     当前新 GUI 无 framebuffer view, 仅落 config (requireStopped=false).
-// 两项都走 saveConfig 自动分流明文/加密.
+// 两项都仅 QEMU 后端 (vdagent / 输入映射) 生效, 否则灰显 + 文案. 都可 running 热改 (requireStopped=false),
+// 走 saveConfig / setClipboardSharing 自动分流明文/加密.
 
 
 import SwiftUI
@@ -20,7 +17,7 @@ struct DetailOptionsSection: View {
     private var supported: Bool { vm.engine == .qemu }
 
     var body: some View {
-        if let cfg {
+        if cfg != nil {
             HVMUI.Section("选项",
                           description: supported ? nil : "以下选项仅 QEMU 后端生效") {
                 VStack(alignment: .leading, spacing: HVMTheme.space.md) {

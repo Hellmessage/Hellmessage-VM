@@ -1,8 +1,7 @@
-// DetailBootSection.swift — 详情页 ISO & 启动 section (V7).
+// DetailBootSection.swift — 详情页 ISO & 启动 section.
 //
-// ISO 挂载/弹出 + 启动方式 (ISO 安装 / 仅硬盘) + Windows 三态装机推进. 这些字段相互耦合
-// (改 ISO 自动取消 bootFromDiskOnly 等), 故不走 draft/saveForm, 用离散按钮即时 saveConfig
-// (跟磁盘 section 同款即时动作), 避免 free toggle 进非法中间态. 复刻老 GUI DetailBars 逻辑.
+// ISO 挂载/弹出 + 启动方式 (ISO 安装 / 仅硬盘) + Windows 三态装机推进. 字段相互耦合
+// (改 ISO 自动取消 bootFromDiskOnly), 故不走 draft/saveForm, 用离散按钮即时 saveConfig 避免非法中间态.
 //
 // 后端/guest 适配:
 //   - macOS guest: 走 IPSW + VZMacOSInstaller, 无 ISO 概念 → 整 section 不显示

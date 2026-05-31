@@ -1,33 +1,10 @@
-// HVMUITextField.swift — 新 GUI 文本输入字段 (PR-C2)
+// HVMUITextField.swift — 新 GUI 文本输入字段.
 //
-// 用法:
-//   HVMUI.TextField("名称", text: $name, placeholder: "我的 VM")
-//   HVMUI.TextField("CPU", text: $cpu, icon: "cpu", suffix: "核")
+// 3 size: .sm 28 高 / .md 36 高 (default) / .lg 44 高. 支持 icon / suffix / errorMessage / loading.
+// 视觉: hover 提亮 / focus ring / error 红框 + 下方红字 / disabled opacity 0.4.
+// 用法: HVMUI.TextField("名称", text: $name, placeholder: "我的 VM", probeID: "...")
 //
-// 状态机 (互斥, 一次只有一个):
-//   .empty    — 无文字, placeholder 灰显
-//   .filled   — 有文字
-//   .focused  — 当前 focus (跟 empty/filled 并存)
-//   .error    — errorMessage 非 nil; 边框 borderError + 字段下方红字
-//   .loading  — 异步 validate 中; 右侧 spinner
-//   .disabled — 不接 hover / focus / input
-//
-// size:
-//   .sm — 28 高 (Toolbar 内联), .md — 36 高 (default), .lg — 44 高 (Hero / 单字段 dialog)
-//
-// 视觉细节 (Linear+ 精致化):
-//   - hover    : layer alpha 0 → 0.04, 120ms easeOut
-//   - focus    : ring 0 → 2px (borderFocus 青 60%), 200ms easeOut; bg 提亮一档
-//   - error    : 边框 borderError 红, 字段下方 errorMessage 红字
-//   - loading  : 右侧 ProgressView (size 跟着字段档)
-//   - disabled : opacity 0.4, allowsHitTesting false
-//
-// 键盘: SwiftUI 原生 TextField + @FocusState, Tab 链自动; Enter → onSubmit closure
-//
-// VoiceOver: accessibilityLabel = label, accessibilityHint = errorMessage ?? placeholder
-//
-// probe: probeID 非 nil 时挂 .hvmProbe(action: .textField(getter, setter)),
-// hvm-dbg gui type --identifier X --text Y 走 setter 改 binding.
+// probe: 挂 .textField(getter, setter), hvm-dbg gui type --identifier X --text Y 走 setter 改 binding.
 
 
 import SwiftUI
@@ -180,17 +157,15 @@ struct TextField: View {
                     .progressViewStyle(.circular)
             }
         }
-        // padding + frame 内化 (FieldChrome 不再管), 让 hit test 覆盖整个 padding 区
+        // padding + frame 内化, 让 hit test 覆盖整个 padding 区
         .padding(.horizontal, size.horizontalPadding)
         .frame(maxWidth: .infinity, minHeight: size.height)
         .contentShape(Rectangle())
     }
 }
 
-/// 字段外框 modifier — TextField / SecureField / Select 共享.
-/// 仅管 bg / border / focus ring; padding + frame + contentShape 留给业务侧 button
-/// label 内部, 这样 SwiftUI.Button hit test 覆盖整个 padding 后 frame, 避免"点中间
-/// 空白不响应"问题.
+/// 字段外框 modifier — TextField / SecureField / Select 共享. 仅管 bg / border / focus ring,
+/// padding + frame + contentShape 留给业务侧, 让 hit test 覆盖整个 padding 区.
 struct FieldChrome: ViewModifier {
     let size: FieldSize
     let isFocused: Bool
@@ -241,8 +216,7 @@ struct FieldChrome: ViewModifier {
 
 }  // extension HVMUI 结束
 
-/// Probe 集成 modifier — probeID 非 nil + 未 disabled 时挂 .hvmProbe.
-/// .textField getter 读 binding, setter 写 binding (hvm-dbg gui type 走它).
+/// Probe 集成 modifier — 未 disabled 时挂 .textField(getter 读 / setter 写 binding).
 private struct ProbeTextFieldModifier: ViewModifier {
     let probeID: String
     let label: String

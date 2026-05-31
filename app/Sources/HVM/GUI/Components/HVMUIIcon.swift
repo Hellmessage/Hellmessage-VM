@@ -1,25 +1,9 @@
-// HVMUIIcon.swift — 新 GUI SF Symbol 包装 (PR-C6)
+// HVMUIIcon.swift — 新 GUI SF Symbol 包装.
 //
-// 用法:
-//   HVMUI.Icon("trash")                              // .md default
-//   HVMUI.Icon("lock.fill", size: .lg)
-//   HVMUI.Icon("checkmark", size: .sm, color: .success)
-//   HVMUI.Icon("exclamationmark.triangle", color: .warn)
-//
-// size:
-//   .xs — 10pt (微小, badge / inline)
-//   .sm — 12pt (字段 leading / kbd hint)
-//   .md — 14pt (default, button / 普通 icon)
-//   .lg — 18pt (section header / hero)
-//   .xl — 24pt (空状态插图 / hero)
-//
-// color: 6 个语义色 (success/warn/error/info/accent/neutral) + .primary/.secondary
-//   - 默认 .primary (textPrimary 白)
-//   - .secondary (textSecondary 灰, 给次要 icon 用)
-//   - 6 语义色对应 Theme color (跟 Badge variant 一致)
-//
-// SF Symbol 默认 weight = .medium (Linear / Vercel 同款 stroke icon 风),
-// 不用 .regular (太细) 也不用 .bold (太粗).
+// 5 size: .xs 10pt / .sm 12pt / .md 14pt (default) / .lg 18pt / .xl 24pt.
+// color: 6 语义色 (success/warn/error/info/accent/neutral) + .primary/.secondary/.tertiary.
+// SF Symbol weight = .medium.
+// 用法: HVMUI.Icon("trash") / HVMUI.Icon("checkmark", size: .sm, color: .success)
 
 
 import SwiftUI
@@ -66,7 +50,7 @@ struct Icon: View {
         Image(systemName: symbol)
             .font(size.font)
             .foregroundStyle(fgColor)
-            .accessibilityHidden(true)   // 装饰 icon 跟 label 一起朗读, 不重复
+            .accessibilityHidden(true)   // 装饰 icon, 不重复朗读
     }
 
     private var fgColor: Color {

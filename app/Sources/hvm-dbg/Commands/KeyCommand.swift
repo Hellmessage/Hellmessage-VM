@@ -1,11 +1,8 @@
-// hvm-dbg/Commands/KeyCommand.swift
-// hvm-dbg key — 注入键盘事件到 VZ guest. 走 VZUSBKeyboard NSEvent 路径, 不依赖辅助功能权限.
+// hvm-dbg key — 注入键盘事件, 走 NSEvent 路径, 不依赖辅助功能权限.
 //
 // 两种模式互斥:
 //   --text "..."   逐字符敲入 (US ASCII printable + \n \t)
 //   --press "..."  组合键, 空格分隔多组动作: "cmd+t" / "Return" / "shift+a cmd+s"
-//
-// 详见 docs/DEBUG_PROBE.md "key" 节.
 
 import ArgumentParser
 import Foundation

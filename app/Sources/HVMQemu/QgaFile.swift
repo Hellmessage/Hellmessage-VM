@@ -1,24 +1,11 @@
 // HVMQemu/QgaFile.swift
-//
 // qemu-guest-agent (qga) 文件 API 封装 — host ↔ guest 单文件 push / pull.
 // 协议参考: https://qemu.readthedocs.io/en/latest/interop/qemu-ga-ref.html
 //
-// 用途: hvm-dbg file push/pull / GUI Sharing 区"传文件到 VM" 等. 走 QgaSocket
-// (chardev qga + virtio-serial port org.qemu.guest_agent.0), 与 QgaExec 共用 socket
-// 通路 (但每次 push/pull 用独立连接, 不持久化).
-//
-// 性能预期: base64 + JSON 封装 + Unix socket 1 MiB chunk, 实测 8-12 MB/s 量级,
-// 适合 < 100 MiB 偶发文件传输. 大文件 (> 1 GiB) 仍能跑但慢, 由 timeout 兜底.
-//
-// 配套要求:
-//   - VM 在跑 + qemu-ga.exe 服务已 attach (Win UTM Guest Tools / Linux apt install)
-//   - guest-file-* 在 qemu-ga blacklist 之外 (默认开放, 装包脚本不强制 disable)
-//
-// v1 限制 (设计稿 docs/v3/FILE_COPY.md):
-//   - 单文件, 不递归
-//   - 远端写入非原子 — 中断会留半成品 dst (调用方自决是否 .hvm-tmp + rename 兜底,
-//     这层不掺合 OS 路径分隔符判定)
-//   - 软警告 100 MiB / 硬上限 4 GiB 由调用层 (CLI / GUI) 把关, 这里不做大小校验
+// 用途: hvm-dbg file push/pull / GUI "传文件到 VM". 走 QgaSocket (与 QgaExec 共用通路,
+// 每次 push/pull 用独立连接). 性能 ~8-12 MB/s, 适合 < 100 MiB 偶发传输; 大文件由 timeout 兜底.
+// 配套: VM 在跑 + qemu-ga 服务 attach + guest-file-* 未 blacklist.
+// v1 限制: 单文件不递归; push 远端写入非原子 (中断留半成品); 大小校验由调用层 (CLI/GUI) 把关.
 
 import Foundation
 import Darwin
@@ -268,8 +255,7 @@ public enum QgaFile {
         return ReadChunk(data: data, eof: eof)
     }
 
-    /// guest-file-write. 一次 chunk; spec 上服务端可能短写 (Win), 用 guestFileWriteAll
-    /// 包一层循环写满.
+    /// guest-file-write. 一次 chunk; 服务端可能短写, 用 guestFileWriteAll 循环写满.
     public static func guestFileWrite(
         conn: QgaConnection, handle: Int, data: Data, deadline: Date
     ) throws -> Int {

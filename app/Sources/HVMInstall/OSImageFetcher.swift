@@ -3,21 +3,9 @@
 //   - downloadIfNeeded(entry:): 走 OSImageCatalog 内置条目 (有 expected SHA256 时下载后校验)
 //   - downloadCustom(url:):     走用户自填 URL (无校验, Win11 ISO 等场景兜底)
 //
-// 内部委托 HVMUtils.ResumableDownloader 做断点续传 + atomic rename, 完成后 (if entry.sha256 != nil)
-// 流式算 SHA256 校验. 校验失败删本地文件抛错, 避免脏数据次次重下.
-//
-// 缓存布局:
-//   ~/Library/Application Support/HVM/cache/os-images/
-//     ├── ubuntu/   <iso 文件名 含小版本号>
-//     ├── debian/
-//     ├── fedora/
-//     ├── alpine/
-//     ├── rocky/
-//     ├── opensuse/
-//     └── custom/   <用户 URL 文件名>
-//
-// VM 创建时 ISO 路径**不复制进 bundle**, 只在 VMConfig.iso 字段写绝对路径
-// (跟 hvm-cli create --iso 行为一致).
+// 委托 ResumableDownloader 做断点续传 + atomic rename; (if entry.sha256 != nil) 流式 SHA256 校验,
+// 失败删本地文件抛错避免脏数据次次重下. 缓存落 cache/os-images/<family>/.
+// ISO 路径不复制进 bundle, 只在 VMConfig.iso 写绝对路径.
 
 import Foundation
 import CryptoKit

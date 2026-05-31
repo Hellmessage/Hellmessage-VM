@@ -1,14 +1,8 @@
 // HVMInstall/VirtioWinCache.swift
 // virtio-win.iso 全局缓存 + 按需下载. Win11 arm64 装机必需 (没驱动 installer 看不到 virtio-blk 磁盘).
 //
-// 缓存策略 (用户决策 D2):
-//   - 全局共享: ~/Library/Application Support/HVM/cache/virtio-win/virtio-win.iso
-//     所有 Win VM 引用同一份 (700MB 一次, 不每个 VM 复制)
-//   - 创建 Win VM 时按需下载 (前台 modal 进度); 已存在 + 文件大小合理 → 直接复用
-//   - 不做断点续传一期 (实现复杂度对 700MB 单次下载性价比低; 失败重新下)
-//
-// 下载源: Fedora 官方 (libvirt 上游, 稳定 channel)
-//   https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
+// 全局共享 cache/virtio-win/virtio-win.iso, 所有 Win VM 引用同一份 (~700MB). 创建 Win VM 时按需
+// 下载, 已存在 + 大小合理则复用. 不做断点续传 (失败整下). 下载源 Fedora 官方 stable channel.
 
 import Foundation
 import HVMCore

@@ -1,6 +1,5 @@
 // ConfigCommand.swift
-// hvm-cli config get / set — 读/改 VM 配置 (CPU / 内存).
-// 必须 VM stopped (VZ 不支持热改 CPU/内存; 改完下次 start 时 ConfigBuilder 重新校验).
+// hvm-cli config get / set — 读/改 VM 配置 (CPU / 内存). 必须 VM stopped (不支持热改).
 
 import ArgumentParser
 import Foundation
@@ -100,7 +99,7 @@ struct ConfigSetCommand: AsyncParsableCommand {
                 }
                 config.memoryMiB = m * 1024
             }
-            // VZ 范围由 ConfigBuilder 在下次 start 时校验, 这里不强 import Virtualization
+            // 范围由 ConfigBuilder 在下次 start 时校验
             try EncryptedConfigEditor.save(config, session: session)
             switch format {
             case .human:

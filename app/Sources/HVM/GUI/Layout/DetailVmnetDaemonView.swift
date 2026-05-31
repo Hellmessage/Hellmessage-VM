@@ -1,9 +1,7 @@
-// DetailVmnetDaemonView.swift — vmnet daemon 安装/重启/卸载入口 (V6).
+// DetailVmnetDaemonView.swift — vmnet daemon 安装/重启/卸载入口.
 //
-// 直接调视图无关的 VMnetSupervisor (app/Sources/HVM/Services/, 已是 public enum 无 GUI 耦合):
-// installAllDaemons / restartAllDaemons / uninstallAllDaemons / presentSockets.
-// 仅当 VM 有 vmnet 模式 NIC (shared/host/bridged) 时显示 — daemon 是系统级全局组件.
-// 安装/重启/卸载走 osascript admin (Touch ID/密码); 重启+卸载是破坏性, 二次确认 (CLAUDE.md 约束).
+// 调视图无关的 VMnetSupervisor (install/restart/uninstall/presentSockets).
+// 仅当 VM 有 vmnet 模式 NIC 时显示. 操作走 osascript admin (Touch ID/密码); 重启+卸载破坏性需二次确认.
 
 
 import SwiftUI

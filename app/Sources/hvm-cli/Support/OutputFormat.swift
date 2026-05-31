@@ -12,7 +12,7 @@ public enum OutputFormat: String, ExpressibleByArgument, Sendable {
     case json
 }
 
-/// docs/CLI.md 退出码映射 (hvm-cli 视角).
+/// 退出码映射 (hvm-cli 视角).
 public func exitCode(for code: String) -> Int32 {
     if code.hasPrefix("bundle.not_found") { return 3 }
     if code.hasPrefix("bundle.busy") || code.hasPrefix("backend.disk_busy") { return 4 }

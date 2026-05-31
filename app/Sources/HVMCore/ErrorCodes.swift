@@ -1,6 +1,5 @@
 // HVMCore/ErrorCodes.swift
-// 错误码权威清单. 新增错误必须同时在此登记 + docs/ERROR_MODEL.md 更新表格
-// M0 先列框架, 具体 case 随模块实现补齐
+// 错误码权威清单. 新增错误必须在此登记
 
 /// 稳定字符串错误码, dotted 风格 "<domain>.<name>"
 public enum HVMErrorCode: String, Sendable {
@@ -32,24 +31,15 @@ public enum HVMErrorCode: String, Sendable {
     case backendDiskNotFound    = "backend.disk_not_found"
     case backendDiskBusy        = "backend.disk_busy"
     case backendUnsupportedGuestOS = "backend.unsupported_guest_os"
-    case backendRosettaUnavailable = "backend.rosetta_unavailable"
-    case backendBridgedNotEntitled = "backend.bridged_not_entitled"
-    case backendIPSWInvalid     = "backend.ipsw_invalid"
     case backendVZInternal      = "backend.vz_internal"
     case backendQemuHostStartupTimeout = "backend.qemu_host_startup_timeout"
 
     // install.*
-    case installIPSWNotFound    = "install.ipsw_not_found"
-    case installIPSWUnsupported = "install.ipsw_unsupported"
     case installIPSWDownloadFailed = "install.ipsw_download_failed"
-    case installAuxCreationFailed = "install.aux_creation_failed"
     case installDiskSpaceInsufficient = "install.disk_space_insufficient"
-    case installInstallerFailed = "install.installer_failed"
-    case installRosettaNotInstalled = "install.rosetta_not_installed"
     case installISONotFound     = "install.iso_not_found"
 
     // net.*
-    case netBridgedNotEntitled  = "net.bridged_not_entitled"
     case netBridgedInterfaceNotFound = "net.bridged_interface_not_found"
     case netMACInvalid          = "net.mac_invalid"
     case netMACNotLocallyAdministered = "net.mac_not_locally_administered"
@@ -70,9 +60,8 @@ public enum HVMErrorCode: String, Sendable {
     case configInvalidRange     = "config.invalid_range"
     case configDuplicateRole    = "config.duplicate_role"
 
-    // encryption.* (整 VM 加密, sparsebundle + Keychain)
+    // encryption.*
     case encryptionHdiutilFailed              = "encryption.hdiutil_failed"
-    case encryptionSparsebundleAlreadyExists  = "encryption.sparsebundle_already_exists"
     case encryptionWrongPassword              = "encryption.wrong_password"
     case encryptionMountpointInUse            = "encryption.mountpoint_in_use"
     case encryptionParseFailed                = "encryption.parse_failed"

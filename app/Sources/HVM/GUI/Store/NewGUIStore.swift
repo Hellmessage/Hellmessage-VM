@@ -1,12 +1,8 @@
-// NewGUIStore.swift — 新 GUI 精简数据 store (业务页 #1, docs/v4/NEW_GUI_MAIN_LAYOUT.md M2)
+// NewGUIStore.swift — 新 GUI 精简数据 store.
 //
-// 不依赖老 AppModel — 直接调视图无关的 HVMControl 门面 (枚举/启停/删除). 不背
-// embeddedID / detachedQemuVMs / VZ in-process session 等老 GUI 历史耦合.
-// framebuffer 嵌入等强耦合留 NEW_GUI_FRAMEBUFFER.md 子稿.
-//
-// @Observable 细粒度: sidebar 读 vms+selectedID, detail 读 selected — 各自只在相关
-// 字段变时重绘. 1Hz refresh 内 `if fresh != vms` 守卫 (VMSummary Equatable), 列表无
-// 变化不赋值, 保 P0-2 帧率.
+// 不依赖老 AppModel — 直接调视图无关的 HVMControl 门面 (枚举/启停/删除/配置/磁盘/加密).
+// @Observable 细粒度: sidebar 读 vms+selectedID, detail 读 selected.
+// 1Hz refresh 内 `if fresh != vms` 守卫 (VMSummary Equatable), 列表无变化不赋值保帧率.
 
 
 import Foundation
@@ -15,6 +11,8 @@ import HVMControl
 import HVMBundle
 import HVMCore
 import HVMEncryption
+import HVMStorage
+import HVMIPC
 
 /// 动作失败时冒泡给 MainLayoutView → dialog.alert 的错误载体.
 /// id 每次新建 (即便 message 相同) 让 .onChange 能识别"又出错了一次".
@@ -59,9 +57,8 @@ public final class NewGUIStore {
 
     private static let unlockTTL: TimeInterval = 300   // 5 分钟无活动 auto-lock
 
-    // MARK: - QEMU 画面 fanout (业务页 #4 framebuffer, F1)
-    /// running VM 的 HDP 显示 fanout (复用 QemuFanoutSession). @ObservationIgnored:
-    /// fanout 进出不驱动 UI 重绘 (画面由 fbView 自渲染). 停机/断连时拆.
+    // MARK: - QEMU 画面 fanout
+    /// running VM 的 HDP 显示 fanout. @ObservationIgnored: fanout 进出不驱动 UI 重绘 (画面由 fbView 自渲染).
     @ObservationIgnored private var qemuFanouts: [UUID: QemuFanoutSession] = [:]
 
     // MARK: - 自定义排序 (拖拽重排, 持久化到 UserDefaults; GUI 侧, 加密 VM 也适用)
@@ -78,16 +75,13 @@ public final class NewGUIStore {
 
     // MARK: - 轮询
 
-    /// 启 1Hz 轮询 (RootView .onAppear 调). .common mode 让 UI tracking (滚动/拖拽) 期间仍刷新.
-    /// 不写 deinit (MainActor 类 deinit 为 nonisolated 碰不了 pollTimer); 改为 timer 持 weak self,
-    /// self 析构后下一 tick 自我 invalidate. 正常退出走 stopPolling().
+    /// 启 1Hz 轮询. .common mode 让 UI tracking (滚动/拖拽) 期间仍刷新.
+    /// timer 持 weak self, self 析构后下一 tick 自我 invalidate (MainActor 类 deinit 碰不了 pollTimer).
     public func startPolling() {
         guard pollTimer == nil else { return }
         let t = Timer(timeInterval: 1.0, repeats: true) { [weak self] timer in
-            // self 已析构 → 自我 invalidate (timer.invalidate 留在外层 nonisolated 闭包,
-            // 不跨进 MainActor 闭包, 避免 sending 数据竞争告警)
             guard let self else { timer.invalidate(); return }
-            // 定时器在 main runloop 触发, 同步标记 MainActor 隔离 (避免每 tick 一个 Task 跳转)
+            // main runloop 触发, assumeIsolated 避免每 tick 一个 Task 跳转
             MainActor.assumeIsolated { self.refresh() }
         }
         RunLoop.main.add(t, forMode: .common)
@@ -189,10 +183,9 @@ public final class NewGUIStore {
         // 删的若是选中项, refresh 会自动退选到第一个
     }
 
-    // MARK: - 配置编辑 (业务页 #2, V1/V3)
+    // MARK: - 配置编辑
 
-    /// 改配置 (CPU/内存/网络/选项/ISO 等表单字段). 明文走 VMControl.saveConfig;
-    /// 加密 VM 需先解锁 (V2 接入 configKey), 当前未解锁 → 提示.
+    /// 改配置. 明文走 VMControl.saveConfig; 加密 VM 需先解锁 (用缓存 configKey) 否则提示.
     /// requireStopped 默认 true (多数字段需停机); 剪贴板等热改字段传 false.
     public func saveConfig(_ s: VMSummary,
                            requireStopped: Bool = true,
@@ -220,7 +213,7 @@ public final class NewGUIStore {
         }
     }
 
-    // MARK: - 磁盘 (业务页 #2, V4)
+    // MARK: - 磁盘
 
     /// 加数据盘 (明文 DiskFactory / 加密 QcowLuksFactory)
     public func addDisk(_ s: VMSummary, sizeGiB: UInt64) {
@@ -270,10 +263,9 @@ public final class NewGUIStore {
         }
     }
 
-    // MARK: - 选项: 剪贴板共享 (业务页 #2, V8, 可 running 热改)
+    // MARK: - 选项: 剪贴板共享 (可 running 热改)
 
-    /// 切剪贴板共享 (vdagent). 落 config + running 时 IPC 即时生效 (P0-3). 明文/加密分流.
-    /// 仅 QEMU 后端有意义 (UI 侧已 gate); 此处不再判后端.
+    /// 切剪贴板共享 (vdagent). 落 config + running 时 IPC 即时生效. 明文/加密分流.
     public func setClipboardSharing(_ s: VMSummary, enabled: Bool) {
         if s.isEncrypted {
             guard let configKey = unlockedSubKeys[s.id]?.config else {
@@ -293,7 +285,7 @@ public final class NewGUIStore {
         }
     }
 
-    // MARK: - QEMU 画面 fanout 生命周期 (F1)
+    // MARK: - QEMU 画面 fanout 生命周期
 
     /// running VM 的显示 fanout: 已有复用, 否则建 + 设 onDisconnected hook + start.
     /// QemuFramebufferView.makeNSView 调它拿 fanout 再 addSubscriber.
@@ -318,7 +310,7 @@ public final class NewGUIStore {
         }
     }
 
-    // MARK: - 加密 VM 解锁 (业务页 #2, V2)
+    // MARK: - 加密 VM 解锁
 
     public func isUnlocked(_ id: UUID) -> Bool { unlockedConfigs[id] != nil }
     public func isUnlocking(_ id: UUID) -> Bool { unlockingIDs.contains(id) }
@@ -366,7 +358,26 @@ public final class NewGUIStore {
         refresh()
     }
 
-    // MARK: - 加密事务 (业务页 #3, docs/v4/NEW_GUI_ENCRYPTION.md E1)
+    // MARK: - 快照 (APFS clonefile, 见 VMControl+Snapshot)
+
+    /// 列快照 (createdAt 倒序). 无副作用.
+    public func snapshots(_ s: VMSummary) -> [SnapshotManager.Info] {
+        VMControl.listSnapshots(bundleURL: s.bundleURL)
+    }
+    /// 创建快照 (秒级 clonefile, 必停机). 失败走 lastError.
+    public func createSnapshot(_ s: VMSummary, name: String) {
+        run("创建快照失败") { try VMControl.createSnapshot(bundleURL: s.bundleURL, name: name) }
+    }
+    /// 恢复快照 (覆盖当前 disks/config/nvram/tpm, 必停机, 破坏性 — 调用方先确认).
+    public func restoreSnapshot(_ s: VMSummary, name: String) {
+        run("恢复快照失败") { try VMControl.restoreSnapshot(bundleURL: s.bundleURL, name: name) }
+    }
+    /// 删快照 (破坏性 — 调用方先确认).
+    public func deleteSnapshot(_ s: VMSummary, name: String) {
+        run("删除快照失败") { try VMControl.deleteSnapshot(bundleURL: s.bundleURL, name: name) }
+    }
+
+    // MARK: - 加密事务
 
     /// 加密/解密/改密 进度行 (dialog 订阅, @Observable 自动驱动 UI). 每次事务开始清空.
     public private(set) var encProgress: [String] = []
@@ -420,6 +431,67 @@ public final class NewGUIStore {
             refresh()
             return (true, tpmReset, nil)
         } catch { return (false, false, encErrorMessage(error)) }
+    }
+
+    // MARK: - 创建 (创建向导)
+
+    /// 创建明文/加密 VM (后台 detached; qcow2/LUKS create 秒级). 走 VMControl.create 单一来源.
+    /// 成功 refresh + 选中新 VM; 失败返 error 文本 (dialog 内联显, 不设全局 lastError, 同加密事务).
+    public func create(_ spec: VMControl.CreateSpec) async -> (ok: Bool, error: String?) {
+        do {
+            let result = try await Task.detached(priority: .userInitiated) {
+                try VMControl.create(spec)
+            }.value
+            refresh()
+            selectedID = result.config.id
+            return (true, nil)
+        } catch { return (false, encErrorMessage(error)) }
+    }
+
+    // MARK: - 克隆 (整 VM clone, 见 VMControl+Clone)
+
+    /// 克隆 VM (APFS clonefile COW + 重生身份). 加密源必传 password (dialog 收, 不用解锁缓存,
+    /// CloneManager 自 unlock 源). 后台 detached (clonefile 秒级, 加密源多一步 unlock+重加密 config).
+    /// 成功 refresh + 选中克隆体; 失败返 error 文本 (dialog 内联显, 不设全局 lastError, 同创建/加密事务).
+    public func clone(_ s: VMSummary, newName: String, keepMAC: Bool,
+                      password: String?) async -> (ok: Bool, error: String?) {
+        let url = s.bundleURL
+        do {
+            let result = try await Task.detached(priority: .userInitiated) {
+                try VMControl.clone(.init(sourceBundle: url, newDisplayName: newName,
+                                          keepMACAddresses: keepMAC, password: password))
+            }.value
+            refresh()
+            selectedID = result.newID
+            return (true, nil)
+        } catch { return (false, encErrorMessage(error)) }
+    }
+
+    // MARK: - guest 网络 (guest IP 显示, SSH/RDP 用)
+
+    /// guest 主 IPv4 缓存 (vmID → IP). running + guest 装 qemu-ga 才有值. @Observable 驱动 UI.
+    public private(set) var guestIPs: [UUID: String] = [:]
+
+    /// 拉 guest IP (后台 IPC guest.netinfo → qemu-ga). 仅 running 拉; 非 running 清缓存.
+    /// 失败 (无 qemu-ga / 未配网) silently 清值, 不弹错 (guest IP 非关键)。详情页 onAppear / runState 变更时调.
+    public func refreshGuestIP(_ s: VMSummary) {
+        guard s.runState == .running else { guestIPs[s.id] = nil; return }
+        let url = s.bundleURL
+        let id = s.id
+        Task.detached(priority: .utility) {
+            let ip = (try? VMControl.guestNetInfo(bundleURL: url))?.primaryIPv4
+            await MainActor.run { self.guestIPs[id] = ip }
+        }
+    }
+
+    /// 给克隆体算一个不与现有 VM 撞的默认名: "<源> 副本" / "<源> 副本 2" / ...
+    public func defaultCloneName(for s: VMSummary) -> String {
+        let existing = Set(vms.map { $0.displayName })
+        let base = "\(s.displayName) 副本"
+        if !existing.contains(base) { return base }
+        var n = 2
+        while existing.contains("\(base) \(n)") { n += 1 }
+        return "\(base) \(n)"
     }
 
     /// 加密事务错误 → 文本 (HVMError.userFacing message + hint). dialog 内联显, 不设全局 lastError.

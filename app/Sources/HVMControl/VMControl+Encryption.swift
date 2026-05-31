@@ -1,10 +1,7 @@
-// VMControl+Encryption.swift — 整 VM 加密事务包装 (业务页 #3, docs/v4/NEW_GUI_ENCRYPTION.md E1).
-//
-// 视图无关的加密/解密/rekey 收口, 给新 GUI dialog + (未来) CLI 复用. 内部解析 qemuImg +
-// Win OVMF VARS 模板路径 (跟 addDiskEncrypted 同款走 QemuPaths), 业务侧不碰后端路径.
-// 底层调 HVMEncryption 的三个 Operation; 仅 qemuPerfile scheme (VZ-sparsebundle 推后).
-//
-// progress 回调在**调用线程** (Operation 同步执行), 调用方 (store) 负责 hop 到 main.
+// VMControl+Encryption.swift — 视图无关的整 VM 加密/解密/rekey 收口 (GUI dialog + CLI 复用).
+// 内部解析 qemuImg + Win OVMF VARS 模板路径 (走 QemuPaths), 业务侧不碰后端路径.
+// 底层调 HVMEncryption 三个 Operation; 仅 qemuPerfile scheme.
+// progress 回调在调用线程同步触发, 调用方负责 hop 到 main.
 
 import Foundation
 import HVMBundle
@@ -14,6 +11,21 @@ import HVMQemu
 
 public extension VMControl {
 
+    // MARK: - 孤儿 qemu/swtpm 回收 (动磁盘前)
+
+    /// reap 本 bundle 残留的孤儿 qemu/swtpm. VMHost 被非正常杀死 (SIGKILL / 崩溃 / 被误 `pkill -f MacOS/HVM`)
+    /// 后, 子进程 qemu/swtpm reparent 到 launchd 仍在跑, 占着 qcow2 image 锁 → qemu-img convert/amend
+    /// 拿不到锁 (`Failed to get shared "write" lock`). VM start 路径已 reap, 但 decrypt/encrypt/rekey 不启 VM,
+    /// 故必须在动磁盘前显式 reap. reapByPidFile 内部 SIGTERM + poll 等进程退出才返回, 返回后锁已释放.
+    /// (clone/snapshot 走 clonefile 不开 qcow2, 不吃此锁, 无需调.)
+    static func reapBundleOrphans(bundleURL: URL) {
+        guard let id = VMCatalog.summary(for: bundleURL)?.id else { return }
+        SidecarOrphanReaper.reapByPidFile(pidFile: HVMPaths.qemuPidPath(for: id),
+                                          expectedNamePrefix: "qemu-system")
+        SidecarOrphanReaper.reapByPidFile(pidFile: HVMPaths.swtpmPidPath(for: id),
+                                          expectedNamePrefix: "swtpm")
+    }
+
     // MARK: - 加密 (明文 → 加密)
 
     /// 加密明文 VM (冷迁移, 分钟级). 内部解析 qemuImg + Win OVMF 模板. requireStopped 强制.
@@ -22,6 +34,7 @@ public extension VMControl {
     static func encryptVM(bundleURL: URL, password: String,
                           progress: @escaping (String) -> Void) throws -> Bool {
         try assertStoppedIfNeeded(bundleURL: bundleURL, requireStopped: true)
+        reapBundleOrphans(bundleURL: bundleURL)
         let qemuImg = try QemuPaths.qemuImgBinary()
         // Win guest 才需 OVMF VARS 模板 (efi-vars LUKS 化); 读明文 config 判 guestOS
         let config = try BundleIO.load(from: bundleURL)
@@ -43,6 +56,7 @@ public extension VMControl {
     static func decryptVM(bundleURL: URL, password: String,
                           progress: @escaping (String) -> Void) throws {
         try assertStoppedIfNeeded(bundleURL: bundleURL, requireStopped: true)
+        reapBundleOrphans(bundleURL: bundleURL)
         let qemuImg = try QemuPaths.qemuImgBinary()
         _ = try DecryptVMOperation.decrypt(
             bundleURL: bundleURL, password: password,
@@ -57,6 +71,7 @@ public extension VMControl {
     static func rekeyVM(bundleURL: URL, oldPassword: String, newPassword: String,
                         progress: @escaping (String) -> Void) throws -> Bool {
         try assertStoppedIfNeeded(bundleURL: bundleURL, requireStopped: true)
+        reapBundleOrphans(bundleURL: bundleURL)
         let qemuImg = try QemuPaths.qemuImgBinary()
         let result = try RekeyVMOperation.rekey(
             bundleURL: bundleURL, oldPassword: oldPassword, newPassword: newPassword,

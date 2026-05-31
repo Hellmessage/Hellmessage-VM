@@ -1,24 +1,14 @@
 // HVMEncryption/LuksSecretFile.swift
 // 给 qemu-img / qemu-system 注入 LUKS passphrase 的临时文件包装.
 //
-// 关键约束: LUKS spec 要求 passphrase 是 UTF-8 合法字符串. 我们的 sub key 是 32 字节 binary
-// (PBKDF2 / HKDF 输出, 大概率含非 UTF-8 字节如 0x80-0xBF / 0xFE / 0xFF). 直接写 raw bytes
-// 给 qemu-img 会报 "Data from secret sec0 is not valid UTF-8".
+// 关键约束: LUKS passphrase 必须 UTF-8 合法, 而 sub key 是 32 字节 binary (大概率含非
+// UTF-8 字节). 直接写 raw 会报 "not valid UTF-8". 解决: base64 编码成 ASCII (44 字符)
+// 写 secret file, LUKS 把它当 passphrase. 同 binary → 同 base64 → 跨机器同样解.
 //
-// 解决: 把 32 字节 binary 走 base64 编码成 ASCII 字符串 (44 字符), 写入 secret file.
-// LUKS 把 ASCII base64 字符串当 passphrase 走自家 PBKDF2 派生 LUKS master key.
-// 跨机器一致性: 同 32 字节 binary → 同 base64 字符串 → 同 LUKS passphrase → 同样解.
+// 安全: 文件 0o600 + open(O_CREAT|O_EXCL) 避 race; cleanup() 立即 unlink;
+// NSTemporaryDirectory 是用户自家 (0o700) 跨用户不可读. mlock / memset_s 暂不做.
 //
-// 安全注:
-//   - 文件 0o600 + open(O_CREAT|O_EXCL) 避免 race
-//   - defer { secret.cleanup() } 立即 unlink
-//   - NSTemporaryDirectory 是用户自家 /var/folders/... (默认 0o700), 跨用户不可读
-//
-// 不做:
-//   - mlock 防交换 (Swift 暂不暴露干净 API; 留 PR 后续优化)
-//   - secure-erase memset_s (写完即关 fd, ARC 释放 buffer; OS 重用前不主动清)
-//
-// 使用模式:
+// 使用:
 //   let secret = try LuksSecretFile(key: subKey)
 //   defer { secret.cleanup() }
 //   try qemu-img ... --object secret,id=sec0,file=\(secret.path)

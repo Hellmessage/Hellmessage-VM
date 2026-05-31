@@ -1,25 +1,8 @@
-// HVMUIBadge.swift — 新 GUI 状态徽标 (PR-C5)
+// HVMUIBadge.swift — 新 GUI 状态徽标.
 //
-// 用法:
-//   HVMUI.Badge("Running", variant: .success)
-//   HVMUI.Badge("Encrypted", icon: "lock.fill", variant: .accent, size: .sm)
-//   HVMUI.Badge("Error", icon: "exclamationmark.triangle", variant: .error)
-//   HVMUI.Badge("3", variant: .error, size: .sm)   // 数字徽标
-//
-// 6 variant (互斥):
-//   .success — 绿 (VM running 等正常态)
-//   .warn    — 黄 (vmnet daemon stale / 待重启等警告)
-//   .error   — 红 (启动失败 / 加密失败 等)
-//   .info    — 蓝 (普通信息)
-//   .accent  — 青 (HVM 自家强调, 例 "Recommended" / "New")
-//   .neutral — 灰 (中性, 例 OS 名 / Tag / count)
-//
-// 2 size:
-//   .sm — 高 18, font xs (11), padding xs/sm, radius sm
-//   .md — 高 22, font sm (12), padding sm/md, radius sm (default)
-//
-// 视觉: bg = variant 色 12% alpha (subtle, 不抢眼) + text = variant 色 full,
-// 圆角 sm. 跟 Linear / Vercel 等 SaaS 风一致.
+// 6 variant (success/warn/error/info/accent/neutral), 2 size (.sm 18 高 / .md 22 高).
+// 视觉: bg = variant 色低 alpha (subtle) + text = variant 色 full.
+// 用法: HVMUI.Badge("Running", variant: .success) / HVMUI.Badge("Encrypted", icon: "lock.fill", variant: .accent, size: .sm)
 
 
 import SwiftUI
@@ -109,7 +92,7 @@ struct Badge: View {
         }
     }
 
-    /// bg = variant 色低 alpha (subtle), neutral 用 bgOverlay (中性灰底)
+    /// bg = variant 色低 alpha, neutral 用 bgOverlay (中性灰底)
     private var bgColor: Color {
         switch variant {
         case .success: return HVMTheme.color.success.opacity(0.15)

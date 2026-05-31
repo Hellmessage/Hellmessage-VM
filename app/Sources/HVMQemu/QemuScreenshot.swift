@@ -1,6 +1,5 @@
 // HVMQemu/QemuScreenshot.swift
 // 高层封装: QmpClient.screendump → 读 PPM → CGImage → optional downscale → PNG bytes.
-// 输出形态对齐 VZ 路径的 ScreenCapture.capturePNG 结果, 调用方 (QemuHostState) 直接复用.
 
 import Foundation
 import CoreGraphics
@@ -10,7 +9,7 @@ public enum QemuScreenshot {
 
     public struct Result: Sendable {
         public let pngData: Data
-        public let widthPx: Int    // PNG 实际像素 (downscale 后, 与 VZ ScreenCapture 行为一致)
+        public let widthPx: Int    // PNG 实际像素 (downscale 后)
         public let heightPx: Int
         public let sha256: String  // PNG bytes 的 sha256, hex 小写
 
@@ -37,9 +36,8 @@ public enum QemuScreenshot {
         tempDir: URL,
         maxEdge: Int? = nil
     ) async throws -> Result {
-        // 1. 写到 tempDir/<uuid>.ppm
+        // 1. 写到 tempDir/<uuid>.ppm. env HVM_DEBUG_KEEP_PPM=1 时不删 (stride 类 bug 排查).
         let ppmURL = tempDir.appendingPathComponent("hvm-shot-\(UUID().uuidString.prefix(8)).ppm")
-        // env HVM_DEBUG_KEEP_PPM=1 时不删, 给倾斜 / stride 类 bug 排查 (打日志看 ppm 路径).
         let keepPPM = ProcessInfo.processInfo.environment["HVM_DEBUG_KEEP_PPM"] == "1"
         defer {
             if keepPPM {
@@ -86,7 +84,7 @@ public enum QemuScreenshot {
         // 6. sha256
         let hex = Hashing.sha256Hex(pngData)
 
-        // VZ 行为: 返回 PNG 实际像素 (downscale 后), 不是原始 guest 分辨率
+        // 返回 PNG 实际像素 (downscale 后), 不是原始 guest 分辨率
         return Result(pngData: pngData, widthPx: finalImage.width, heightPx: finalImage.height, sha256: hex)
     }
 }

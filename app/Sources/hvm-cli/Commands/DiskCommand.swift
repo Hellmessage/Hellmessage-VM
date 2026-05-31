@@ -1,10 +1,6 @@
 // DiskCommand.swift
-// hvm-cli disk — 管理 VM 磁盘 (list / add / resize / delete data).
-// 所有操作要求 VM stopped (VZ 不支持热插拔 storage; 主盘 resize 也不安全).
-//
-// 命名规则 (CLAUDE.md 约束):
-//   - 主盘:  disks/main.img,  id = "main"
-//   - 数据盘: disks/data-<uuid8>.img, id = "<uuid8>"
+// hvm-cli disk — 管理 VM 磁盘 (list / add / resize / delete data). 所有操作要求 VM stopped.
+// id 约定: 主盘 = "main", 数据盘 = "<uuid8>".
 
 import ArgumentParser
 import Foundation

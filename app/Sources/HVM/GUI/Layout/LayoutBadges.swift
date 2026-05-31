@@ -1,4 +1,4 @@
-// LayoutBadges.swift — sidebar + detail 共用的 VM 状态/OS 徽标映射. M4/M5.
+// LayoutBadges.swift — sidebar + detail 共用的 VM 状态/OS 徽标映射.
 
 
 import SwiftUI

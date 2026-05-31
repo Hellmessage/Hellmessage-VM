@@ -1,62 +1,11 @@
-// HVMUIInputDialog.swift — 新 GUI 输入表单 dialog (PR-D5)
+// HVMUIInputDialog.swift — 新 GUI 输入表单 dialog. 多字段 (含 secure 密码) + 实时 validation.
 //
-// 用法:
+// 关闭路径 → 结果: 主按钮 → .submitted(values); 取消 / X / Esc / dismissAll → .cancelled.
+// validate 闭包接收当前 [String] 返 .valid / .invalid(msg), 字段变化即 re-validate,
+//   .invalid 时主按钮 disabled + 红字; nil 表示不验证.
 //
-//   1. 单字段 (例 重命名 VM):
-//      let result = await dialog.input(
-//          title: "重命名 VM",
-//          fields: [.init(label: "新名称", initialText: oldName)],
-//          confirmLabel: "保存",
-//          probeID: "dialog.renameVM"
-//      )
-//      if case .submitted(let values) = result {
-//          renameVM(to: values[0])
-//      }
-//
-//   2. 多字段 + validation (例 添加共享目录):
-//      let result = await dialog.input(
-//          title: "添加共享目录",
-//          fields: [
-//              .init(label: "host 路径", placeholder: "/Users/me/code",
-//                    icon: "folder"),
-//              .init(label: "name", placeholder: "code")
-//          ],
-//          confirmLabel: "添加",
-//          validate: { values in
-//              guard values[0].hasPrefix("/") else {
-//                  return .invalid("host 路径必须是绝对路径")
-//              }
-//              guard !values[1].isEmpty else {
-//                  return .invalid("name 不能为空")
-//              }
-//              return .valid
-//          },
-//          probeID: "dialog.addSharedFolder"
-//      )
-//
-//   3. 密码字段 (secure=true → SecureField):
-//      let result = await dialog.input(
-//          title: "解锁加密 VM",
-//          fields: [.init(label: "密码", placeholder: "请输入密码", secure: true)],
-//          confirmLabel: "解锁",
-//          probeID: "dialog.unlockVM"
-//      )
-//
-// 关闭路径 → 结果映射:
-//   - 主按钮 → .submitted(values)
-//   - 取消 / X / Esc / dismissAll → .cancelled
-//
-// 验证 (validation):
-//   - validate 闭包接收当前 [String], 返回 .valid 或 .invalid(errorMessage)
-//   - 实时调用 — 字段变化即 re-validate
-//   - .invalid 时主按钮 disabled + 字段下方红字提示
-//   - validate 为 nil 时主按钮永远 enabled
-//
-// Probe id 派生:
-//   <probeID>.field.<idx>  — 每个字段 (TextField/SecureField), idx 从 0
-//   <probeID>.confirm      — 主按钮
-//   <probeID>.cancel       — 取消按钮
-//   <probeID>.close        — X 关闭
+// 业务侧首选 async API: dialog.input(title:fields:validate:probeID:).
+// Probe id 派生: <probeID>.field.<idx> / .confirm / .cancel / .close.
 
 
 import SwiftUI
@@ -192,7 +141,7 @@ struct InputDialog: View {
                 text: binding,
                 placeholder: field.placeholder,
                 icon: field.icon,
-                autoFocus: idx == 0,   // 首个密码字段出现即聚焦 (替代 SwiftUI 自动焦点)
+                autoFocus: idx == 0,   // 首个密码字段出现即聚焦
                 probeID: "\(probeID).field.\(idx)",
                 onSubmit: { submitIfValid() }
             )
@@ -249,8 +198,7 @@ struct InputDialog: View {
 
 // MARK: - DialogPresenter async API
 
-/// Resume 协调器 — 跟 ConfirmDialog 同套思路 (但泛型不同, 单独一份 fileprivate
-/// 避免泛型 across-file 实例化复杂度).
+/// Resume 协调器 — 跟 ConfirmDialog 同套思路, 单独一份避免泛型 across-file 实例化.
 @MainActor
 private final class InputResumeCoordinator {
     private var resumed = false
@@ -268,15 +216,8 @@ private final class InputResumeCoordinator {
 }
 
 extension HVMUI.DialogPresenter {
-    /// 便利 async API — 弹 input dialog + await 用户响应.
-    ///
-    /// 关闭路径 → 返回值:
-    ///   - 主按钮 → .submitted(values) (values 跟 fields 同长同序)
-    ///   - 取消 / X / Esc / dismissAll → .cancelled
-    ///
-    /// validate 闭包: 接收当前 [String], 返回 .valid 或 .invalid(errorMessage).
-    /// 实时调用 (字段变化触发 + onAppear). .invalid 时主按钮 disabled + 字段下方
-    /// 红字提示. nil 表示不验证, 主按钮永远 enabled.
+    /// 便利 async API — present input dialog + await 用户响应.
+    /// 主按钮 → .submitted(values) (跟 fields 同长同序); 取消 / X / Esc / dismissAll → .cancelled.
     func input(title: String,
                fields: [HVMUI.InputField],
                validate: (@MainActor @Sendable ([String]) -> HVMUI.InputValidation)? = nil,
@@ -301,8 +242,7 @@ extension HVMUI.DialogPresenter {
                     )
                 },
                 onDismiss: {
-                    // Esc / dismissAll 直接关 dialog 没经过 onResult,
-                    // onDismiss 兜底 resume .cancelled.
+                    // Esc / dismissAll 不经过 onResult, 这里兜底 resume .cancelled
                     coordinator.resumeIfNeeded(.cancelled)
                 }
             )

@@ -1,7 +1,6 @@
-// hvm-dbg/Commands/ExecCommand.swift
 // hvm-dbg exec — 通过 console 自动登录 + 跑命令 + 拿输出.
 //
-// 完全客户端实现, 状态机由 hvm-dbg 跑, 服务端只暴露 console.read/write 两个原子 op.
+// 完全客户端实现: 状态机在 hvm-dbg 跑, 服务端只暴露 console.read/write 两个原子 op.
 //
 // 流程:
 //   1. 拿当前 console totalBytes 当 watermark, 后续轮询都从这个起点之后
@@ -112,7 +111,7 @@ struct ExecCommand: AsyncParsableCommand {
         } catch let e as ExitCode {
             throw e
         } catch ExecSentinelError.notFound {
-            // sentinel 没命中 — 显式映射 ExitCode(7), 跟 timeout(6) 区分; 走 stderr 留个简短提示
+            // sentinel 没命中 — ExitCode(7), 跟 timeout(6) 区分
             FileHandle.standardError.write(Data(
                 "exec: console buffer 缺 BEGIN/END sentinel (guest 命令未完整执行 / console 被截断)\n".utf8))
             throw ExitCode(7)
@@ -218,12 +217,10 @@ private final class ConsoleSession {
         let cmd = "echo \(begin); \(joined); echo \(end):$?"
         try write(cmd + "\n")
 
-        // 等 END sentinel 出现; 拿到 buffer 后切片
-        // waitForAny 用 256 字节尾窗判断, 这里 sentinel 不长能命中
+        // 等 END sentinel 出现 (waitForAny 用 256 字节尾窗判断)
         _ = try waitForAny([end + ":"])
 
-        // 提取 BEGIN..END 之间内容. 找不到 sentinel 直接抛 ExitCode(7), 不再返 -1
-        // — 老路径返 -1 让上层无法区分 "guest 命令真返 -1" 与 "host 解析失败".
+        // 提取 BEGIN..END 之间内容; 找不到 sentinel 抛 ExitCode(7) (区分 "guest 真返 -1" 与 "host 解析失败")
         let bufStr = String(data: buffer, encoding: .utf8) ?? ""
         guard let beginRange = bufStr.range(of: begin),
               let endRange   = bufStr.range(of: end + ":", range: beginRange.upperBound..<bufStr.endIndex) else {

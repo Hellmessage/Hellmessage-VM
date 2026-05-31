@@ -1,18 +1,6 @@
-// HVMUIKbdHint.swift — 新 GUI 键盘快捷键 chip (PR-C6)
-//
-// 用法:
-//   HVMUI.KbdHint("⌘+S")
-//   HVMUI.KbdHint(keys: [.cmd, .shift, .s])   // 标准化拼装, 自动 + 分隔
-//   HVMUI.KbdHint("⌘+S", size: .md)
-//
-// 设计:
-//   - 显示快捷键 chip 样式: 圆角矩形 + 1px hairline + bgOverlay 底 + mono 字
-//   - 用于按钮 trailing hint / menu item 右侧 / tooltip 内
-//   - 跟 Linear / Raycast 等命令栏风格一致
-//
-// size:
-//   .sm — 高 16, font monoSm (12), padding xs (4) (toolbar 内联)
-//   .md — 高 20, font mono  (13), padding sm (8)  (default, dialog button 旁)
+// HVMUIKbdHint.swift — 新 GUI 键盘快捷键 chip (圆角矩形 + hairline + bgOverlay + mono 字).
+// 2 size: .sm 16 高 / .md 20 高 (default).
+// 用法: HVMUI.KbdHint("⌘+S") / HVMUI.KbdHint(keys: [.cmd, .shift], char: "S")
 
 
 import SwiftUI

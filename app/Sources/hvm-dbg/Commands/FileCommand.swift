@@ -1,20 +1,12 @@
-// hvm-dbg/Commands/FileCommand.swift
 // hvm-dbg file push / pull — host ↔ guest 单文件传输, 走 qemu-guest-agent guest-file-* API.
-//
-// 设计稿: docs/v3/FILE_COPY.md
 //
 // 用法:
 //   hvm-dbg file push <vm> --src /local/x.iso --dst 'C:\Windows\Temp\x.iso'
 //   hvm-dbg file pull <vm> --src 'C:\path\file.log' --dst /local/path.log
 //
-// 配套要求:
-//   - VM 在跑 + qga socket 文件存在 (cold start 让 argv 生效)
-//   - guest 内 qemu-ga 服务 attach 到 virtio-serial port org.qemu.guest_agent.0
-//
-// v1 限制:
-//   - 单文件, 不递归 (用户先 zip 后 push)
-//   - host → guest 写入非原子 (中断留半成品 dst); guest → host 本地走 .hvm-tmp + rename
-//   - 软警告 100 MiB / 硬上限 4 GiB
+// 配套: VM 在跑 + guest 内 qemu-ga 服务 attach 到 org.qemu.guest_agent.0.
+// 限制: 单文件不递归; push 写入非原子 (中断留半成品), pull 本地走 .hvm-tmp + rename;
+//       软警告 100 MiB / 硬上限 4 GiB.
 
 import ArgumentParser
 import Foundation

@@ -1,12 +1,11 @@
 // HVMStorage/ISOValidator.swift
-// ISO 路径合法性校验. ISO 不进 bundle, 只存绝对路径 (见 docs/STORAGE.md)
+// ISO 路径合法性校验. ISO 不进 bundle, 只存绝对路径.
 
 import Foundation
 import HVMCore
 
 public enum ISOValidator {
-    /// 校验 ISO 存在且尺寸在合理范围 [1 MiB, 20 GiB).
-    /// 超范围不一定错, 但八成是用户选错了文件, 早失败好过挂载后 guest 无法启动
+    /// 校验 ISO 存在且尺寸在 [1 MiB, 20 GiB) 范围. 超范围多半是选错文件, 早失败好过挂载后启动不了.
     public static func validate(at path: String) throws {
         let fm = FileManager.default
         guard fm.fileExists(atPath: path) else {

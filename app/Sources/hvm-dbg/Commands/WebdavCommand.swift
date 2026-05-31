@@ -1,9 +1,7 @@
-// WebdavCommand.swift
 // hvm-dbg webdav-serve / webdav-test — 独立测 SpiceWebdavServer 的协议层 + 端到端.
 //
 // webdav-test: 离线跑 mux frame codec + HTTP 解析 + WebDAV 动词测试, 不接 socket.
-// webdav-serve: 模拟"我作为 SPICE server 在 socket 上 listen", 等真实 spice-webdavd 客户端连;
-//               同时也允许 socat 转发等手动测.
+// webdav-serve: socket 上 listen/connect, 等真实 spice-webdavd 客户端连 (或 socat 手动测).
 
 import ArgumentParser
 import Foundation

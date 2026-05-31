@@ -1,17 +1,9 @@
 // HVM/Services/VMnetSupervisor.swift
-// socket_vmnet daemon 的生命周期代理 (新方案, hell-vm 同款).
+// socket_vmnet 系统级 launchd daemon 的生命周期代理: 装 / 卸 / 重启 / 列 + 就绪状态.
 //
-// 职责:
-//   - 装 / 卸 / 列 socket_vmnet 系统级 launchd daemon
-//   - 提供 daemon 当前 socket 就绪状态给 UI 展示
-//
-// 提权方式: osascript "do shell script ... with administrator privileges" 弹原生
-// Touch ID / 密码框 (hell-vm 同款). 不写 sudoers, 不拉 Terminal, 不用 NOPASSWD.
-//
-// 安装脚本: scripts/install-vmnet-daemons.sh, 由 bundle.sh 拷入 .app/Resources/scripts/.
-// 脚本从 brew 路径找 socket_vmnet (`/opt/homebrew/opt/socket_vmnet/bin/socket_vmnet`),
-// 写 launchd plist `/Library/LaunchDaemons/com.hellmessage.hvm.vmnet.<mode>.plist`.
-// daemon socket 路径走 SocketPaths.* (跟 socket_vmnet 上游 / lima / hell-vm 一致).
+// 提权走 osascript "do shell script ... with administrator privileges" 弹原生 Touch ID /
+// 密码框 (不写 sudoers, 不拉 Terminal). 安装脚本 scripts/install-vmnet-daemons.sh 由
+// bundle.sh 拷入 .app/Resources/scripts/; 它从 brew 路径找 socket_vmnet 写 launchd plist.
 
 import Foundation
 import HVMCore
@@ -62,11 +54,8 @@ public enum VMnetSupervisor {
     }
 
     /// 强制重启全部已装的 vmnet daemon (bootout + bootstrap), plist 文件保留.
-    ///
-    /// 用途: vmnet.framework 内核侧 bridge attach 状态死掉 (daemon 进程在跑 / socket 在 /
-    /// launchctl 视图也正常, 但帧根本不打到物理 iface), idempotent install 跳过不修.
-    /// 这条路径无条件破坏性重启, 必然断开所有已连接 VM 的网络 (跟老版 install 一样).
-    /// 详见 docs/v3/VMNET_DAEMON_HEALTH.md.
+    /// 用途: vmnet.framework 内核侧 bridge attach "半死" (进程在跑 / socket 在 / launchctl 正常,
+    /// 但帧不打到物理 iface), idempotent install 跳过不修. 无条件破坏性重启, 会断开已连 VM 的网络.
     public static func restartAllDaemons() async throws {
         let script = try scriptPath()
         try await runWithAdminPrivileges(args: [script, "--restart"])
@@ -91,8 +80,8 @@ public enum VMnetSupervisor {
         }
     }
 
-    /// 严格只走 .app 包内 Resources/scripts/, 不再 fallback 到仓库 — daemon plist 路径写死,
-    /// 必须指向 /Applications/HVM.app 这种长期稳定位置. 见 CLAUDE.md 第三方二进制约束.
+    /// 严格只走 .app 包内 Resources/scripts/, 不 fallback 到仓库 (daemon plist 路径写死,
+    /// 必须指向 /Applications/HVM.app 这种长期稳定位置).
     private static func scriptPath() throws -> String {
         guard let res = Bundle.main.resourcePath else { throw VMnetError.scriptNotFound }
         let bundled = URL(fileURLWithPath: res)
