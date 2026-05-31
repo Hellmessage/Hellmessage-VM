@@ -87,6 +87,9 @@ struct WizardDialog: View {
                     .frame(minHeight: 120, alignment: .topLeading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .transition(.opacity)
+                    // content 内 Select 下拉走 .overlay 往下浮, 会盖到 footerRow 区域;
+                    // VStack 里靠后的 footerRow 默认画在其上 → 按钮穿透下拉. 抬 content zIndex 压住.
+                    .zIndex(1)
 
                 if let inlineError {
                     Text(inlineError)
