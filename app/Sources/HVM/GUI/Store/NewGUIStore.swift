@@ -412,6 +412,21 @@ public final class NewGUIStore {
         } catch { return (false, false, encErrorMessage(error)) }
     }
 
+    // MARK: - 创建 (创建向导)
+
+    /// 创建明文/加密 VM (后台 detached; qcow2/LUKS create 秒级). 走 VMControl.create 单一来源.
+    /// 成功 refresh + 选中新 VM; 失败返 error 文本 (dialog 内联显, 不设全局 lastError, 同加密事务).
+    public func create(_ spec: VMControl.CreateSpec) async -> (ok: Bool, error: String?) {
+        do {
+            let result = try await Task.detached(priority: .userInitiated) {
+                try VMControl.create(spec)
+            }.value
+            refresh()
+            selectedID = result.config.id
+            return (true, nil)
+        } catch { return (false, encErrorMessage(error)) }
+    }
+
     /// 加密事务错误 → 文本 (HVMError.userFacing message + hint). dialog 内联显, 不设全局 lastError.
     private func encErrorMessage(_ error: Error) -> String {
         if let e = error as? HVMError {

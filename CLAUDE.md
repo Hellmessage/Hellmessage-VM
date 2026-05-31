@@ -199,6 +199,18 @@ QEMU 已满足 Linux/Windows/加密)。下文若仍有 VZ / macOS guest /
 - **store 显式传入 dialog (非 @Environment)**: `.hvmDialogHost()` 在 `.environment(store)` 外层, dialog overlay 拿不到 store 环境 → `present { handle in NewGUIEncryptionDialog(..., store: store) }` 显式传; @Observable 仍按 body 内访问 `store.encProgress` 建立 observation
 - probeID 命名: `detail.encryption.{encrypt,rekey,decrypt}` / `dialog.{encrypt,decrypt,rekey}.{close,cancel,confirm,done}` / `dialog.{encrypt,decrypt,rekey}.field.{password,confirm,old,new}`
 
+### 新 GUI 创建向导 (业务页 #4)
+
+入口 sidebar 底部 [新建 VM] (`sidebar.button.create`). **复用扩展后的 `HVMUI.WizardDialog`** (不另起自绘 dialog, 符合「UI 控件使用约束」扩展现有组件), 装配在 `app/Sources/HVM/GUI/Dialogs/CreateWizard.swift`.
+
+- **创建逻辑唯一走 `VMControl.create(CreateSpec)` (`HVMControl/VMControl+Create.swift`), 禁止 store/dialog 抄第二份**: CLI `CreateCommand` 与 GUI `NewGUIStore.create` 共用. 明文走 `BundleIO`+`DiskFactory`, 加密走 `EncryptedBundleIO`+`QcowLuksFactory`+`OVMFVarsLuksFactory` (Win OVMF VARS), 失败一律清残留 bundle. **import-disk 不进 `CreateSpec`** — 仅 CLI `CreateCommand` 内联支持 (GUI v1 不接); 新增创建能力先加到 `VMControl.create` 两端同步.
+- **`WizardDialog` 两处通用扩展 (任何向导通用, 非 create 专属)**: `WizardStep.canAdvance: () -> Bool` (默认 `{true}`) gate "下一步/完成" disable; `WizardDialog.onComplete: (() async -> WizardCompletion)?` "完成" 切内部 running 态跑异步收尾 (X+导航+step chip 全隐, 不可中断), `.success`→`.completed` / `.failure(msg)`→回 form 显内联红字. 不传 `onComplete` 退化为原行为 (Showcase 等不回归).
+- **3 步表单 + 创建中** (D2/D4/D5 决策, 见 `docs/CREATE_WIZARD_DESIGN.md`): ①系统 (名称+GuestOS+网络, Windows 标「实验性·QEMU」, bridged 走 `HostNetworkInterfaces.list()`) ②介质与资源 (ISO+CPU/内存/盘+Windows 选项子区+UTM Guest Tools 前台下载 fail-soft) ③加密 (toggle+密码/确认, **独立步**).
+- **跨步 model `@Observable CreateWizardModel`**: 步骤视图 `@Bindable`; canAdvance 闭包在 `WizardDialog.body` 内调用读 model → Observation 自动追踪, 输入即时重算 disable. **disabled 按钮跳过 probe 注册** → hvm-dbg gui 验证 gating: 字段没填好 `dialog.create.next/.complete` 不出现.
+- **创建后不自动启** (D6): `store.create` 成功仅 `refresh()` + `selectedID = 新 VM`, 与 CLI 一致. 失败返 error 文本走 dialog 内联 (不设全局 `lastError`, 同加密事务).
+- **ISO NSOpenPanel 测试钩子**: panel 无法被 hvm-dbg gui 驱动, probe 模式 (`HVM_GUI_PROBE`) 下若设 `HVM_TEST_ISO` env 则 `选择 ISO` 直接用它跳过 panel (真人用户无此 env, 不受影响).
+- probeID 命名: `sidebar.button.create` / `dialog.create.{close,cancel,prev,next,complete,step.<i>}` / step1 `dialog.create.{field.name,select.os,select.network,select.bridgedIface}` / step2 `dialog.create.{field.cpu,field.memory,field.disk,iso.select,iso.clear,win.{secureBoot,tpm,bypassChecks,spiceTools,downloadTools}}` / step3 `dialog.create.encrypt.{toggle,password,confirm}`
+
 ## 能力边界约束 **必须遵守**
 
 以下能力 **不支持**, 即使用户要求也不得尝试实现, 直接提示用户能力边界:

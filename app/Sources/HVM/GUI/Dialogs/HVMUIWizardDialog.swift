@@ -13,13 +13,17 @@ import SwiftUI
 extension HVMUI {
 
 /// 单步配置 — title + content closure (独立 View, 跨步骤共享走 @EnvironmentObject).
+/// canAdvance: 该步字段是否合法 — 不合法时 "下一步/完成" disable (默认恒可前进).
 struct WizardStep {
     let title: String
     let content: () -> AnyView
+    let canAdvance: () -> Bool
 
     init<Content: View>(title: String,
+                        canAdvance: @escaping () -> Bool = { true },
                         @ViewBuilder content: @escaping () -> Content) {
         self.title = title
+        self.canAdvance = canAdvance
         self.content = { AnyView(content()) }
     }
 }
@@ -30,22 +34,37 @@ enum WizardResult: Sendable {
     case cancelled
 }
 
+/// onComplete 异步收尾结果 — success → .completed; failure → 回 form 显内联 error.
+enum WizardCompletion: Sendable {
+    case success
+    case failure(String)
+}
+
 struct WizardDialog: View {
     private let title: String
     private let steps: [WizardStep]
     private let probeID: String
     private let onResult: @MainActor @Sendable (WizardResult) -> Void
+    // 可选异步收尾: "完成" 按下后切 running 态跑它. 不传 → "完成" 即 .completed (退化为原行为).
+    private let onComplete: (@MainActor @Sendable () async -> WizardCompletion)?
+    private let completionLabel: String
 
     @State private var currentIndex: Int = 0
+    @State private var isRunning: Bool = false
+    @State private var inlineError: String?
 
     init(title: String,
          steps: [WizardStep],
          probeID: String,
+         completionLabel: String = "处理中…",
+         onComplete: (@MainActor @Sendable () async -> WizardCompletion)? = nil,
          onResult: @escaping @MainActor @Sendable (WizardResult) -> Void) {
         precondition(!steps.isEmpty, "WizardDialog 至少要 1 步")
         self.title = title
         self.steps = steps
         self.probeID = probeID
+        self.completionLabel = completionLabel
+        self.onComplete = onComplete
         self.onResult = onResult
     }
 
@@ -57,19 +76,44 @@ struct WizardDialog: View {
 
             HVMUI.Divider()
 
-            // .id(currentIndex) 强制切步时 rebuild, 让每步 @State 干净 (跨步持久化走外部 model)
-            steps[currentIndex].content()
-                .id(currentIndex)
-                .frame(minHeight: 120, alignment: .topLeading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .transition(.opacity)
+            if isRunning {
+                runningView
+                    .frame(minHeight: 120, alignment: .center)
+                    .frame(maxWidth: .infinity)
+            } else {
+                // .id(currentIndex) 强制切步时 rebuild, 让每步 @State 干净 (跨步持久化走外部 model)
+                steps[currentIndex].content()
+                    .id(currentIndex)
+                    .frame(minHeight: 120, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.opacity)
 
-            footerRow
+                if let inlineError {
+                    Text(inlineError)
+                        .font(HVMTheme.font.sm)
+                        .foregroundStyle(HVMTheme.color.error)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                footerRow
+            }
         }
         .padding(HVMTheme.space.lg)
         .frame(width: 540)
         .background(cardBackground)
         .animation(HVMTheme.motion.easeOut, value: currentIndex)
+        .animation(HVMTheme.motion.easeOut, value: isRunning)
+    }
+
+    // MARK: - running 态 (onComplete 跑期间; 不可中断, X + 导航全隐)
+
+    private var runningView: some View {
+        HStack(spacing: HVMTheme.space.sm) {
+            ProgressView().scaleEffect(0.7)
+            Text(completionLabel)
+                .font(HVMTheme.font.base)
+                .foregroundStyle(HVMTheme.color.textPrimary)
+        }
     }
 
     // MARK: - Header
@@ -82,9 +126,12 @@ struct WizardDialog: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            HVMUI.Button(icon: "xmark", variant: .icon, size: .sm,
-                         probeID: "\(probeID).close") {
-                onResult(.cancelled)
+            // running 不可关 (X 隐藏, onComplete 事务不可中断)
+            if !isRunning {
+                HVMUI.Button(icon: "xmark", variant: .icon, size: .sm,
+                             probeID: "\(probeID).close") {
+                    onResult(.cancelled)
+                }
             }
         }
     }
@@ -111,7 +158,7 @@ struct WizardDialog: View {
     private func stepChip(idx: Int) -> some View {
         let isCurrent = idx == currentIndex
         let isPast    = idx < currentIndex
-        let canTap    = isPast  // 仅已完成步骤可点回退
+        let canTap    = isPast && !isRunning  // 仅已完成步骤可点回退; running 锁定
 
         let chip = HStack(spacing: HVMTheme.space.xs) {
             ZStack {
@@ -183,17 +230,40 @@ struct WizardDialog: View {
 
             if currentIndex < steps.count - 1 {
                 HVMUI.Button("下一步", variant: .primary,
+                             disabled: !steps[currentIndex].canAdvance(),
                              probeID: "\(probeID).next") {
-                    currentIndex += 1
+                    if steps[currentIndex].canAdvance() { currentIndex += 1 }
                 }
             } else {
                 HVMUI.Button("完成", variant: .primary,
+                             disabled: !steps[currentIndex].canAdvance(),
                              probeID: "\(probeID).complete") {
-                    onResult(.completed)
+                    complete()
                 }
             }
         }
         .padding(.top, HVMTheme.space.xs)
+    }
+
+    /// "完成" 处理: 无 onComplete → 直接 .completed; 有则切 running 跑它, 失败回 form 显内联 error.
+    private func complete() {
+        guard steps[currentIndex].canAdvance() else { return }
+        guard let onComplete else {
+            onResult(.completed)
+            return
+        }
+        inlineError = nil
+        isRunning = true
+        Task { @MainActor in
+            let result = await onComplete()
+            switch result {
+            case .success:
+                onResult(.completed)            // 由 present 包装 resume + close
+            case .failure(let msg):
+                isRunning = false
+                inlineError = msg               // 回 form 当前步显红字
+            }
+        }
     }
 
     // MARK: - Card chrome
@@ -235,9 +305,13 @@ private final class WizardResumeCoordinator {
 extension HVMUI.DialogPresenter {
     /// 便利 async API — present wizard dialog + await 用户完成或取消.
     /// 完成 → .completed; 取消 / X / Esc / dismissAll → .cancelled.
+    /// onComplete 非 nil 时: "完成" 切 running 跑它, .success 才 .completed (resume+close),
+    /// .failure 回 form 显内联 error (dialog 不关, continuation 不 resume).
     func wizard(title: String,
                 steps: [HVMUI.WizardStep],
-                probeID: String) async -> HVMUI.WizardResult {
+                probeID: String,
+                completionLabel: String = "处理中…",
+                onComplete: (@MainActor @Sendable () async -> HVMUI.WizardCompletion)? = nil) async -> HVMUI.WizardResult {
         await withCheckedContinuation { cont in
             let coordinator = WizardResumeCoordinator(cont: cont)
             present(
@@ -246,6 +320,8 @@ extension HVMUI.DialogPresenter {
                         title: title,
                         steps: steps,
                         probeID: probeID,
+                        completionLabel: completionLabel,
+                        onComplete: onComplete,
                         onResult: { result in
                             coordinator.resumeIfNeeded(result)
                             handle.close()

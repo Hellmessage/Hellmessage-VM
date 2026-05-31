@@ -134,7 +134,7 @@
 | `await dialog.alert(level:.info/.warn/.error/.success, title:message:hint?:probeID:)` | `Void` | 单按钮提示, 无取消语义 |
 | `await dialog.confirm(title:message:confirmLabel:cancelLabel:destructive:probeID:)` | `.confirmed` / `.cancelled` | `destructive:true` 主按钮红边红字 |
 | `await dialog.input(title:fields:[InputField]:validate?:confirmLabel:probeID:)` | `.submitted([String])` / `.cancelled` | 单/多字段, `InputField(label:placeholder:initialText:icon:secure:)`, 支持 `validate` |
-| `await dialog.wizard(title:steps:[WizardStep]:probeID:)` | `.completed` / `.cancelled` | 多步骤 + 步骤指示器 + 上一步/下一步 |
+| `await dialog.wizard(title:steps:[WizardStep]:probeID:completionLabel?:onComplete?:)` | `.completed` / `.cancelled` | 多步骤 + 步骤指示器 + 上一步/下一步. `WizardStep.canAdvance` gate "下一步/完成" disable; `onComplete` 非 nil 时 "完成" 切内部 running 态跑异步收尾 (X+导航全隐), `.success`→`.completed` / `.failure(msg)`→回 form 显内联红字 |
 | `NewGUIEncryptionDialog` (加密三态) | — | 见 §7, 参数化 form/running/done |
 
 ### UI 控件使用约束 (CLAUDE.md「UI 控件使用约束」)
@@ -286,6 +286,38 @@ VM 动作 dialog 流程集中在 `Layout/VMActions.swift` (sidebar context menu 
 - probeID: `dialog.{encrypt,decrypt,rekey}.{close,cancel,confirm,done}` /
   `.field.{password,confirm,old,new}`.
 
+### 7.4 创建向导 (业务页 #4)
+
+入口 sidebar 底部 [新建 VM] (`sidebar.button.create`) → `NewGUISidebarView.presentCreateWizard`
+构造 `CreateWizardModel` + `CreateWizard.steps`, 喂扩展后的 `dialog.wizard(...)`. **复用 WizardDialog**
+(不另起自绘 dialog, 符合「扩展现有组件」约束) + 两处通用扩展 `canAdvance` + `onComplete`.
+
+- **创建逻辑单一来源 `VMControl.create(CreateSpec)`** (`HVMControl/VMControl+Create.swift`): CLI `create`
+  与 GUI store 共用; 明文走 `BundleIO`+`DiskFactory`, 加密走 `EncryptedBundleIO`+`QcowLuksFactory`+
+  `OVMFVarsLuksFactory` (Win), 失败清残留 bundle. **禁止** store/dialog 再抄一份. import-disk 不进
+  CreateSpec (仅 CLI `CreateCommand` 内联, GUI v1 不接).
+- **store `create(spec:) async`** (`Task.detached`, qcow2/LUKS create 秒级): 成功 `refresh()` +
+  `selectedID = 新 VM id`; 失败返 error 文本走 dialog 内联 (不设全局 `lastError`, 同加密事务).
+- **3 步表单 + 创建中** (`CreateWizard.swift`, `@Observable CreateWizardModel` 跨步, `@Bindable` 步骤视图):
+  1. 系统 — 名称 + Guest OS (Windows 标「实验性·QEMU」) + 网络 (NAT/shared/host/bridged/none; bridged
+     选物理接口走 `HostNetworkInterfaces.list()`)
+  2. 介质与资源 — ISO (NSOpenPanel + `ISOValidator`) + CPU/内存/主盘; Windows 子区 (SecureBoot/TPM/
+     跳过检查/SPICE 工具 toggle + UTM Guest Tools 前台下载, fail-soft)
+  3. 加密 — encrypt toggle + 密码/确认
+- **canAdvance gating**: step1 名称非空+不重名 (+bridged 选了接口); step2 ISO 已选+CPU/内存/盘 ≥1;
+  step3 加密开则密码≥4 且两次一致. 闭包在 `WizardDialog.body` 内被调用读 `@Observable` model →
+  Observation 自动追踪, 输入变化即时重算 disable. (disabled 按钮跳过 probe 注册 → hvm-dbg gui 验证
+  gating: 字段没填好时 `dialog.create.next/.complete` 不出现.)
+- **创建中态**: `onComplete` 跑期间 X + 导航 + step chip 全隐 (不可中断), 失败回 form 显内联 error.
+- **创建后不自动启** (D6): 仅 refresh + 选中, 与 CLI 一致.
+- **测试钩子**: ISO 走 NSOpenPanel 无法被 hvm-dbg gui 驱动 — probe 模式 (`HVM_GUI_PROBE`) 下若设
+  `HVM_TEST_ISO` env 则 `选择 ISO` 直接用它跳过 panel (真人用户无此 env, 不受影响). e2e 已验证明文
+  Linux + 加密 (config.yaml.enc + LUKS 主盘) 全程.
+- probeID: `sidebar.button.create` / `dialog.create.{close,cancel,prev,next,complete,step.<i>}` /
+  step1 `dialog.create.{field.name,select.os,select.network,select.bridgedIface}` /
+  step2 `dialog.create.{field.cpu,field.memory,field.disk,iso.select,iso.clear,win.*}` /
+  step3 `dialog.create.encrypt.{toggle,password,confirm}`.
+
 ---
 
 ## 8. 破坏性二次确认 + X-only-close + 加密解锁
@@ -319,6 +351,8 @@ VM 动作 dialog 流程集中在 `Layout/VMActions.swift` (sidebar context menu 
 | `app/Sources/HVM/GUI/Components/HVMUI*.swift` | Button/TextField/SecureField/Toggle/Checkbox/Select/Section/Divider/Badge/Icon/KbdHint/Tooltip + ScrollerHider |
 | `app/Sources/HVM/GUI/Dialogs/HVMUI{Alert,Confirm,Input,Wizard}Dialog.swift` | 4 高层 dialog async API |
 | `app/Sources/HVM/GUI/Dialogs/NewGUIEncryptionDialog.swift` | 加密三态 dialog |
+| `app/Sources/HVM/GUI/Dialogs/CreateWizard.swift` | 创建向导装配 (`CreateWizardModel` + 3 步 + steps) |
+| `app/Sources/HVMControl/VMControl+Create.swift` | `VMControl.create(CreateSpec)` 创建单一来源 (CLI+GUI) |
 | `app/Sources/HVM/GUI/Overlay/HVMUIDialogHost.swift` | `DialogPresenter` + `.hvmDialogHost()` |
 | `app/Sources/HVM/GUI/Store/NewGUIStore.swift` | `@Observable` 数据 store |
 | `app/Sources/HVM/GUI/Layout/MainLayoutView.swift` | 主界面两栏骨架 + statusbar |

@@ -44,18 +44,29 @@ struct NewGUISidebarView: View {
         HVMUI.Button("新建 VM", variant: .primary, icon: "plus",
                      fillWidth: true,
                      probeID: "sidebar.button.create") {
-            Task { @MainActor in
-                await dialog.alert(
-                    level: .info,
-                    title: "创建向导即将接入",
-                    message: "VM 创建向导是后续子稿. 当前请用 hvm-cli create 或老 GUI 创建.",
-                    probeID: "sidebar.create.placeholder"
-                )
-            }
+            presentCreateWizard()
         }
         // 跟 VM 列表行同样的横向内缩, 让按钮左右边与 item 对齐
         .padding(.horizontal, HVMTheme.space.sm)
         .padding(.vertical, HVMTheme.space.sm)
+    }
+
+    /// 弹创建向导 (WizardDialog + CreateWizardModel). store/model closure 捕获显式传入
+    /// (dialog overlay 在 .environment(store) 外层, 同加密 dialog).
+    private func presentCreateWizard() {
+        let model = CreateWizardModel()
+        Task { @MainActor in
+            _ = await dialog.wizard(
+                title: "新建虚拟机",
+                steps: CreateWizard.steps(model: model, store: store),
+                probeID: "dialog.create",
+                completionLabel: "正在创建虚拟机…",
+                onComplete: { @MainActor @Sendable in
+                    let r = await store.create(model.toCreateSpec())
+                    return r.ok ? .success : .failure(r.error ?? "创建失败")
+                }
+            )
+        }
     }
 
     private var emptyState: some View {
