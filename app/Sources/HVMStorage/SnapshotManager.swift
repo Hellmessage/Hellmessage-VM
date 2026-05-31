@@ -1,8 +1,9 @@
 // HVMStorage/SnapshotManager.swift
-// 基于 APFS clonefile(2) 的 VM 整体快照: disks/* + config.yaml(.enc) + meta.json.
-// clonefile 是 COW, 几乎零空间 + 瞬间完成. 布局: <bundle>/snapshots/<name>/{disks/,config.*,meta.json}.
+// 基于 APFS clonefile(2) 的 VM 整体快照: disks/* + config.yaml(.enc) + nvram/ + tpm/ + meta.json.
+// clonefile 是 COW, 几乎零空间 + 瞬间完成. 布局: <bundle>/snapshots/<name>/{disks/,nvram/,tpm/,config.*,meta.json}.
+// nvram/ (EFI vars/BootOrder) + tpm/ (swtpm 状态) 一并快照, 否则 Windows 恢复后 EFI/BitLocker 失配.
 //
-// 加密 VM: clonefile 字节级 COW 复制 LUKS qcow2 / config.yaml.enc / swtpm state 不解密
+// 加密 VM: clonefile 字节级 COW 复制 LUKS qcow2 / config.yaml.enc / nvram(.luks) / tpm 不解密
 // (snapshot 不需密码); master KEK 不变, restore 后用源密码可解 (rekey 后 restore 须用旧密码).
 //
 // 限制: VM 必须 stopped (running 时 disk 在写则不一致); clonefile 要求 src/dst 同 APFS volume
@@ -56,6 +57,13 @@ public enum SnapshotManager {
         let (cfgSrc, cfgName) = try locateBundleConfig(bundleURL: bundleURL)
         let cfgDst = snapDir.appendingPathComponent(cfgName)
         try FileManager.default.copyItem(at: cfgSrc, to: cfgDst)
+
+        // nvram/ (EFI vars/BootOrder) + tpm/ (swtpm 状态) 整目录 clone — 不带会让 Windows
+        // 恢复后 EFI 启动项错乱 / BitLocker(TPM 封印) 失效. clonefile 支持目录递归 COW.
+        try cloneDirIfExists(BundleLayout.nvramDir(bundleURL),
+                             to: snapDir.appendingPathComponent(BundleLayout.nvramDirName))
+        try cloneDirIfExists(BundleLayout.tpmStateDir(bundleURL),
+                             to: snapDir.appendingPathComponent("tpm"))
 
         // meta
         let meta = MetaFile(name: name, createdAt: Date())
@@ -122,6 +130,31 @@ public enum SnapshotManager {
         // 4. config atomic replace. snapshot 内可能是 config.yaml 或 config.yaml.enc.
         // bundle 内同样两种之一 (互斥). 先把 bundle 现有的两种都清, 再 mv snapshot 的过来.
         try restoreConfig(snapDir: snapDir, bundleURL: bundleURL)
+
+        // 5. nvram/ + tpm/ 还原 (老快照无这两目录 → 跳过, 保留当前; 向后兼容).
+        try restoreDirIfPresent(snapDir.appendingPathComponent(BundleLayout.nvramDirName),
+                                to: BundleLayout.nvramDir(bundleURL))
+        try restoreDirIfPresent(snapDir.appendingPathComponent("tpm"),
+                                to: BundleLayout.tpmStateDir(bundleURL))
+    }
+
+    /// 源目录存在才 clonefile 整目录到 dst (dst 必须不存在). 用于 create 阶段 nvram/tpm.
+    private static func cloneDirIfExists(_ src: URL, to dst: URL) throws {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: src.path, isDirectory: &isDir), isDir.boolValue else {
+            return
+        }
+        try cloneFile(from: src, to: dst)
+    }
+
+    /// snapshot 内有该目录才还原: 删 bundle 现有 + clonefile snapshot 的过来 (老快照无 → 保留当前).
+    private static func restoreDirIfPresent(_ snapSubdir: URL, to bundleSubdir: URL) throws {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: snapSubdir.path, isDirectory: &isDir), isDir.boolValue else {
+            return
+        }
+        try? FileManager.default.removeItem(at: bundleSubdir)
+        try cloneFile(from: snapSubdir, to: bundleSubdir)
     }
 
     // MARK: - 加密-aware config helpers

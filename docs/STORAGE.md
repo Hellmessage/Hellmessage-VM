@@ -213,16 +213,20 @@ public static func grow(at url: URL, toGiB: UInt64, format: DiskFormat, qemuImg:
 
 ## 5. SnapshotManager — APFS clonefile 快照
 
-基于 `clonefile(2)` 的 VM 整体快照,clone `disks/*` + `config.yaml(.enc)`。COW 几乎零空间 + 瞬间完成 (10GB 主盘也是 ms 级)。
+基于 `clonefile(2)` 的 VM 整体快照,clone `disks/*` + `config.yaml(.enc)` + `nvram/` + `tpm/`。COW 几乎零空间 + 瞬间完成 (10GB 主盘也是 ms 级)。**不含运行态 RAM** (HVF 无含 RAM 快照,见 `docs/SNAPSHOT_GUI_DESIGN.md`)。
 
 ### 5.1 布局
 
 ```
 <bundle>/snapshots/<name>/disks/os.{img,qcow2}
 <bundle>/snapshots/<name>/disks/data-*.{img,qcow2}
+<bundle>/snapshots/<name>/nvram/      (EFI vars/BootOrder; 存在才带)
+<bundle>/snapshots/<name>/tpm/        (swtpm 状态, Win11; 存在才带)
 <bundle>/snapshots/<name>/config.yaml | config.yaml.enc   (按 bundle 加密形态择一)
 <bundle>/snapshots/<name>/meta.json                       ({name, createdAt})
 ```
+
+> **nvram/tpm 必带** (2026-05-31 修): 早期版本只快照 disks+config,漏了 nvram/tpm → Windows 恢复后 EFI 启动项错乱 / BitLocker (TPM 封印) 失效。现 `cloneDirIfExists` 一并带上;`restoreDirIfPresent` 还原 (老快照无这两目录 → 跳过保留当前,向后兼容)。
 
 `clonefile(2)` 直接绑定 (`@_silgen_name("clonefile")`),flags=0 = owner copy。
 
@@ -233,6 +237,7 @@ public static func grow(at url: URL, toGiB: UInt64, format: DiskFormat, qemuImg:
   - 同名快照已存在 → `.diskAlreadyExists`。
   - clone `disks/` 下所有 `.img` / `.qcow2` 文件 (加密 LUKS qcow2 字节复制透明)。
   - config 按加密形态择一 copy (`locateBundleConfig`: 有 `config.yaml.enc` 优先,否则 `config.yaml`,都无抛 `.bundle(.notFound)`)。
+  - `cloneDirIfExists` 整目录 clone `nvram/` + `tpm/` (存在才带)。
   - 写 `meta.json` (`{name, createdAt}`)。
 - **list(bundleURL:)**: 读各 `<name>/meta.json`,按 `createdAt` 倒序返 `[Info]`。
 - **restore(bundleURL:name:)**: 非原子,分四步,中途 crash 可能半旧半新,但 snapshot 仍完整可重 restore 自愈:
@@ -240,7 +245,10 @@ public static func grow(at url: URL, toGiB: UInt64, format: DiskFormat, qemuImg:
   2. 删 bundle/disks/ 下现有磁盘 (snapshot 是 ground truth)。
   3. tmp 里磁盘 `moveItem` 到 `disks/`,删 tmp。
   4. config atomic replace (`restoreConfig`): 把 snapshot config copy 到 `.config-restore-<8>.tmp` → 清 bundle 现有 `config.yaml` + `config.yaml.enc` 两种 → mv tmp 到对应名。
+  5. `restoreDirIfPresent` 还原 `nvram/` + `tpm/` (snapshot 内有才还原: 删 bundle 现有 + clone snapshot 的;老快照无 → 保留当前)。
 - **delete(bundleURL:name:)**: 不存在抛 `.ioError(ENOENT)`,否则 `removeItem` 整个 snapshot 目录。
+
+> **入口**: CLI `hvm-cli snapshot create/list/restore/delete`;GUI 详情页「快照」section (`DetailSnapshotSection`,走 `VMControl+Snapshot` → `NewGUIStore`)。两端共用 `SnapshotManager` 单一来源。
 
 `isDiskFile`: 仅识别 `.img` (raw) 或 `.qcow2` (含 LUKS) 后缀。
 

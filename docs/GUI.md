@@ -247,6 +247,7 @@ section 不渲染 (仅显概览兜底 + 解锁/删除按钮).
 | 选项 | `detail.options.{clipboard,macStyle}` | 即时; 剪贴板 + macStyle `requireStopped=false` 可 running 热改 |
 | vmnet daemon | `detail.vmnet.{install,restart,uninstall}` | 仅有 vmnet NIC 时显; 走 `VMnetSupervisor` osascript admin |
 | 加密 | `detail.encryption.{encrypt,rekey,decrypt}` | 沉底; 见 §7.3 |
+| 快照 | `detail.snapshot.{create,restore-<name>,delete-<name>}` | APFS clonefile (含 disks/config/nvram/tpm); 创建/恢复仅 stopped; 恢复+删除走 confirm destructive; 走 `VMControl+Snapshot`→`store` |
 
 要点:
 
@@ -358,6 +359,6 @@ VM 动作 dialog 流程集中在 `Layout/VMActions.swift` (sidebar context menu 
 | `app/Sources/HVM/GUI/Layout/MainLayoutView.swift` | 主界面两栏骨架 + statusbar |
 | `app/Sources/HVM/GUI/Layout/NewGUISidebarView.swift` | VM 列表 sidebar |
 | `app/Sources/HVM/GUI/Layout/DetailOverviewView.swift` | 详情页头部 + 滚动配置区 |
-| `app/Sources/HVM/GUI/Layout/Detail{Network,Sharing,Options,Boot,Encryption,VmnetDaemon}Section.swift` | inline 编辑 section |
+| `app/Sources/HVM/GUI/Layout/Detail{Network,Sharing,Options,Boot,Encryption,Snapshot,VmnetDaemon}Section.swift` | inline 编辑 section |
 | `app/Sources/HVM/GUI/Layout/VMActions.swift` | sidebar/detail 共用 VM 动作 + dialog 流程 |
 | `app/Sources/HVM/GUI/Display/Qemu{FramebufferView,FanoutSession}.swift` | QEMU 画面嵌入 |

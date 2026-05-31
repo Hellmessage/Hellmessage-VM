@@ -11,6 +11,7 @@ import HVMControl
 import HVMBundle
 import HVMCore
 import HVMEncryption
+import HVMStorage
 
 /// 动作失败时冒泡给 MainLayoutView → dialog.alert 的错误载体.
 /// id 每次新建 (即便 message 相同) 让 .onChange 能识别"又出错了一次".
@@ -354,6 +355,25 @@ public final class NewGUIStore {
     public func lock(_ id: UUID) {
         clearUnlock(id)
         refresh()
+    }
+
+    // MARK: - 快照 (APFS clonefile, 见 VMControl+Snapshot)
+
+    /// 列快照 (createdAt 倒序). 无副作用.
+    public func snapshots(_ s: VMSummary) -> [SnapshotManager.Info] {
+        VMControl.listSnapshots(bundleURL: s.bundleURL)
+    }
+    /// 创建快照 (秒级 clonefile, 必停机). 失败走 lastError.
+    public func createSnapshot(_ s: VMSummary, name: String) {
+        run("创建快照失败") { try VMControl.createSnapshot(bundleURL: s.bundleURL, name: name) }
+    }
+    /// 恢复快照 (覆盖当前 disks/config/nvram/tpm, 必停机, 破坏性 — 调用方先确认).
+    public func restoreSnapshot(_ s: VMSummary, name: String) {
+        run("恢复快照失败") { try VMControl.restoreSnapshot(bundleURL: s.bundleURL, name: name) }
+    }
+    /// 删快照 (破坏性 — 调用方先确认).
+    public func deleteSnapshot(_ s: VMSummary, name: String) {
+        run("删除快照失败") { try VMControl.deleteSnapshot(bundleURL: s.bundleURL, name: name) }
     }
 
     // MARK: - 加密事务
