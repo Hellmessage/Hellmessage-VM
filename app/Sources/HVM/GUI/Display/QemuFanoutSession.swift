@@ -257,6 +257,38 @@ final class QemuFanoutSession {
         }
     }
 
+    /// framebuffer view 的 Cmd+V / drag-drop 文件 → IPC clipboard.paste-files (走 vdagent file_xfer,
+    /// 落 guest ~/Downloads). 长事务后台跑不阻 UI. 复用 setMonitors 同款 BundleLock.inspect → SocketClient.
+    /// nonisolated: onFilePaste 闭包从 AppKit 主线程调, 读 let bundleURL (Sendable) 后甩到后台队列.
+    nonisolated func sendPasteFiles(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        let bundleURL = self.bundleURL
+        DispatchQueue.global(qos: .userInitiated).async {
+            Self.ipcPasteFiles(bundleURL: bundleURL, urls: urls)
+        }
+    }
+
+    nonisolated private static func ipcPasteFiles(bundleURL: URL, urls: [URL]) {
+        guard let holder = BundleLock.inspect(bundleURL: bundleURL), !holder.socketPath.isEmpty else {
+            log.warning("FanoutSession pasteFiles: BundleLock.inspect 失败, 跳过 IPC")
+            return
+        }
+        let paths = urls.map { $0.path }
+        guard let data = try? JSONEncoder().encode(paths),
+              let json = String(data: data, encoding: .utf8) else {
+            log.warning("FanoutSession pasteFiles: paths JSON 编码失败")
+            return
+        }
+        let req = IPCRequest(op: IPCOp.clipboardPasteFiles.rawValue, args: ["paths": json])
+        do {
+            // 长事务 (文件上传, 单文件 4 GiB 上限): timeout 给足, 同 CLAUDE.md clipboard.paste-files ≥600s
+            let resp = try SocketClient.request(socketPath: holder.socketPath, request: req, timeoutSec: 600)
+            if !resp.ok { log.warning("FanoutSession pasteFiles IPC failed: \(resp.error?.message ?? "?")") }
+        } catch {
+            log.warning("FanoutSession pasteFiles IPC error: \(String(describing: error))")
+        }
+    }
+
     /// 当前活跃 subscriber 数 (compaction 后). 上层据此判断是否保留 fanout (0 + running → tearDown 省资源).
     var activeSubscriberCount: Int {
         subscribers.removeAll { $0.view == nil }

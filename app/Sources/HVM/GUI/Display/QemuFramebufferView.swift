@@ -27,7 +27,6 @@ struct QemuFramebufferView: NSViewRepresentable {
         let fb = FramebufferHostView(frame: .zero)
         fb.translatesAutoresizingMaskIntoConstraints = false
         fb.macStyleShortcuts = vm.config?.macStyleShortcuts ?? true
-        // onFilePaste (Cmd+V 文件粘贴) 接线留 F3
         container.addSubview(fb)
         NSLayoutConstraint.activate([
             fb.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -54,7 +53,11 @@ struct QemuFramebufferView: NSViewRepresentable {
         context.coordinator.maskView = mask
 
         // 注册到 fanout (resize master: 详情区是唯一 view, 拖窗口改 guest 分辨率)
-        store.ensureQemuFanout(vm).addSubscriber(fb, isResizeMaster: true)
+        let session = store.ensureQemuFanout(vm)
+        session.addSubscriber(fb, isResizeMaster: true)
+        // 文件拖拽 / Cmd+V 文件粘贴 → IPC clipboard.paste-files (走 vdagent file_xfer, 落 guest ~/Downloads).
+        // FramebufferHostView 已实现 drag-drop + Cmd+V 拦截, 这里补上 onFilePaste 接线 (原 F3).
+        fb.onFilePaste = { [weak session] urls in session?.sendPasteFiles(urls) }
 
         applyDialogState(context.coordinator, presenting: dialogPresenting)
         return container
