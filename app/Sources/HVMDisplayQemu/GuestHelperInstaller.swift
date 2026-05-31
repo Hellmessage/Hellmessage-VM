@@ -15,10 +15,13 @@ private let log = Logger(subsystem: "com.hellmessage.vm", category: "GuestHelper
 public enum GuestHelperInstaller {
 
     /// marker 文件 — 装好后 touch, 下次开机看到就跳过. 版本号在文件名里, 升级时改名.
-    public static let markerPath = #"C:\ProgramData\HVM\.helper-installed-v2"#
+    /// v3: helper 改为【无 DLL 单 exe】(crt-static), 不再随附 libunwind.dll + 带 RPC ops (exec/
+    /// write-file/read-file). 升 v3 让已装旧 helper 的 guest 下次启动自动重推新 exe.
+    public static let markerPath = #"C:\ProgramData\HVM\.helper-installed-v3"#
     /// 老 marker 路径 — install 时一并删, 顺便清掉老的 Run reg key.
     public static let oldMarkerPaths: [String] = [
         #"C:\ProgramData\HVM\.helper-installed-v1"#,
+        #"C:\ProgramData\HVM\.helper-installed-v2"#,
     ]
 
     /// guest 端安装目录 + EXE 路径.
@@ -48,13 +51,6 @@ public enum GuestHelperInstaller {
         return FileManager.default.fileExists(atPath: exe.path) ? exe : nil
     }
 
-    /// 同上, libunwind.dll. Optional — 没找到时不算错 (但 helper 启不来).
-    public static func locateBundledDll() -> URL? {
-        guard let res = Bundle.main.resourceURL else { return nil }
-        let dll = res.appendingPathComponent("GuestHelper/libunwind.dll")
-        return FileManager.default.fileExists(atPath: dll.path) ? dll : nil
-    }
-
     /// 主入口. 成功返 installed=true 表示这次真装了, false 表示 marker 已存在 skip.
     /// 失败抛 InstallError, 调用方 log warn 但不算 VM 启动失败 (helper 没装只是文件剪贴板不可用).
     /// timeout 给很大值: Windows guest 首次跑 PowerShell 30-60s (.NET runtime 加载).
@@ -82,6 +78,7 @@ public enum GuestHelperInstaller {
             Stop-Process -Name hvm-guest-helper -Force -ErrorAction SilentlyContinue
             reg delete 'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' /v HVMGuestHelper /f 2>$null | Out-Null
             Remove-Item 'C:\\Program Files\\HVM Guest Helper' -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item '\(installDir)\\libunwind.dll' -Force -ErrorAction SilentlyContinue
             \(oldMarkerPaths.map { #"Remove-Item '\#($0)' -Force -ErrorAction SilentlyContinue"# }.joined(separator: "\n"))
             """
         try? await runPowerShell(
@@ -100,9 +97,8 @@ public enum GuestHelperInstaller {
             errorTag: "mkdir install dir"
         )
 
-        // 3. QGA push EXE (+ libunwind.dll if 存在 — helper 用 llvm-mingw 链 LLVM unwinder,
-        //    不带 DLL Windows loader 直接静默 abort)
-        fputs("HVMHost(qemu): GuestHelper step 3/6 push EXE + DLL\n", stderr)
+        // 3. QGA push EXE. helper 是【无 DLL 单 exe】(crt-static), 不再随附 libunwind.dll.
+        fputs("HVMHost(qemu): GuestHelper step 3/6 push EXE\n", stderr)
         let pushStart = Date()
         do {
             _ = try await QgaFile.push(
@@ -112,23 +108,11 @@ public enum GuestHelperInstaller {
                 timeoutSec: 120,
                 progress: nil
             )
-            if let dllURL = locateBundledDll() {
-                let dllPath = #"\#(installDir)\libunwind.dll"#
-                _ = try await QgaFile.push(
-                    socketPath: qgaSocketPath,
-                    srcLocal: dllURL,
-                    dstRemote: dllPath,
-                    timeoutSec: 60,
-                    progress: nil
-                )
-            } else {
-                fputs("HVMHost(qemu): ⚠ GuestHelper libunwind.dll 没找到, helper 可能起不来\n", stderr)
-            }
         } catch {
-            throw InstallError.qgaFailed("QGA push hvm-guest-helper.exe / libunwind.dll: \(error)")
+            throw InstallError.qgaFailed("QGA push hvm-guest-helper.exe: \(error)")
         }
         let pushMs = Int(Date().timeIntervalSince(pushStart) * 1000)
-        fputs("HVMHost(qemu): GuestHelper push ok (\(pushMs) ms, EXE+DLL)\n", stderr)
+        fputs("HVMHost(qemu): GuestHelper push ok (\(pushMs) ms, EXE)\n", stderr)
 
         // 4. 注册持久 schtasks ONLOGON 任务. 必须 /RL HIGHEST: virtio-serial port ACL 拒
         //    普通 user, 需要 admin token. /SC ONLOGON: 每个用户登录自动起一份 helper.

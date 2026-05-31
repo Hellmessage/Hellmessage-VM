@@ -761,6 +761,7 @@ final class QemuHostState {
         case IPCOp.dbgFilePush.rawValue:      return await handleDbgFilePush(req: req)
         case IPCOp.dbgFilePull.rawValue:      return await handleDbgFilePull(req: req)
         case IPCOp.dbgListDir.rawValue:       return await handleDbgListDir(req: req)
+        case IPCOp.dbgHelperExec.rawValue:    return await handleDbgHelperExec(req: req)
         case IPCOp.displaySetMonitors.rawValue:  return handleDisplaySetMonitors(req: req)
         case IPCOp.clipboardSetEnabled.rawValue: return handleClipboardSetEnabled(req: req)
         case IPCOp.clipboardPasteFiles.rawValue: return await handleClipboardPasteFiles(req: req)
@@ -1086,6 +1087,37 @@ final class QemuHostState {
             return .encoded(id: req.id, payload: payload, kind: "exec result")
         } catch {
             return .failure(id: req.id, code: "qga.exec_failed", message: "\(error)")
+        }
+    }
+
+    /// dbg.helper.exec — 通过 HVM guest helper RPC 在 guest【登录用户会话】跑命令.
+    /// vs dbg.exec.guest 走 QGA (SYSTEM 会话 0): 这条在 helper 进程身份 (session 1, 交互桌面) 跑,
+    /// 用于诊断只在 user session 可见的状态 (剪贴板 / window station). 安全: helper 只执行 host
+    /// 给的命令, 返回的 stdout/stderr 是惰性 bytes, 这里 base64 透传, 不在 host 执行 (见 RPC 设计 §5b).
+    /// args: shell (cmd|powershell, 默认 powershell), script, timeoutMs? (guest 侧 kill 超时).
+    private func handleDbgHelperExec(req: IPCRequest) async -> IPCResponse {
+        guard let script = req.args["script"], !script.isEmpty else {
+            return .failure(id: req.id, code: "ipc.bad_args",
+                            message: "dbg.helper.exec 需要 args.script")
+        }
+        let shell = req.args["shell"] ?? "powershell"
+        let timeoutMs = req.args["timeoutMs"].flatMap { UInt64($0) }
+        guard let bridge = QemuHostState.shared.fileClipboardBridge else {
+            return .failure(id: req.id, code: "helper.not_available",
+                            message: "guest helper bridge 未启 (仅 QEMU + Windows guest); 或 VM 未就绪")
+        }
+        // IPC read timeout 由 hvm-dbg 侧给足; 这里 host 等响应用 timeoutMs/1000 + 余量, 无 timeoutMs 用 120s.
+        let waitSec = timeoutMs.map { Int($0 / 1000) + 10 } ?? 120
+        do {
+            let r = try await bridge.exec(
+                shell: shell, script: script, timeoutMs: timeoutMs, timeoutSec: waitSec
+            )
+            let payload = IPCDbgExecPayload(
+                exitCode: r.exitCode, stdoutBase64: r.stdoutB64, stderrBase64: r.stderrB64
+            )
+            return .encoded(id: req.id, payload: payload, kind: "helper exec result")
+        } catch {
+            return .failure(id: req.id, code: "helper.exec_failed", message: "\(error)")
         }
     }
 

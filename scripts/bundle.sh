@@ -90,20 +90,16 @@ if [ -f "$ROOT/scripts/install-vmnet-daemons.sh" ]; then
     chmod +x "$RESOURCES/scripts/install-vmnet-daemons.sh"
 fi
 
-# 4.4b 拷贝 HVM Guest Helper EXE (arm64 Windows) + libunwind.dll 入 Resources/GuestHelper/.
-#      QemuHostEntry 启 Windows VM 后通过 QGA push 到 guest C:\Program Files\HVM Guest Helper\.
+# 4.4b 拷贝 HVM Guest Helper EXE (arm64 Windows) 入 Resources/GuestHelper/.
+#      QemuHostEntry 启 Windows VM 后通过 QGA push 到 guest C:\HVMGuestHelper\.
 #      缺 EXE 时不 fail (Linux/macOS guest 不需要,
 #      Win guest 跑没 helper 也只是文件剪贴板不可用, 其他功能不受影响).
-#      libunwind.dll: helper EXE 用 llvm-mingw 链 LLVM 异常 unwinder, 默认动态依赖 libunwind.dll;
-#      不带这个 DLL Windows 启 helper 直接静默死掉 (api-ms-win-* DLL 加载失败前 ldr 就 abort).
+#      helper 由 make guest-helper 编成【无 DLL 单 exe】(crt-static 全静态链 libunwind.a/ucrt),
+#      只依赖 Windows 系统 DLL, 不再随附 libunwind.dll.
 GH_SRC_EXE="$ROOT/patches/guest/helper-win/dist/aarch64/hvm-guest-helper.exe"
-GH_SRC_DLL="$ROOT/patches/guest/helper-win/dist/aarch64/libunwind.dll"
 if [ -f "$GH_SRC_EXE" ]; then
     mkdir -p "$RESOURCES/GuestHelper"
     cp "$GH_SRC_EXE" "$RESOURCES/GuestHelper/hvm-guest-helper.exe"
-    if [ -f "$GH_SRC_DLL" ]; then
-        cp "$GH_SRC_DLL" "$RESOURCES/GuestHelper/libunwind.dll"
-    fi
 fi
 
 # 4.5 嵌入 QEMU 后端 (软模式: third_party/qemu-stage/ 不存在则跳过, 仍出 .app)

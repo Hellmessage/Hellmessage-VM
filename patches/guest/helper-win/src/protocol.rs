@@ -38,7 +38,45 @@ pub enum Request {
         #[serde(default)]
         id: Option<String>,
     },
+    /// 在登录用户会话跑命令 (powershell|cmd), 同步返回 exit_code + stdout/stderr (base64).
+    /// 仅 host 发起; helper 在 guest 里执行 host 给的命令 (host→guest 控制流).
+    Exec {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default = "default_shell")]
+        shell: String,
+        script: String,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+        #[serde(default)]
+        stdin_b64: Option<String>,
+    },
+    /// host → guest 写文件. Rust 原生宽字符路径 (无 qemu-ga 的 ANSI mojibake). 分块: offset + final.
+    WriteFile {
+        #[serde(default)]
+        id: Option<String>,
+        path: String,
+        data_b64: String,
+        #[serde(default)]
+        offset: u64,
+        #[serde(default = "default_true", rename = "final")]
+        is_final: bool,
+    },
+    /// guest → host 读文件 (分块). 返回 data_b64 + eof.
+    ReadFile {
+        #[serde(default)]
+        id: Option<String>,
+        path: String,
+        #[serde(default)]
+        offset: u64,
+        #[serde(default = "default_read_len")]
+        len: u64,
+    },
 }
+
+fn default_shell() -> String { "powershell".to_string() }
+fn default_true() -> bool { true }
+fn default_read_len() -> u64 { 1024 * 1024 }   // 1 MiB / 块
 
 // ---- response ----
 
@@ -52,17 +90,49 @@ pub struct Response {
     pub code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    // exec
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout_b64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr_b64: Option<String>,
+    // write-file / read-file
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_b64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eof: Option<bool>,
 }
 
 impl Response {
-    pub fn ok(id: Option<String>) -> Self {
-        Self { id, ok: true, version: None, code: None, message: None }
+    fn base(id: Option<String>, ok: bool) -> Self {
+        Self {
+            id, ok, version: None, code: None, message: None,
+            exit_code: None, stdout_b64: None, stderr_b64: None,
+            bytes: None, data_b64: None, eof: None,
+        }
     }
+    pub fn ok(id: Option<String>) -> Self { Self::base(id, true) }
     pub fn ok_with_version(id: Option<String>, version: &str) -> Self {
-        Self { id, ok: true, version: Some(version.to_string()), code: None, message: None }
+        Self { version: Some(version.to_string()), ..Self::base(id, true) }
     }
     pub fn fail(id: Option<String>, code: &str, message: &str) -> Self {
-        Self { id, ok: false, version: None, code: Some(code.to_string()), message: Some(message.to_string()) }
+        Self { code: Some(code.to_string()), message: Some(message.to_string()), ..Self::base(id, false) }
+    }
+    /// exec 结果 (exit_code + stdout/stderr base64).
+    pub fn exec_result(id: Option<String>, exit_code: i32, stdout_b64: String, stderr_b64: String) -> Self {
+        Self { exit_code: Some(exit_code), stdout_b64: Some(stdout_b64), stderr_b64: Some(stderr_b64),
+               ..Self::base(id, true) }
+    }
+    /// write-file 结果 (已写字节数).
+    pub fn write_result(id: Option<String>, bytes: u64) -> Self {
+        Self { bytes: Some(bytes), ..Self::base(id, true) }
+    }
+    /// read-file 结果 (data base64 + 是否 EOF).
+    pub fn read_result(id: Option<String>, data_b64: String, eof: bool) -> Self {
+        Self { data_b64: Some(data_b64), eof: Some(eof), ..Self::base(id, true) }
     }
 }
 

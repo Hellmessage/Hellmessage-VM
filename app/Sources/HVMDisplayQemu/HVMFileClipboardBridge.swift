@@ -147,6 +147,85 @@ public final class HVMFileClipboardBridge: @unchecked Sendable {
         }
     }
 
+    // MARK: - 通用 RPC ops (exec / write-file / read-file)
+    //
+    // 安全铁律 (见 docs/GUEST_HELPER_RPC_DESIGN.md §5b): 方向单向 host→guest, host 永远是发命令
+    // 的权威方; guest 返回的 stdout/stderr/blob 一律是【惰性 bytes】, host 侧只解码 + 落盘 / 展示,
+    // 绝不 eval / 拼成命令 / 喂 Process. 这里三个方法只做 "发 JSON → 解码字段返回", 不在 host 跑任何
+    // 来自 guest 的东西.
+
+    public struct ExecResult: Sendable {
+        public let exitCode: Int       // -1 = 超时被 kill
+        public let stdoutB64: String   // base64, 调用方自行 decode (惰性 bytes, 不在 host 执行)
+        public let stderrB64: String
+    }
+
+    /// 在 guest 的【登录用户会话】跑命令 (helper 进程身份). shell="cmd" 走 cmd /c; 否则 powershell
+    /// -EncodedCommand. script 是【host 给 guest 执行】的, 返回的 stdout/stderr 只当数据看.
+    /// timeoutMs 到则 guest 侧 kill 子进程 (exitCode=-1). timeoutSec 是 host 等响应的 IPC 超时.
+    public func exec(
+        shell: String = "powershell",
+        script: String,
+        timeoutMs: UInt64? = nil,
+        stdinB64: String? = nil,
+        timeoutSec: Int = 120
+    ) async throws -> ExecResult {
+        var payload: [String: Any] = ["op": "exec", "shell": shell, "script": script]
+        if let timeoutMs { payload["timeout_ms"] = timeoutMs }
+        if let stdinB64 { payload["stdin_b64"] = stdinB64 }
+        let resp = try await sendRequest(payload: payload, timeoutSec: timeoutSec)
+        guard resp.ok else {
+            throw BridgeError.remoteFailure(code: resp.code ?? "?", message: resp.message ?? "?")
+        }
+        return ExecResult(
+            exitCode: resp.exitCode ?? -1,
+            stdoutB64: resp.stdoutB64 ?? "",
+            stderrB64: resp.stderrB64 ?? ""
+        )
+    }
+
+    /// host→guest 写文件 (分块续写). offset=0 截断创建 + 按需建父目录; offset>0 在偏移续写.
+    /// dataB64 是本块数据的 base64. isFinal 标记末块 (当前 helper 仅作语义标记). 返回本次写入字节数.
+    /// 路径走 Rust 原生宽字符 API, 无 qemu-ga 的 ANSI mojibake — 中文路径可靠.
+    @discardableResult
+    public func writeFile(
+        path: String,
+        dataB64: String,
+        offset: UInt64 = 0,
+        isFinal: Bool = true,
+        timeoutSec: Int = 120
+    ) async throws -> UInt64 {
+        let resp = try await sendRequest(
+            payload: [
+                "op": "write-file", "path": path, "data_b64": dataB64,
+                "offset": offset, "final": isFinal,
+            ] as [String: Any],
+            timeoutSec: timeoutSec
+        )
+        guard resp.ok else {
+            throw BridgeError.remoteFailure(code: resp.code ?? "?", message: resp.message ?? "?")
+        }
+        return resp.bytes ?? 0
+    }
+
+    /// guest→host 读文件 (分块). 从 offset 读至多 len 字节 (helper 内部夹到帧上限). 返回 (base64, eof).
+    /// 返回的 dataB64 是【惰性 bytes】, host 侧只 decode 落盘, 不执行.
+    public func readFile(
+        path: String,
+        offset: UInt64 = 0,
+        len: UInt64 = 1 << 20,
+        timeoutSec: Int = 120
+    ) async throws -> (dataB64: String, eof: Bool) {
+        let resp = try await sendRequest(
+            payload: ["op": "read-file", "path": path, "offset": offset, "len": len] as [String: Any],
+            timeoutSec: timeoutSec
+        )
+        guard resp.ok else {
+            throw BridgeError.remoteFailure(code: resp.code ?? "?", message: resp.message ?? "?")
+        }
+        return (resp.dataB64 ?? "", resp.eof ?? true)
+    }
+
     // MARK: - publishFiles (UTM-style paste-where-you-paste 主入口)
 
     /// 单次 publish 结果.
@@ -402,6 +481,22 @@ public final class HVMFileClipboardBridge: @unchecked Sendable {
         let version: String?
         let code: String?
         let message: String?
+        // RPC 扩展 (exec / write-file / read-file). helper 侧 snake_case, 见 protocol.rs.
+        let exitCode: Int?      // exec: 进程退出码 (超时 = -1)
+        let stdoutB64: String?  // exec: stdout base64
+        let stderrB64: String?  // exec: stderr base64
+        let dataB64: String?    // read-file: 读到的 blob base64
+        let bytes: UInt64?      // write-file: 本次写入字节数
+        let eof: Bool?          // read-file: 是否已到文件尾
+
+        enum CodingKeys: String, CodingKey {
+            case id, ok, version, code, message
+            case exitCode = "exit_code"
+            case stdoutB64 = "stdout_b64"
+            case stderrB64 = "stderr_b64"
+            case dataB64 = "data_b64"
+            case bytes, eof
+        }
     }
 
     // MARK: - 内部: connect / read loop / 重连

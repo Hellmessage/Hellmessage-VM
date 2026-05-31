@@ -26,6 +26,9 @@ SWIFT_DEFINES :=
 # 不再有 third_party/qemu/ 中间 vendor 层
 QEMU_STAGE    := third_party/qemu-stage
 QEMU_BIN      := $(QEMU_STAGE)/bin/qemu-system-aarch64
+EDK2_BIN := third_party/edk2-stage/edk2-aarch64-code.fd
+# Windows guest helper EXE (由 make guest-helper / build.sh 生成, 仓库 ignore)
+HELPER_BIN    := patches/guest/helper-win/dist/aarch64/hvm-guest-helper.exe
 
 # SwiftPM 产物路径 (CONFIGURATION 决定 release / debug 子目录).
 # 让 bundle stamp 依赖三个 binary mtime —— SwiftPM no-op 时 mtime 不变, 整个 bundle 跳过.
@@ -36,7 +39,7 @@ HVM_CLI_BIN     := $(SWIFT_BUILD_DIR)/hvm-cli
 HVM_DBG_BIN     := $(SWIFT_BUILD_DIR)/hvm-dbg
 BUNDLE_STAMP    := $(BUILD_DIR)/.bundle-stamp
 
-.PHONY: all build bundle compile dev verify clean help icon register-types qemu qemu-clean edk2 edk2-clean build-all xed xcode-gen open-xcode install uninstall run-app open dev-open
+.PHONY: all build bundle compile dev verify clean help icon register-types qemu qemu-clean edk2 edk2-clean guest-helper guest-helper-clean build-all xed xcode-gen open-xcode install uninstall run-app open dev-open
 
 # 默认: release 模式 + 完整 .app 签名
 all: build
@@ -65,7 +68,8 @@ help:
 	@echo "  make edk2-clean — 清除 third_party/edk2-src/, third_party/edk2-stage/"
 	@echo "  make qemu       — 装 brew 依赖 + 拉源码 + 编译 QEMU (10-30 分钟; 仅打包者跑)"
 	@echo "  make qemu-clean — 清除 third_party/qemu-src/, third_party/qemu-stage/"
-	@echo "  make build-all  — make edk2 + make qemu + make build (发布完整流程)"
+	@echo "  make guest-helper — 编 Windows guest helper 成无 DLL 单 exe (缺 llvm-mingw 自动下载; 仅打包者跑)"
+	@echo "  make build-all  — make edk2 + qemu + guest-helper + build (发布完整流程)"
 
 # 1. SwiftPM 编译全部 executable
 # $(SWIFT_DEFINES) 现为空 (GUI guards 已去, 不再需要条件编译 flag); 保留变量占位以防未来需要
@@ -137,8 +141,18 @@ qemu-clean:
 	rm -rf third_party/qemu-src third_party/qemu-stage
 	@echo "✔ 已清除 third_party/qemu-src/, third_party/qemu-stage/"
 
-# 完整发布: 确保 EDK2 + QEMU 已就绪 (不存在则触发 make edk2 + make qemu) + 组装 .app 嵌入 QEMU
-EDK2_BIN := third_party/edk2-stage/edk2-aarch64-code.fd
+# Windows guest helper EXE 构建 (仅打包者跑; 详见 patches/guest/helper-win/build.sh)
+# 出【无 DLL 单 exe】到 dist/aarch64/; 缺 llvm-mingw 自动下载锁定版本到 third_party/llvm-mingw/.
+# 产物随 bundle.sh 入 .app/Contents/Resources/GuestHelper/. 改 helper Rust 源后跑此 + make install.
+guest-helper:
+	@bash patches/guest/helper-win/build.sh
+
+# 仅清 helper 构建产物 (不删 llvm-mingw 工具链, 重编快)
+guest-helper-clean:
+	rm -rf patches/guest/helper-win/target
+	@echo "✔ 已清除 patches/guest/helper-win/target/"
+
+# 完整发布: 确保 EDK2 + QEMU + guest helper 已就绪 (缺则触发 make edk2 / qemu / guest-helper) + 组装 .app
 build-all:
 	@if [ ! -f "$(EDK2_BIN)" ]; then \
 		echo "ℹ EDK2 产物不存在 ($(EDK2_BIN)), 先跑 make edk2"; \
@@ -147,6 +161,10 @@ build-all:
 	@if [ ! -x "$(QEMU_BIN)" ]; then \
 		echo "ℹ QEMU 产物不存在 ($(QEMU_BIN)), 先跑 make qemu"; \
 		$(MAKE) qemu; \
+	fi
+	@if [ ! -f "$(HELPER_BIN)" ]; then \
+		echo "ℹ guest helper 产物不存在 ($(HELPER_BIN)), 先跑 make guest-helper"; \
+		$(MAKE) guest-helper; \
 	fi
 	@$(MAKE) build
 

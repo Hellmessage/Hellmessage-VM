@@ -111,6 +111,10 @@ public enum IPCOp: String, Sendable {
     /// 列 guest 内目录 (GUI "从 VM 取文件" 浏览器 + hvm-dbg dir ls). args: path, timeoutSec? (默认 30).
     /// 走 qga guest-exec PowerShell (Win) / find (Linux). entries 排序: 目录在前, 名字字母序.
     case dbgListDir      = "dbg.dir.list"
+    /// 通过 HVM guest helper RPC 在 guest【登录用户会话】跑命令 (vs dbg.exec.guest 走 QGA = SYSTEM 会话).
+    /// args: shell (cmd|powershell), script, timeoutMs? (guest 侧 kill 超时). 用 IPCDbgExecPayload 返回.
+    /// 区别意义: 诊断只在 user session 可见的状态 (剪贴板 / window station / 用户环境).
+    case dbgHelperExec   = "dbg.helper.exec"
     /// host (GUI) 通知 VMHost 改 guest 分辨率, args.width/height. VMHost 持久持有 vdagent socket
     /// (single-client, 必须唯一持有), 通过 VDAgentMonitorsConfig 转给 guest spice-vdagent.
     case displaySetMonitors = "display.setMonitors"
