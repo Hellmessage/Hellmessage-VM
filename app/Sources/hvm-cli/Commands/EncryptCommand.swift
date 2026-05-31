@@ -5,6 +5,7 @@
 import ArgumentParser
 import Foundation
 import HVMBundle
+import HVMControl
 import HVMCore
 import HVMEncryption
 import HVMQemu
@@ -94,6 +95,8 @@ struct EncryptCommand: AsyncParsableCommand {
                     print("  \(msg)")
                 }
             }
+            // 动磁盘前 reap 残留孤儿 qemu/swtpm (占着 qcow2 锁会让 qemu-img 拿不到锁)
+            VMControl.reapBundleOrphans(bundleURL: bundleURL)
             let result = try EncryptVMOperation.encrypt(
                 bundleURL: bundleURL,
                 password: password,

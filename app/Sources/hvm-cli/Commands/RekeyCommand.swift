@@ -6,6 +6,7 @@
 import ArgumentParser
 import Foundation
 import HVMBundle
+import HVMControl
 import HVMCore
 import HVMEncryption
 import HVMQemu
@@ -64,6 +65,8 @@ struct RekeyCommand: AsyncParsableCommand {
             let progressLog: (String) -> Void = { msg in
                 if self.format == .human { print("  \(msg)") }
             }
+            // 动磁盘前 reap 残留孤儿 qemu/swtpm (占着 qcow2 锁会让 qemu-img 拿不到锁)
+            VMControl.reapBundleOrphans(bundleURL: bundleURL)
             let result = try RekeyVMOperation.rekey(
                 bundleURL: bundleURL, oldPassword: oldPw, newPassword: newPw,
                 qemuImg: qemuImg, progressLog: progressLog
