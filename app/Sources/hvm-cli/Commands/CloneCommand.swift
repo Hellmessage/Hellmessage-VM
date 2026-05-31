@@ -6,6 +6,7 @@
 import ArgumentParser
 import Foundation
 import HVMBundle
+import HVMControl
 import HVMCore
 import HVMEncryption
 import HVMStorage
@@ -67,14 +68,13 @@ struct CloneCommand: AsyncParsableCommand {
 
             let targetParent: URL? = targetDir.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
 
-            let opts = CloneManager.Options(
+            let result = try VMControl.clone(.init(
+                sourceBundle: sourceBundle,
                 newDisplayName: name,
                 targetParentDir: targetParent,
                 keepMACAddresses: keepMac,
                 password: password
-            )
-
-            let result = try CloneManager.clone(sourceBundle: sourceBundle, options: opts)
+            ))
 
             switch format {
             case .human:

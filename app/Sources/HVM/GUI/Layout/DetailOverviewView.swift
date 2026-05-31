@@ -368,6 +368,21 @@ struct DetailOverviewView: View {
                     store.lock(vm.id)
                 }
             }
+            // 克隆 (仅 stopped; 加密源在 dialog 内收密码). 动作读 store.selected 防 stale.
+            if vm.runState == .stopped {
+                HVMUI.Button("克隆", variant: .secondary, icon: "doc.on.doc",
+                             probeID: "detail.button.clone") {
+                    if let cur = store.selected { presentClone(cur) }
+                }
+            }
+        }
+    }
+
+    /// present 克隆 dialog (读 store.selected 防 stale; store 显式传, dialog overlay 拿不到环境).
+    private func presentClone(_ vm: VMSummary) {
+        let s = store
+        dialog.present { handle in
+            CloneVMDialog(vm: vm, handle: handle, store: s)
         }
     }
 

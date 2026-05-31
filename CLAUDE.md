@@ -216,6 +216,18 @@ QEMU 已满足 Linux/Windows/加密)。下文若仍有 VZ / macOS guest /
 - **ISO NSOpenPanel 测试钩子**: panel 无法被 hvm-dbg gui 驱动, probe 模式 (`HVM_GUI_PROBE`) 下若设 `HVM_TEST_ISO` env 则 `选择 ISO` 直接用它跳过 panel (真人用户无此 env, 不受影响).
 - probeID 命名: `sidebar.button.create` / `dialog.create.{close,cancel,prev,next,complete,step.<i>}` / step1 `dialog.create.{field.name,select.os,select.network,select.bridgedIface}` / step2 `dialog.create.{field.cpu,field.memory,field.disk,iso.select,iso.clear,win.{secureBoot,tpm,bypassChecks,spiceTools,downloadTools}}` / step3 `dialog.create.encrypt.{toggle,password,confirm}`
 
+### 新 GUI 克隆 (业务页 #5)
+
+整 VM 克隆接进新 GUI. 入口详情页操作按钮组 [克隆] (`detail.button.clone`, 仅 `runState==.stopped` 显), dialog `CloneVMDialog` (`app/Sources/HVM/GUI/Dialogs/`).
+
+- **克隆收口走 `VMControl.clone(CloneSpec)` (`HVMControl/VMControl+Clone.swift`), 禁止 store/dialog 直调 `CloneManager`**: CLI `CloneCommand` 与 GUI `NewGUIStore.clone` 共用门面 (CLI 已迁移, 不再直拼 `CloneManager.Options`). 底层 `HVMStorage/CloneManager` (APFS clonefile COW + 重生身份). 新增克隆能力先加到 `VMControl.clone` 两端同步.
+- **`NewGUIStore.clone(_:newName:keepMAC:password:)` async**: 后台 `Task.detached` 跑 (clonefile 秒级; 加密源多 unlock+重加密 config 一步). 成功 `refresh()` + `selectedID = 克隆体 newID`; 失败返 error 文本走 dialog 内联 (不设全局 `lastError`, 同创建/加密事务). `defaultCloneName(for:)` 给去重默认名 "<源> 副本 [N]".
+- **`CloneVMDialog` 三态 `form → running → done`** (仿 `NewGUIEncryptionDialog`): form 收新名 + keepMAC toggle + (加密源才显) 源密码; running 态 `X 不显` (事务进行中不可关, X-only-close); done 显 ✔. 失败回 form + 内联红字.
+- **加密源在 dialog 内收密码** (不用 GUI 解锁缓存 — `CloneManager` 自 unlock 源, 与 CLI 一致); 明文源不显密码字段. confirm 密码空时 disabled (跳过 probe = gating 可被 hvm-dbg gui 验证).
+- **Windows 源**: tpm 字节复制 → 与源同 BitLocker, dialog 提示双开会触发 recovery (当前行为; 反指纹 TPM 重置见 `docs/CLONE_FINGERPRINT_DESIGN.md` 后续).
+- **入口动作读 `store.selected` 防 stale probe 闭包**, store 显式传 dialog (overlay 拿不到环境), 同加密事务.
+- probeID 命名: `detail.button.clone` / `dialog.clone.{close,cancel,confirm,done,field.name,field.password,toggle.keepMac}`
+
 ## Tray 归属约束 **必须遵守** (单一 tray, 见 `docs/TRAY_OWNERSHIP_DESIGN.md`)
 
 **任意时刻最多一个菜单栏 tray** (方案 A — VMHost 选主)。**禁止**每个 VMHost 各显一个 status item (历史死代码 `--gui-embedded` 已废)。

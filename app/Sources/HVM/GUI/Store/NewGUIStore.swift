@@ -447,6 +447,35 @@ public final class NewGUIStore {
         } catch { return (false, encErrorMessage(error)) }
     }
 
+    // MARK: - 克隆 (整 VM clone, 见 VMControl+Clone)
+
+    /// 克隆 VM (APFS clonefile COW + 重生身份). 加密源必传 password (dialog 收, 不用解锁缓存,
+    /// CloneManager 自 unlock 源). 后台 detached (clonefile 秒级, 加密源多一步 unlock+重加密 config).
+    /// 成功 refresh + 选中克隆体; 失败返 error 文本 (dialog 内联显, 不设全局 lastError, 同创建/加密事务).
+    public func clone(_ s: VMSummary, newName: String, keepMAC: Bool,
+                      password: String?) async -> (ok: Bool, error: String?) {
+        let url = s.bundleURL
+        do {
+            let result = try await Task.detached(priority: .userInitiated) {
+                try VMControl.clone(.init(sourceBundle: url, newDisplayName: newName,
+                                          keepMACAddresses: keepMAC, password: password))
+            }.value
+            refresh()
+            selectedID = result.newID
+            return (true, nil)
+        } catch { return (false, encErrorMessage(error)) }
+    }
+
+    /// 给克隆体算一个不与现有 VM 撞的默认名: "<源> 副本" / "<源> 副本 2" / ...
+    public func defaultCloneName(for s: VMSummary) -> String {
+        let existing = Set(vms.map { $0.displayName })
+        let base = "\(s.displayName) 副本"
+        if !existing.contains(base) { return base }
+        var n = 2
+        while existing.contains("\(base) \(n)") { n += 1 }
+        return "\(base) \(n)"
+    }
+
     /// 加密事务错误 → 文本 (HVMError.userFacing message + hint). dialog 内联显, 不设全局 lastError.
     private func encErrorMessage(_ error: Error) -> String {
         if let e = error as? HVMError {
