@@ -1,10 +1,14 @@
 // HVMStorage/SnapshotManager.swift
-// 基于 APFS clonefile(2) 的 VM 整体快照: disks/* + config.yaml(.enc) + nvram/ + tpm/ + meta.json.
-// clonefile 是 COW, 几乎零空间 + 瞬间完成. 布局: <bundle>/snapshots/<name>/{disks/,nvram/,tpm/,config.*,meta.json}.
+// 基于 APFS clonefile(2) 的 VM 整体快照: disks/* + config.yaml(.enc) + nvram/ + tpm/ + encryption.json + meta.json.
+// clonefile 是 COW, 几乎零空间 + 瞬间完成. 布局: <bundle>/snapshots/<name>/{disks/,nvram/,tpm/,config.*,encryption.json?,meta.json}.
 // nvram/ (EFI vars/BootOrder) + tpm/ (swtpm 状态) 一并快照, 否则 Windows 恢复后 EFI/BitLocker 失配.
 //
 // 加密 VM: clonefile 字节级 COW 复制 LUKS qcow2 / config.yaml.enc / nvram(.luks) / tpm 不解密
 // (snapshot 不需密码); master KEK 不变, restore 后用源密码可解 (rekey 后 restore 须用旧密码).
+// **routing JSON (meta/encryption.json) 必须随快照走** (含 kdf_salt/iter — 解锁/发现的唯一来源):
+// 不带它, 若用户解密 VM (删 routing) 后再恢复此加密态快照, bundle 会变成 "有 config.yaml.enc /
+// LUKS disks 但无 routing" → discovery 明文/加密两条路都不认 → VM 从列表消失 + salt 丢失永久解不开
+// (历史事故 2026-05-31: `个人` VM). create 捕获 + restore 还原 routing, 让快照自洽于自身加密 epoch.
 //
 // 限制: VM 必须 stopped (running 时 disk 在写则不一致); clonefile 要求 src/dst 同 APFS volume
 // (bundle 内满足); restore 非原子 (中途 crash 可能半旧半新, 但 snapshot 仍完整可重 restore).
@@ -13,6 +17,7 @@ import Foundation
 import Darwin
 import HVMBundle
 import HVMCore
+import HVMEncryption
 
 /// clonefile(2) 直接绑定. flags=0 = 默认 owner copy.
 @_silgen_name("clonefile")
@@ -58,6 +63,13 @@ public enum SnapshotManager {
         let cfgDst = snapDir.appendingPathComponent(cfgName)
         try FileManager.default.copyItem(at: cfgSrc, to: cfgDst)
 
+        // 加密 VM 的 routing JSON (meta/encryption.json) — 含 kdf_salt/iter, 解锁/发现唯一来源.
+        // 与 config.yaml.enc 同 epoch, 必须随快照走 (见文件头注释 `个人` 事故). 明文 VM 无此文件 → 跳过.
+        let routingSrc = RoutingJSON.locationForQemuBundle(bundleURL)
+        if FileManager.default.fileExists(atPath: routingSrc.path) {
+            try FileManager.default.copyItem(at: routingSrc, to: snapDir.appendingPathComponent("encryption.json"))
+        }
+
         // nvram/ (EFI vars/BootOrder) + tpm/ (swtpm 状态) 整目录 clone — 不带会让 Windows
         // 恢复后 EFI 启动项错乱 / BitLocker(TPM 封印) 失效. clonefile 支持目录递归 COW.
         try cloneDirIfExists(BundleLayout.nvramDir(bundleURL),
@@ -94,7 +106,26 @@ public enum SnapshotManager {
         guard FileManager.default.fileExists(atPath: snapDir.path) else {
             throw HVMError.storage(.ioError(errno: ENOENT, path: snapDir.path))
         }
-        Self.log.warning("snapshot restore: \(bundleURL.lastPathComponent, privacy: .public) name=\(name, privacy: .public) (覆盖当前 disks + config)")
+
+        // 0. 加密一致性 pre-flight (改任何文件前): 加密态快照 (有 config.yaml.enc) 必须能在恢复后
+        //    让 bundle 拿到匹配的 routing JSON, 否则会孤立 VM (从列表消失 + salt 丢失永久解不开).
+        //    - 快照自带 routing (本次修复后创建) → 恒安全 (restore 时还原).
+        //    - 快照无 routing (修复前的老加密快照): 仅当 bundle 当前仍有 routing (未解密过) 才放行
+        //      (沿用 bundle 现有 routing, 假设其 epoch 与快照 disks 一致 — rekey 过则盘解不开, 见 warning);
+        //      bundle 也无 routing (已解密) → 恢复必孤立 → 拒绝, 让用户知情.
+        let fm0 = FileManager.default
+        let snapHasEnc = fm0.fileExists(atPath: snapDir.appendingPathComponent("config.yaml.enc").path)
+        let snapHasRouting = fm0.fileExists(atPath: snapDir.appendingPathComponent("encryption.json").path)
+        let bundleHasRouting = fm0.fileExists(atPath: RoutingJSON.locationForQemuBundle(bundleURL).path)
+        if snapHasEnc && !snapHasRouting && !bundleHasRouting {
+            throw HVMError.storage(.snapshotRestoreUnsafe(
+                reason: "快照 '\(name)' 创建于加密元数据捕获修复之前 (无 encryption.json), 且当前 VM 已无 routing (可能已解密); 恢复会让加密磁盘失去 kdf_salt → VM 从列表消失且永久无法解锁"))
+        }
+        if snapHasEnc && !snapHasRouting && bundleHasRouting {
+            Self.log.warning("snapshot restore: 老加密快照无 routing, 沿用 bundle 现有 routing; 若此快照之后做过 rekey, 恢复的磁盘将用旧 salt 解不开")
+        }
+
+        Self.log.warning("snapshot restore: \(bundleURL.lastPathComponent, privacy: .public) name=\(name, privacy: .public) (覆盖当前 disks + config + routing)")
         let snapDisks = snapDir.appendingPathComponent(BundleLayout.disksDirName)
         let bundleDisks = BundleLayout.disksDir(bundleURL)
 
@@ -130,6 +161,12 @@ public enum SnapshotManager {
         // 4. config atomic replace. snapshot 内可能是 config.yaml 或 config.yaml.enc.
         // bundle 内同样两种之一 (互斥). 先把 bundle 现有的两种都清, 再 mv snapshot 的过来.
         try restoreConfig(snapDir: snapDir, bundleURL: bundleURL)
+
+        // 4b. routing JSON (meta/encryption.json) 与 config 形态对称还原:
+        //   - 快照自带 routing → 用它 (权威, 与快照 disks 同 epoch, salt 匹配).
+        //   - 快照无 routing 且是明文快照 → 清掉 bundle routing (明文 VM 不该有 routing).
+        //   - 快照无 routing 但是加密快照 (pre-fix 老快照) → 保留 bundle 现有 routing (pre-flight 已确保存在).
+        try restoreRouting(snapDir: snapDir, bundleURL: bundleURL, snapHasEnc: snapHasEnc)
 
         // 5. nvram/ + tpm/ 还原 (老快照无这两目录 → 跳过, 保留当前; 向后兼容).
         try restoreDirIfPresent(snapDir.appendingPathComponent(BundleLayout.nvramDirName),
@@ -201,6 +238,28 @@ public enum SnapshotManager {
 
         // mv tmp → bundle/<cfgName>
         try fm.moveItem(at: cfgTmp, to: bundleURL.appendingPathComponent(cfgName))
+    }
+
+    /// snapshot restore 期 routing JSON (meta/encryption.json) 还原. 与 config 形态对称:
+    /// 加密 VM 的 routing 含 kdf_salt — 解锁/发现唯一来源, 必须跟 config.yaml.enc 同进同出.
+    private static func restoreRouting(snapDir: URL, bundleURL: URL, snapHasEnc: Bool) throws {
+        let fm = FileManager.default
+        let snapRouting = snapDir.appendingPathComponent("encryption.json")
+        let bundleRouting = RoutingJSON.locationForQemuBundle(bundleURL)
+
+        if fm.fileExists(atPath: snapRouting.path) {
+            // 快照自带 routing → 权威还原 (atomic via tmp). 先建 meta/ 目录.
+            try fm.createDirectory(at: bundleRouting.deletingLastPathComponent(),
+                                   withIntermediateDirectories: true)
+            let tmp = bundleURL.appendingPathComponent(".routing-restore-\(UUID().uuidString.prefix(8)).tmp")
+            try fm.copyItem(at: snapRouting, to: tmp)
+            try? fm.removeItem(at: bundleRouting)
+            try fm.moveItem(at: tmp, to: bundleRouting)
+        } else if !snapHasEnc {
+            // 明文快照无 routing → bundle 也不该有 (清掉残留, 保持明文一致性).
+            try? fm.removeItem(at: bundleRouting)
+        }
+        // else: 加密快照但无 routing (pre-fix 老快照) → 保留 bundle 现有 routing (pre-flight 已放行).
     }
 
     /// 磁盘文件名识别: .img (raw) 或 .qcow2 (含 LUKS 加密).

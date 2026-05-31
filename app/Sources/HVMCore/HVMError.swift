@@ -45,6 +45,9 @@ public enum StorageError: Error, Sendable {
     case importInvalid(reason: String, path: String)
     /// CloneManager: 源与目标在不同 APFS 卷, clonefile(2) 跨卷会被内核拒 (EXDEV); 提前 statfs 探测到差异时抛
     case crossVolumeNotAllowed(source: String, target: String)
+    /// SnapshotManager: 恢复一个加密态快照会让 VM 失去 routing (kdf_salt) → 列表消失 + 永久解不开;
+    /// pre-flight 探测到 (老快照无 encryption.json 且当前 bundle 也无 routing) 时拒绝, 防数据孤立.
+    case snapshotRestoreUnsafe(reason: String)
 }
 
 // MARK: - Backend
@@ -255,6 +258,11 @@ public extension StorageError {
                          message: "克隆要求源与目标在同一卷",
                          details: ["source": src, "target": tgt],
                          hint: "APFS clonefile 不能跨卷; 把目标位置选在与源同卷的目录")
+        case .snapshotRestoreUnsafe(let reason):
+            return .init(code: "storage.snapshot_restore_unsafe",
+                         message: "恢复此快照会使加密 VM 数据孤立, 已拒绝",
+                         details: ["reason": reason],
+                         hint: "删除此老快照重新创建; 或保持 VM 加密态 (未解密) 再恢复")
         }
     }
 }
