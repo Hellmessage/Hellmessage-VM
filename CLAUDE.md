@@ -112,6 +112,10 @@ QEMU 已满足 Linux/Windows/加密)。下文若仍有 VZ / macOS guest /
   - **GUI 反馈**: 成功 → `UNUserNotificationCenter` 原生通知 (首次 requestAuthorization, 拒绝 → silently 不通知); 失败 / 部分跳过 → `ErrorDialog` 列原因. **禁止** NSAlert
   - **host → guest 文件传输统一走 vdagent file_xfer (后续方向)** — 当前 `FileTransferDialog` 还走 QGA (1-10 MB/s), 后续应迁到 vdagent (~50 MB/s) 统一通路. 暂保留两条通路, v1.1 决策合并
   - **测试**: `hvm-dbg paste-files <vm> --file ...` 模拟整条通路, 不依赖 framebuffer view 的 NSPasteboard 拦截 (server 端走相同 `clipboard.paste-files` IPC, 但绕过 Cmd+V 触发)
+- **HVM 自家 helper 文件剪贴板** (`HVMFileClipboardBridge` + `hvm-guest-helper`, UTM 风格 paste-where-you-paste, **跟上面 vdagent→~/Downloads 通路并存**):
+  - host Finder Cmd+C 文件 → `PasteboardBridge.onFileURLs` → `publishFiles` → QGA push 文件到 `C:\ProgramData\HVM\clipboard\<name>` → JSON `set-clipboard` 让 guest `hvm-guest-helper.exe` 设 Win CF_HDROP → 用户在 guest 内 Ctrl+V 粘到当前焦点位置
+  - **非 ASCII (中文) 文件名硬约束**: qemu-ga 的 `guest-file-open` 在 Windows 走 **ANSI 代码页**, 非 ASCII 路径里的字符被转成 `?` (mojibake) → 文件落错名, 而 CF_HDROP 用原名 → 路径不匹配 → 粘不出来. **修复 (必须保留)**: 非 ASCII 名先 QGA push 到 ASCII 临时名 (`hvmstage-<uuid8>.<ext>`), 再用 PowerShell `-EncodedCommand` (UTF-16LE base64, Unicode 正确) `Move-Item` 改回原名; CF_HDROP 用原名. 见 `HVMFileClipboardBridge.renameGuestFileUnicode`. **任何走 QGA 传非 ASCII 路径的新代码都要照此绕开** (QGA 路径只能可靠传 ASCII)
+  - **验证注意**: QGA stdout 捕获也是 ANSI 代码页, `cmd dir` / 打印文件名 看中文恒显 `????` (纯显示问题, 非真乱码); 判断真实文件名只能用 `Test-Path -LiteralPath '<中文名>'` 布尔结果 (经 `powershell -EncodedCommand` UTF-16 传入), 不能靠打印
 - **键盘捕获 / 释放快捷键** (UTM 风格):
   - **统一 `Cmd+Opt`** 切换捕获. 老的 `Cmd+Ctrl` 因跟 macOS 系统快捷键 (Mission Control / 截图 / 第三方 app) 严重冲突已废弃, **禁止**再用
   - **QEMU 后端 captured 模式**: `CGSSetGlobalHotKeyOperatingMode(.disable)` (Skylight 私有 API, `HVMDisplayQemu/CGSPrivate.swift`) 禁用 macOS 全局热键, cmd+tab / cmd+space 也送 guest. 右上角 `⌘⌥ 退出捕获` overlay 显式提示

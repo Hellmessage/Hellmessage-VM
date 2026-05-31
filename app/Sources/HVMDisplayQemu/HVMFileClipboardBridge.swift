@@ -237,17 +237,44 @@ public final class HVMFileClipboardBridge: @unchecked Sendable {
             }
 
             let sanitized = Self.sanitize(filename: url.lastPathComponent)
-            let guestPath = #"\#(Self.guestStagingDir)\\#(sanitized)"#
+            let finalGuestPath = #"\#(Self.guestStagingDir)\\#(sanitized)"#
+            // qemu-ga 在 Windows 用 ANSI 代码页处理 guest-file-open 路径 → 非 ASCII (中文) 文件名
+            // 里的字符被转成 '?', 文件落到错名; 而 setClipboard 用的是原名 → CF_HDROP 指向不存在
+            // 的文件 → 粘不出来. 修复: 非 ASCII 名先 push 到 ASCII 临时名 (qga 安全), 再用 PowerShell
+            // -EncodedCommand (UTF-16, Unicode 正确) 改名回原名; CF_HDROP 用原名.
+            let needsUnicodeRename = !sanitized.allSatisfy { $0.isASCII }
+            let pushPath: String
+            if needsUnicodeRename {
+                let ext = url.pathExtension
+                let asciiExt = ext.allSatisfy { $0.isASCII } ? ext : ""
+                let stem = "hvmstage-\(UUID().uuidString.prefix(8))"
+                let tempName = asciiExt.isEmpty ? stem : "\(stem).\(asciiExt)"
+                pushPath = #"\#(Self.guestStagingDir)\\#(tempName)"#
+            } else {
+                pushPath = finalGuestPath
+            }
             do {
                 _ = try await QgaFile.push(
                     socketPath: qgaSocketPath,
                     srcLocal: url,
-                    dstRemote: guestPath,
+                    dstRemote: pushPath,
                     timeoutSec: Self.publishTimeoutSec,
                     progress: nil
                 )
-                success.append(guestPath)
-                fputs("HVMHost(qemu): file-clipboard push ok: \(url.lastPathComponent) → \(guestPath)\n", stderr)
+                var clipboardPath = pushPath
+                if needsUnicodeRename {
+                    do {
+                        try await renameGuestFileUnicode(qgaSocketPath: qgaSocketPath,
+                                                          from: pushPath, to: finalGuestPath)
+                        clipboardPath = finalGuestPath
+                    } catch {
+                        // 改名失败: 退回用 ASCII 临时名 (粘得出来, 名字是 hvmstage-xxxx, 比指向
+                        // 不存在的原名/完全粘不出来好). 仅日志, 不算失败.
+                        fputs("HVMHost(qemu): file-clipboard unicode rename 失败, 退回 ASCII 名: \(error)\n", stderr)
+                    }
+                }
+                success.append(clipboardPath)
+                fputs("HVMHost(qemu): file-clipboard push ok: \(url.lastPathComponent) → \(clipboardPath)\n", stderr)
             } catch {
                 fail.append(Fail(path: path, reason: "QGA push 失败: \(error)"))
             }
@@ -274,6 +301,31 @@ public final class HVMFileClipboardBridge: @unchecked Sendable {
             successful: success, skipped: skip, failed: fail,
             clipboardSet: clipboardSet
         )
+    }
+
+    /// 用 PowerShell -EncodedCommand (UTF-16LE) Unicode-safe 改名 guest 文件.
+    /// qemu-ga guest-file-open 走 ANSI 代码页 (非 ASCII 名 mojibake), 故 push 用 ASCII 临时名后
+    /// 用此法改回原名. EncodedCommand 是 UTF-16, PowerShell 内部全 Unicode, 中文名正确落地.
+    private func renameGuestFileUnicode(qgaSocketPath: String, from: String, to: String) async throws {
+        func psQuote(_ s: String) -> String {
+            "'" + s.replacingOccurrences(of: "'", with: "''") + "'"
+        }
+        let cmd = "Move-Item -LiteralPath \(psQuote(from)) -Destination \(psQuote(to)) -Force"
+        guard let enc = cmd.data(using: .utf16LittleEndian)?.base64EncodedString() else {
+            throw BridgeError.decodeFailed("encode rename command")
+        }
+        let result = try await QgaExec.run(
+            socketPath: qgaSocketPath,
+            path: "powershell.exe",
+            args: ["-NoProfile", "-NonInteractive", "-EncodedCommand", enc],
+            timeoutSec: 60
+        )
+        if result.exitCode != 0 {
+            let err = Data(base64Encoded: result.stderrBase64)
+                .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            throw BridgeError.remoteFailure(code: "unicode_rename_failed",
+                                            message: "exit=\(result.exitCode): \(err.prefix(200))")
+        }
     }
 
     // MARK: - staging dir 管理 (QGA exec)
