@@ -79,6 +79,9 @@ struct DetailOverviewView: View {
                     QemuFramebufferView(vm: vm, store: store,
                                         dialogPresenting: dialog.isPresenting)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        // 切 VM 必须重建 NSView: makeNSView 只跑一次 (内含 ensureQemuFanout + addSubscriber),
+                        // 不绑 id 则切 VM 只走 updateNSView, fbView 仍订阅旧 VM fanout → 画面不切换.
+                        .id(vm.id)
                 } else {
                     configScroll(vm)
                 }
