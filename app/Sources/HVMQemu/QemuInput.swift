@@ -22,7 +22,7 @@ public enum QemuInput {
             throw InputError.unknownKey(k)
         }
         for keys in tokens {
-            try await client.sendKey(keys, holdTimeMs: 50)
+            try await client.sendKey(keys, holdTimeMs: 10)
         }
     }
 
