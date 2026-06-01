@@ -26,6 +26,10 @@ struct DetailOverviewView: View {
     enum RunningTab { case screen, config }
     @State private var runningTab: RunningTab = .screen
 
+    /// running 画面态: NAV (头部 + tab 栏) 是否折叠 — 折叠后 framebuffer 占满, 给画面腾空间.
+    /// 顶部居中的小图标切换; 切 VM / 改 runState 时 reset 回展开.
+    @State private var navCollapsed = false
+
     var body: some View {
         ZStack {
             HVMTheme.color.bgBase
@@ -49,38 +53,50 @@ struct DetailOverviewView: View {
 
     private func detail(_ vm: VMSummary) -> some View {
         let isRunning = vm.runState == .running
-        return VStack(alignment: .leading, spacing: 0) {
-            // 固定头部 (标题 + badges + 启停/删除) — 不随下方卡片滚动
-            headerBlock(vm)
-                .padding(.horizontal, HVMTheme.space.xl)
-                .padding(.top, HVMTheme.space.xl)
-                .padding(.bottom, isRunning ? HVMTheme.space.md : HVMTheme.space.lg)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        // 仅 running 画面态可折叠 NAV; 折叠生效条件 = 画面态 + navCollapsed.
+        let screenMode = isRunning && runningTab == .screen
+        let showNav = !(screenMode && navCollapsed)
+        return ZStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 0) {
+                // 固定头部 (标题 + badges + 启停/删除) — 不随下方卡片滚动
+                if showNav {
+                    headerBlock(vm)
+                        .padding(.horizontal, HVMTheme.space.xl)
+                        .padding(.top, HVMTheme.space.xl)
+                        .padding(.bottom, isRunning ? HVMTheme.space.md : HVMTheme.space.lg)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-            // running: 画面 / 配置 TAB 切换
-            if isRunning {
-                runningTabBar(vm)
-                    .padding(.horizontal, HVMTheme.space.xl)
-                    .padding(.bottom, HVMTheme.space.md)
+                    // running: 画面 / 配置 TAB 切换
+                    if isRunning {
+                        runningTabBar(vm)
+                            .padding(.horizontal, HVMTheme.space.xl)
+                            .padding(.bottom, HVMTheme.space.md)
+                    }
+                }
+
+                // running 画面 tab → framebuffer; 其它 → 配置滚动
+                if screenMode {
+                    QemuFramebufferView(vm: vm, store: store,
+                                        dialogPresenting: dialog.isPresenting)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    configScroll(vm)
+                }
             }
 
-            // running 画面 tab → framebuffer; 其它 → 配置滚动
-            if isRunning && runningTab == .screen {
-                QemuFramebufferView(vm: vm, store: store,
-                                    dialogPresenting: dialog.isPresenting)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                configScroll(vm)
+            // running 画面态: 顶部居中的 NAV 折叠/展开切换图标 (overlay, 折叠后仍可点回)
+            if screenMode {
+                navToggle
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onChange(of: store.selectedID) { _, _ in
-            syncDraftIfNeeded(); runningTab = .screen
+            syncDraftIfNeeded(); runningTab = .screen; navCollapsed = false
             if let cur = store.selected { store.refreshGuestIP(cur) }
         }
         .onChange(of: store.selected?.config?.cpuCount) { _, _ in syncDraftIfNeeded() }
         .onChange(of: store.selected?.runState) { _, _ in
-            runningTab = .screen
+            runningTab = .screen; navCollapsed = false
             if let cur = store.selected { store.refreshGuestIP(cur) }   // 起/停切换时刷 guest IP
         }
         .onAppear {
@@ -98,6 +114,19 @@ struct DetailOverviewView: View {
                          probeID: "detail.tab.config") { runningTab = .config }
             Spacer()
         }
+    }
+
+    /// running 画面态顶部居中的小图标: 切换 NAV (头部 + tab 栏) 折叠/展开.
+    /// 折叠时显示向下箭头 (点击展开), 展开时显示向上箭头 (点击折叠收起腾画面).
+    private var navToggle: some View {
+        HVMUI.Button(icon: navCollapsed ? "chevron.down" : "chevron.up",
+                     variant: .icon, size: .sm,
+                     probeID: "detail.button.navToggle",
+                     probeLabel: navCollapsed ? "展开导航栏" : "折叠导航栏") {
+            navCollapsed.toggle()
+        }
+        .background(HVMTheme.color.bgRaised.opacity(0.85), in: Capsule())
+        .padding(.top, navCollapsed ? HVMTheme.space.xs : HVMTheme.space.sm)
     }
 
     /// 配置滚动区 (stopped 全可编辑 / running 多字段 disabled).
