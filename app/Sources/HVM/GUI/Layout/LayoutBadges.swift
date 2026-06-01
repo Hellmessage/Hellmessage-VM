@@ -39,3 +39,36 @@ extension RunState {
     }
 }
 
+extension NetworkMode {
+    /// 网络模式徽标文案 (NAT / 桥接 / Host / 共享)
+    var badgeLabel: String {
+        switch self {
+        case .user:         return "NAT"
+        case .vmnetShared:  return "共享"
+        case .vmnetHost:    return "Host"
+        case .vmnetBridged: return "桥接"
+        case .none:         return "无网络"
+        }
+    }
+
+    /// 网络模式徽标配色 (桥接=真二层走 accent 强调, NAT/共享/host 走 info, 无网络 neutral)
+    var badgeVariant: HVMUI.Badge.Variant {
+        switch self {
+        case .vmnetBridged: return .accent
+        case .none:         return .neutral
+        default:            return .info
+        }
+    }
+
+    /// 网络模式徽标图标 (SF Symbol)
+    var badgeIcon: String {
+        switch self {
+        case .user:         return "network"
+        case .vmnetShared:  return "person.2.fill"
+        case .vmnetHost:    return "desktopcomputer"
+        case .vmnetBridged: return "point.3.connected.trianglepath.dotted"
+        case .none:         return "network.slash"
+        }
+    }
+}
+

@@ -316,11 +316,26 @@ struct DetailOverviewView: View {
                         HVMUI.Badge("Encrypted", variant: .accent, icon: "lock.fill", size: .sm)
                     }
                     HVMUI.Badge(vm.runState.badgeLabel, variant: vm.runState.badgeVariant, size: .sm)
+                    // 网络模式徽标 (NAT / 桥接 / Host / 共享); 多 NIC 去重展示, 加密未解锁 config=nil 时不显
+                    ForEach(networkModeBadges(vm), id: \.self) { mode in
+                        HVMUI.Badge(mode.badgeLabel, variant: mode.badgeVariant, icon: mode.badgeIcon, size: .sm)
+                    }
                 }
             }
             Spacer()
             actionButtons(vm)
         }
+    }
+
+    /// 头部网络模式徽标取值: 取已启用网卡的模式去重 (保序). 加密未解锁 (config=nil) 返空不显.
+    private func networkModeBadges(_ vm: VMSummary) -> [NetworkMode] {
+        guard let nets = vm.config?.networks else { return [] }
+        var seen: Set<NetworkMode> = []
+        var modes: [NetworkMode] = []
+        for nic in nets where nic.enabled {
+            if seen.insert(nic.mode).inserted { modes.append(nic.mode) }
+        }
+        return modes
     }
 
     private var runningNote: some View {
