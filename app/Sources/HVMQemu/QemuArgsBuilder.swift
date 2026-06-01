@@ -122,6 +122,15 @@ public enum QemuArgsBuilder {
            ProcessInfo.processInfo.environment["HVM_QEMU_WIN11_LOWRAM"] == "1" {
             machineOpts += ",hvm-win11-lowram=on"
         }
+        // spcr=off (仅 Linux 装机期): 去掉 ACPI SPCR 表, 让内核不再把 PL011 串口 (ttyAMA0) 当首选
+        //   console. 否则 debian-installer 的 reopen-console 取 /sys/class/tty/console/active 第一项
+        //   (=最早注册的 ttyAMA0) 把安装器 UI 跑到串口, GUI 画面只剩内核 printk 冻结在 GRUB 那帧.
+        //   去 SPCR 后 Kali GRUB 的 console=tty0 成为唯一 console, d-i 渲染到 ramfb framebuffer (上方
+        //   装机期已挂 ramfb) → 安装界面显示在窗口里. 保留 ACPI (acpi=off 会让 arm64 内核启动挂死).
+        //   装好后 (bootFromDiskOnly=true) 不加: 桌面走 virtio-gpu DRM 自渲染, 且保留串口内核日志.
+        if cfg.guestOS == .linux && !cfg.bootFromDiskOnly {
+            machineOpts += ",spcr=off"
+        }
         args += ["-machine", machineOpts]
         // host: 透传 CPU 特性, HVF 必须用 host
         args += ["-cpu", "host"]
@@ -308,7 +317,13 @@ public enum QemuArgsBuilder {
         }
         // ---- 显示 + 输入 ----
         // QEMU virt 默认无显卡, 必须显式加 GPU 才出 graphical UEFI/OS UI.
-        // Linux: virtio-gpu-pci (内核自带 driver, OS 期 set_scanout 即可 dynamic resize)
+        // Linux 两态 (bootFromDiskOnly 决定):
+        //  - 装机期 (bootFromDiskOnly=false): -device ramfb. Debian/Kali d-i 的精简 initrd 不带
+        //    virtio_gpu DRM 模块, 而 virtio-gpu 的 EFI GOP 非持久 (ExitBootServices 后 efifb 用不了),
+        //    导致 guest 无 /dev/fb0 可用 scanout → 画面停在 GRUB. ramfb 提供持久固件 framebuffer
+        //    (efifb/simpledrm 直接绑, 不依赖驱动), 配合下方 drop-SPCR (让 d-i 不抢串口) 安装器渲染到画面.
+        //  - 装好后 (bootFromDiskOnly=true): virtio-gpu-pci. 装好的内核自带 virtio_gpu driver,
+        //    OS 期 set_scanout 做 dynamic resize.
         // Windows ARM64: 三态由 (bootFromDiskOnly, windowsDriversInstalled) 决定:
         //  - 阶段 1/2 (装机 / 装驱动): -device ramfb 单挂. 没驱动时 OS 只 enumerate "Microsoft Basic
         //    Display" 走 BDD 软件画法, 必须 ramfb 兜.
@@ -321,7 +336,11 @@ public enum QemuArgsBuilder {
                 args += ["-device", "ramfb"]
             }
         } else {
-            args += ["-device", "virtio-gpu-pci"]
+            if cfg.bootFromDiskOnly {
+                args += ["-device", "virtio-gpu-pci"]
+            } else {
+                args += ["-device", "ramfb"]
+            }
         }
         // USB 键盘 + USB tablet (tablet 给绝对坐标鼠标; xhci 已在 ISO 前定义).
         args += ["-device", "usb-kbd,bus=xhci.0"]
