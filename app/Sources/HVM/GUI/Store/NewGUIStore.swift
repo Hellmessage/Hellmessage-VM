@@ -14,6 +14,16 @@ import HVMEncryption
 import HVMStorage
 import HVMIPC
 
+/// guest framebuffer 实时分辨率. Equatable + Sendable 让 @Observable diff 走对; UInt32 直 hop 到 SwiftUI.
+public struct GuestResolution: Equatable, Sendable {
+    public let width: UInt32
+    public let height: UInt32
+    public init(width: UInt32, height: UInt32) {
+        self.width = width
+        self.height = height
+    }
+}
+
 /// 动作失败时冒泡给 MainLayoutView → dialog.alert 的错误载体.
 /// id 每次新建 (即便 message 相同) 让 .onChange 能识别"又出错了一次".
 public struct StoreError: Identifiable, Sendable, Equatable {
@@ -60,6 +70,10 @@ public final class NewGUIStore {
     // MARK: - QEMU 画面 fanout
     /// running VM 的 HDP 显示 fanout. @ObservationIgnored: fanout 进出不驱动 UI 重绘 (画面由 fbView 自渲染).
     @ObservationIgnored private var qemuFanouts: [UUID: QemuFanoutSession] = [:]
+
+    /// VM 当前 guest framebuffer 分辨率 (订阅 fanout SurfaceNew). running + fanout attached 才有值;
+    /// 拆 fanout / VM 停机自动清空. @Observable 驱动 NAV chip 实时更新.
+    public private(set) var displayResolutions: [UUID: GuestResolution] = [:]
 
     // MARK: - 自定义排序 (拖拽重排, 持久化到 UserDefaults; GUI 侧, 加密 VM 也适用)
     @ObservationIgnored private var vmOrder: [UUID] = []
@@ -287,7 +301,7 @@ public final class NewGUIStore {
 
     // MARK: - QEMU 画面 fanout 生命周期
 
-    /// running VM 的显示 fanout: 已有复用, 否则建 + 设 onDisconnected hook + start.
+    /// running VM 的显示 fanout: 已有复用, 否则建 + 设 onDisconnected/onSurfaceChange hook + start.
     /// QemuFramebufferView.makeNSView 调它拿 fanout 再 addSubscriber.
     @discardableResult
     func ensureQemuFanout(_ s: VMSummary) -> QemuFanoutSession {
@@ -299,15 +313,37 @@ public final class NewGUIStore {
             self?.tearDownFanout(s.id)
             self?.refresh()
         }
+        // SurfaceNew 到达 → 更新 NAV chip 显示的当前分辨率
+        fanout.onSurfaceChange = { [weak self] w, h in
+            self?.displayResolutions[s.id] = GuestResolution(width: w, height: h)
+        }
         fanout.start()
         return fanout
     }
 
-    /// 拆 fanout (停机 / 断连 / 删除). stop 断 socket + 释放资源.
+    /// 拆 fanout (停机 / 断连 / 删除). stop 断 socket + 释放资源 + 清当前分辨率缓存.
     func tearDownFanout(_ id: UUID) {
         if let fanout = qemuFanouts.removeValue(forKey: id) {
             fanout.stop()
         }
+        displayResolutions[id] = nil
+    }
+
+    /// 当前选中 VM 的实时 guest framebuffer 分辨率. nil = 未 attach fanout 或还没收到首帧 SurfaceNew.
+    public func currentResolution(for s: VMSummary) -> GuestResolution? {
+        displayResolutions[s.id]
+    }
+
+    /// 改 guest 分辨率: 走 GUI 已建立的 fanout (HDP RESIZE_REQUEST + IPC vdagent MONITORS_CONFIG, 双通路).
+    /// 跟拖窗口 resize 同一通路, 不抢 iosurface socket (GUI 是合法占用者). 调用方需先 ensureQemuFanout
+    /// (画面 tab attach 时已有). 失败 silent — fanout 内部对未 attach 的 surface 会 noop, 不该走 lastError.
+    public func requestResize(_ s: VMSummary, width: UInt32, height: UInt32) {
+        guard let fanout = qemuFanouts[s.id] else {
+            lastError = StoreError(title: "改分辨率失败",
+                                   message: "请先切到「画面」tab 让 fanout 接入再改分辨率.")
+            return
+        }
+        fanout.requestResizeFromUser(width: width, height: height)
     }
 
     // MARK: - 加密 VM 解锁

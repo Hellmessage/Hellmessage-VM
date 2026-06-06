@@ -52,6 +52,9 @@ struct Select<Value: Hashable>: View {
     private let isLoading: Bool
     private let isDisabled: Bool
     private let probeID: String
+    /// popover 开/关状态变化回调. 上层用于跟其他渲染层 (Metal CAMetalLayer) 协调 z-order —
+    /// 例: NAV 分辨率 chip 打开下拉时让 QemuFramebufferView pause + 叠 dim mask, 防 Metal 层盖住 popover.
+    private let onOpenChange: ((Bool) -> Void)?
 
     init(_ label: String? = nil,
          selection: Binding<Value?>,
@@ -63,7 +66,8 @@ struct Select<Value: Hashable>: View {
          errorMessage: String? = nil,
          isLoading: Bool = false,
          disabled: Bool = false,
-         probeID: String) {
+         probeID: String,
+         onOpenChange: ((Bool) -> Void)? = nil) {
         self.label = label
         self._selection = selection
         self.options = options
@@ -75,6 +79,7 @@ struct Select<Value: Hashable>: View {
         self.isLoading = isLoading
         self.isDisabled = disabled
         self.probeID = probeID
+        self.onOpenChange = onOpenChange
     }
 
     /// 非可选 selection 便利 init (有默认值场景)
@@ -88,7 +93,8 @@ struct Select<Value: Hashable>: View {
          errorMessage: String? = nil,
          isLoading: Bool = false,
          disabled: Bool = false,
-         probeID: String) {
+         probeID: String,
+         onOpenChange: ((Bool) -> Void)? = nil) {
         self.label = label
         self._selection = Binding(
             get: { selection.wrappedValue },
@@ -103,6 +109,7 @@ struct Select<Value: Hashable>: View {
         self.isLoading = isLoading
         self.isDisabled = disabled
         self.probeID = probeID
+        self.onOpenChange = onOpenChange
     }
 
     @State private var isOpen = false
@@ -169,6 +176,10 @@ struct Select<Value: Hashable>: View {
             if newID != instanceID && isOpen {
                 isOpen = false
             }
+        }
+        // popover 开/关变化向上抛 (上层协调 Metal CAMetalLayer 等高 z-order 渲染层)
+        .onChange(of: isOpen) { _, newOpen in
+            onOpenChange?(newOpen)
         }
     }
 

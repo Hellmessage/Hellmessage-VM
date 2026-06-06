@@ -61,6 +61,10 @@ final class QemuFanoutSession {
     /// channel disconnected (子进程退出 / GOODBYE / 网络错误) 回调. 上层及时拆 fanout + 关 detached + refresh.
     var onDisconnected: (@MainActor () -> Void)?
 
+    /// 新 SurfaceNew 到达 (含 width/height) 回调. store 用来更新 NAV 栏 "当前分辨率" chip.
+    /// 跟 onDisconnected 同款, set 一次跨整个 fanout 生命周期, 不需要 unsubscribe.
+    var onSurfaceChange: (@MainActor (UInt32, UInt32) -> Void)?
+
     private var eventLoopTask: Task<Void, Never>?
     private var connectTask: Task<Void, Never>?
     private var thumbnailTimer: Timer?
@@ -422,6 +426,11 @@ final class QemuFanoutSession {
             if fd < 0 { continue }
             let copy = DisplayChannel.SurfaceArrival(info: arrival.info, shmFD: fd)
             view.bindSurface(copy)
+        }
+
+        // 通知 store 更新当前分辨率 (NAV chip 显示 + 可用预设过滤)
+        if let cb = onSurfaceChange {
+            cb(arrival.info.width, arrival.info.height)
         }
     }
 

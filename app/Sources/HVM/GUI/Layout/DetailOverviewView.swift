@@ -30,6 +30,10 @@ struct DetailOverviewView: View {
     /// 顶部居中的小图标切换; 切 VM / 改 runState 时 reset 回展开.
     @State private var navCollapsed = false
 
+    /// NAV 分辨率 inline 编辑器 draft — 宽/高字段. onAppear / VM 切换 / 实时分辨率变化时同步 guest 真实值.
+    @State private var draftResolutionW: String = ""
+    @State private var draftResolutionH: String = ""
+
     var body: some View {
         ZStack {
             HVMTheme.color.bgBase
@@ -108,7 +112,7 @@ struct DetailOverviewView: View {
         }
     }
 
-    /// 画面 / 配置 TAB (running).
+    /// 画面 / 配置 TAB (running). 右侧 inline 编辑器: 宽/高输入框 + 设置按钮, 跟拖窗口同款通路改 guest 分辨率.
     private func runningTabBar(_ vm: VMSummary) -> some View {
         HStack(spacing: HVMTheme.space.sm) {
             HVMUI.Button("画面", variant: runningTab == .screen ? .primary : .ghost, size: .sm,
@@ -116,6 +120,70 @@ struct DetailOverviewView: View {
             HVMUI.Button("配置", variant: runningTab == .config ? .primary : .ghost, size: .sm,
                          probeID: "detail.tab.config") { runningTab = .config }
             Spacer()
+            resolutionEditor(vm)
+        }
+    }
+
+    // MARK: - 分辨率 inline 编辑器 (NAV 右侧, running 时显)
+
+    /// 输入硬上限 (跟 hvm-dbg display-resize 对齐, 见 DisplayResizeCommand.swift:35).
+    private static let resolutionMinW: UInt32 = 640
+    private static let resolutionMaxW: UInt32 = 7680
+    private static let resolutionMinH: UInt32 = 480
+    private static let resolutionMaxH: UInt32 = 4320
+
+    /// 两输入框 (宽 × 高) + 设置按钮. 走 SwiftUI 控件不依赖 popover, 不撞 Metal CAMetalLayer z-order.
+    /// onAppear / VM 切换 / 实时分辨率变化时同步 draft 到当前 guest 真实值; 范围外按钮 disabled.
+    private func resolutionEditor(_ vm: VMSummary) -> some View {
+        HStack(spacing: HVMTheme.space.xs) {
+            HVMUI.TextField(text: $draftResolutionW,
+                            placeholder: "宽",
+                            size: .sm,
+                            probeID: "detail.nav.resolution.width")
+                .frame(width: 70)
+            SwiftUI.Text("×")
+                .font(HVMTheme.font.sm)
+                .foregroundStyle(HVMTheme.color.textSecondary)
+            HVMUI.TextField(text: $draftResolutionH,
+                            placeholder: "高",
+                            size: .sm,
+                            probeID: "detail.nav.resolution.height")
+                .frame(width: 70)
+            HVMUI.Button("设置",
+                         variant: .primary, size: .sm,
+                         disabled: !isResolutionDraftValid,
+                         probeID: "detail.nav.resolution.apply") {
+                // probe 闭包在 onAppear 一次注册不重注册, 捕获渲染时 vm 会 stale (用户切 VM 后 hvm-dbg gui
+                // click apply 仍命中旧 VM); 读 store.selected 让动作命中当前选中. CLAUDE.md 约束.
+                guard let w = UInt32(draftResolutionW),
+                      let h = UInt32(draftResolutionH),
+                      let cur = store.selected else { return }
+                store.requestResize(cur, width: w, height: h)
+            }
+        }
+        .onAppear { syncResolutionDraft(vm) }
+        .onChange(of: vm.id) { _, _ in syncResolutionDraft(vm) }
+        .onChange(of: store.currentResolution(for: vm)) { _, _ in
+            syncResolutionDraft(vm)
+        }
+    }
+
+    /// draft 校验: 都是正整数, 都在 640..7680 × 480..4320 内. 失败时设置按钮 disabled (probe 也跳过注册).
+    private var isResolutionDraftValid: Bool {
+        guard let w = UInt32(draftResolutionW),
+              let h = UInt32(draftResolutionH) else { return false }
+        return w >= Self.resolutionMinW && w <= Self.resolutionMaxW
+            && h >= Self.resolutionMinH && h <= Self.resolutionMaxH
+    }
+
+    /// 把 draft 同步到 guest 真实分辨率. nil (还没收到首帧 SurfaceNew) 时填默认 1920×1080.
+    private func syncResolutionDraft(_ vm: VMSummary) {
+        if let r = store.currentResolution(for: vm) {
+            draftResolutionW = String(r.width)
+            draftResolutionH = String(r.height)
+        } else if draftResolutionW.isEmpty {
+            draftResolutionW = "1920"
+            draftResolutionH = "1080"
         }
     }
 
